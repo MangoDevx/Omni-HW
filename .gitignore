@@ -10,6 +10,9 @@
 /CLAUDE.md
 /PLAN.md
 
+# Website (deployed to Cloudflare Pages, not published here)
+/site/
+
 # Recordings and reports saved into the repo folder by accident
 OmniHW-Recording-*.csv
 OmniHW-Report-*.html
