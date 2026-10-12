@@ -1,0 +1,17 @@
+[package]
+name = "omnihw-app"
+description = "Omni-HW: CPU-Z / GPU-Z / HWiNFO in one app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "omnihw"
+path = "src/main.rs"
+
+[dependencies]
+omnihw-core = { path = "../omnihw-core" }
+eframe = "0.36"
+egui = "0.36"
+raw-window-handle = "0.6"

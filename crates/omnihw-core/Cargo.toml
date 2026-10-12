@@ -1,0 +1,9 @@
+[package]
+name = "omnihw-core"
+description = "Hardware detection and data model for Omni-HW (no external dependencies)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
