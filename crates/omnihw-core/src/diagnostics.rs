@@ -1078,9 +1078,12 @@ fn uptime(ctx: &Context) -> Outcome {
         Level::Info,
         Category::System,
         format!("Windows has been running for {days} days"),
-        "Long uptimes can leave pending updates uninstalled and memory fragmented by leaky apps.",
+        format!(
+            "Windows has been running for {days} days without a restart. Over long sessions, apps that leak memory or handles, stuck background processes and misbehaving drivers can build up and slow things down."
+        ),
         &[
-            "Restart when convenient to finish updates. Note: \"Shut down\" with Fast Startup is not a full restart.",
+            "Restart to clear them out: Start > Power > Restart.",
+            "With Fast Startup on, \"Shut down\" resumes the previous session instead of starting fresh, so this counter keeps running. Restart always starts fresh.",
         ],
     )])
 }
