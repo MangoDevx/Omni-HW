@@ -15,3 +15,6 @@ omnihw-core = { path = "../omnihw-core" }
 eframe = "0.36"
 egui = "0.36"
 raw-window-handle = "0.6"
+
+[build-dependencies]
+embed-resource = "3"

@@ -7,6 +7,7 @@ mod elevate;
 mod export;
 mod heat;
 mod help;
+mod icon;
 mod notify;
 mod sampler;
 mod settings;
@@ -17,11 +18,15 @@ fn main() -> eframe::Result {
     if elevate::relaunch_elevated_if_useful() {
         return Ok(());
     }
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Omni-HW")
+        .with_inner_size(initial_size())
+        .with_min_inner_size([440.0, 400.0]);
+    if let Some(icon) = icon::window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Omni-HW")
-            .with_inner_size(initial_size())
-            .with_min_inner_size([440.0, 400.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

@@ -1,0 +1,2 @@
+// Windows resources for omnihw.exe: the application icon (resource id 1, also used by the tray).
+1 ICON "../../Assets/Brand/OmniHardwareIcon.ico"

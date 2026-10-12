@@ -1,94 +1,120 @@
-# Omni-HW
+<p align="center">
+  <img src="Assets/Brand/OmniHardwareLogo.jpeg" alt="Omni-HW logo" width="200">
+</p>
 
-All-in-one Windows hardware monitor written in Rust. Omni-HW combines what CPU-Z, GPU-Z and HWiNFO do in one fast app, then goes further: it explains what it finds, tells you how to fix common problems, alerts you, and records and analyzes sessions.
+<h1 align="center">Omni-HW</h1>
 
-No kernel driver, no installer, a single executable.
+<p align="center">
+  <b>Your whole PC, explained.</b><br>
+  CPU-Z, GPU-Z and HWiNFO-style info in one fast Windows app, plus a Health Check that tells you what's wrong and how to fix it.
+</p>
 
-## Features
+<p align="center">
+  🦀 Written in Rust · 🪟 Windows 10/11 · 🚫 No driver · 📦 Single exe · 🔒 100% offline
+</p>
 
-- **Overview dashboard**: CPU, GPU, memory, storage and system on one page, with live numbers, history graphs, per-core tiles and heatmap colors (blue/orange/red) for load, temperatures, memory, VRAM and drive health.
-- **Health Check**: 25 rule-based checks that flag common problems in plain language, with steps to fix them. Some examples:
-  - Monitor plugged into the motherboard instead of the graphics card.
-  - XMP/EXPO off, or RAM in single channel.
-  - Outdated Intel 13th/14th Gen microcode.
-  - GPU running at reduced PCIe width, or Resizable BAR off.
-  - Drives nearly full, worn or running hot.
-  - Pending restart, power-saver plan, BIOS age.
-  - Gaming-only checks get their own section, and security-related settings are clearly flagged.
-- **Hardware details** (CPU-Z / GPU-Z style):
-  - CPU identification, codename and process, cores/threads (P/E cores), instruction sets and caches.
-  - Mainboard and BIOS.
-  - Memory modules (SMBIOS).
-  - GPU: chip, VRAM, driver, PCIe link, Resizable BAR and connected displays.
-  - Drives: NVMe and SATA SMART health, temperatures and volumes.
-- **Sensors** (HWiNFO style): every live reading with min/max/average:
-  - Per-core clocks and usage, CPU package power.
-  - GPU load, temperature, clocks, power and fan (NVIDIA via NVML; load and VRAM for any vendor).
-  - Memory, disk throughput and temperatures.
-- **Recording**: record every sensor to CSV, chart a session, compare two sessions (before/after), and run **bottleneck analysis** to see whether a game was CPU-bound, GPU-bound or frame-capped.
-- **Alerts**: "sensor above/below a limit for N seconds" rules. When one fires you get a Windows notification and a taskbar flash.
-- **Reports**: save a self-contained HTML report or copy a plain-text one, with Health Check results first.
-- **Quality of life**:
-  - Grouped one-row navigation with Up/Down arrow-key paging.
-  - Dark/light theme and UI scale.
-  - Minimize to the system tray; launch at sign-in.
-  - In-app feature guide (Info > Feature guide).
+<p align="center">
+  <img src="Assets/Brand/MainMenu.png" alt="Omni-HW overview dashboard" width="900">
+</p>
 
-## Requirements
+---
 
-- Windows 10 or 11, x64.
-- To build: Rust (stable, MSVC toolchain) and the Visual Studio C++ build tools with a Windows SDK.
+## ✨ What can it do?
 
-## Build and run
+### 🏠 One-page dashboard
+See your CPU, GPU, memory, storage and system at a glance, with live numbers, history graphs and a tile for every CPU core. Colors warm up as things get busy: **blue** is fine, **orange** is worth a look, **red** needs attention.
+
+### 🩺 Health Check
+25 automatic checks that spot common problems and explain them in plain English, with step-by-step fixes. A few favorites:
+
+- 🖥️ Monitor plugged into the **motherboard** instead of the graphics card (it happens to everyone!)
+- 🐏 RAM running slower than it's rated for (XMP/EXPO off), or stuck in single channel
+- 🔥 GPU or drives running hot, drives filling up or wearing out
+- 🧬 Outdated microcode on Intel 13th/14th Gen CPUs
+- 🎮 A separate **Gaming** section: Resizable BAR, Game Mode, GPU scheduling and more
+- 🛡️ Security-related settings are clearly flagged, so you don't change them by accident
+
+### 🔍 Hardware details
+Everything you'd expect from CPU-Z and GPU-Z: CPU model, codename, cores and threads (P/E cores), caches and instruction sets; motherboard and BIOS; every memory stick; GPU chip, VRAM, driver, PCIe link and Resizable BAR; and drive health for both NVMe and SATA drives.
+
+### 📈 Live sensors
+HWiNFO-style readings with current, min, max and average: per-core clocks and usage, CPU power, GPU load, temperature, clocks, power and fan, memory, and disk speed and temperature.
+
+### ⏺️ Recording & analysis
+- Record every sensor to a CSV with one click, from any page.
+- **Compare** two sessions side by side. Did that repaste actually help? 🤔
+- **Bottleneck analysis** tells you whether a game was CPU-bound, GPU-bound or limited by a frame cap.
+
+### 🔔 Alerts
+Set rules like *"GPU above 85 °C for 30 seconds"* and get a Windows notification when one trips.
+
+### 📝 Reports
+Save a tidy HTML report or copy a text one, handy for asking for help on forums.
+
+### 🎨 Comfort features
+Dark or light theme · adjustable UI scale · compact menus with ↑/↓ arrow-key paging · minimize to the system tray · launch at sign-in · a built-in feature guide (**Info → Feature guide**).
+
+---
+
+## 🚀 Getting started
+
+### Download & run
+Grab `omnihw.exe` from the [Releases](../../releases) page and double-click it. That's it: no installer, no driver.
+
+### Build it yourself
+You'll need:
+- [Rust](https://rustup.rs) (stable, MSVC toolchain)
+- Visual Studio Build Tools with the **C++ workload** and a **Windows SDK**
 
 ```
 cargo run -p omnihw-app --release
 ```
 
-The executable is written to `target\release\omnihw.exe`.
+The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --workspace`.
 
-Run the tests:
-
-```
-cargo test --workspace
-```
-
-### Command-line options
-
-| Option | Effect |
+### Handy command-line options
+| Option | What it does |
 |---|---|
-| `--no-elevate` | Don't ask for administrator rights at start |
-| `--autostart` | Used by the sign-in entry; never shows the administrator prompt |
-| `--minimized` | Start minimized (to the tray if that setting is on) |
+| `--no-elevate` | Skip the administrator prompt at start |
+| `--autostart` | Used by "launch at sign-in"; never shows the administrator prompt |
+| `--minimized` | Start minimized (to the tray, if that setting is on) |
 
-## Permissions and privacy
+---
 
-- Omni-HW uses only standard user-mode Windows APIs and the GPU driver's own monitoring library. It installs no driver or service.
-- **Administrator rights** are only needed to read SATA drive health (SMART). If SATA drives are present, Omni-HW asks via UAC at start. Decline it and everything else still works, or turn the prompt off in Settings. NVMe health doesn't need it.
-- Everything stays on your PC. Omni-HW makes no network connections.
-- Files it writes:
+## 🔒 Privacy & permissions
+
+- 🌐 **Offline:** Omni-HW never connects to the internet. Everything stays on your PC.
+- 🧩 **No driver:** it uses standard Windows APIs and your GPU driver's own monitoring library. Nothing gets installed.
+- 🛡️ **Admin only for SATA health:** reading SATA drive health needs administrator rights, so Omni-HW asks once at start if you have SATA drives. Say no and everything else still works, or turn the prompt off in Settings. NVMe drives don't need it.
+- 📁 **Where your files go:**
   - Settings: `%APPDATA%\OmniHW\settings.ini`
   - Alert rules: `%APPDATA%\OmniHW\alerts.tsv`
-  - Recordings and reports: Documents, or the folder you choose in Settings.
-  - "Launch at sign-in" adds an `Omni-HW` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; turning it off removes it.
+  - Recordings & reports: your Documents folder (or the folder you pick in Settings)
+  - "Launch at sign-in" adds an `Omni-HW` entry under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; turning it off removes it
 
-## Project layout
+---
+
+## 🗂️ Project layout
 
 ```
 crates/
-  omnihw-core/   hardware detection, parsers, sensors, diagnostics, recording and analysis
-                 (no external dependencies; parsers are platform-agnostic and unit-tested)
-  omnihw-app/    the eframe/egui desktop app
+  omnihw-core/   hardware detection, sensors, Health Check, recording & analysis
+                 (zero external dependencies, thoroughly unit-tested)
+  omnihw-app/    the desktop app (egui/eframe)
+Assets/Brand/    logo, app icon and screenshots
 ```
 
-## Roadmap
+## 🛣️ Roadmap
 
-Planned next: per-core CPU temperatures, fans and voltages through an optional signed-driver backend, and quick memory and disk self-tests.
+- 🌡️ Per-core CPU temperatures, fans and voltages (optional signed-driver backend)
+- ⏱️ Quick memory and disk self-tests with "what's normal for your hardware" ranges
 
-## Trademarks
+---
+
+## ™️ Trademarks
 
 CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a trademark of Martin Malík (REALiX). Omni-HW is an independent project and is not affiliated with or endorsed by them.
 
-## License
+## 📄 License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Use it, fork it, tinker with it. 🛠️
