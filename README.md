@@ -6,7 +6,8 @@
 
 <p align="center">
   <b>Your whole PC, explained.</b><br>
-  CPU-Z, GPU-Z and HWiNFO-style info in one fast Windows app, plus a Health Check that tells you what's wrong and how to fix it.
+  A fast, free Windows app that shows your hardware details and live sensor readings, plus a Health Check that tells you what's wrong and how to fix it.<br>
+  <sub>Omni-HW is an independent, original program. It is not CPU-Z, GPU-Z or HWiNFO, contains none of their code, and is not affiliated with or endorsed by their makers.</sub>
 </p>
 
 <p align="center">
@@ -35,10 +36,10 @@ See your CPU, GPU, memory, storage and system at a glance, with live numbers, hi
 - 🛡️ Security-related settings are clearly flagged, so you don't change them by accident
 
 ### 🔍 Hardware details
-Everything you'd expect from CPU-Z and GPU-Z: CPU model, codename, cores and threads (P/E cores), caches and instruction sets; motherboard and BIOS; every memory stick; GPU chip, VRAM, driver, PCIe link and Resizable BAR; and drive health for both NVMe and SATA drives.
+CPU model, codename, cores and threads (P/E cores), caches and instruction sets; motherboard and BIOS; every memory stick; GPU chip, VRAM, driver, PCIe link and Resizable BAR; and drive health for both NVMe and SATA drives. This is the same kind of system information that dedicated tools such as CPU-Z and GPU-Z report, gathered by Omni-HW's own code.
 
 ### 📈 Live sensors
-HWiNFO-style readings with current, min, max and average: per-core clocks and usage, CPU power, GPU load, temperature, clocks, power and fan, memory, and disk speed and temperature.
+Live readings with current, min, max and average: per-core clocks and usage, CPU power, GPU load, temperature, clocks, power and fan, memory, and disk speed and temperature.
 
 ### ⏺️ Recording & analysis
 - Record every sensor to a CSV with one click, from any page.
@@ -113,7 +114,7 @@ Assets/Brand/    logo, app icon and screenshots
 
 ## ™️ Trademarks
 
-CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a trademark of Martin Malík (REALiX). Omni-HW is an independent project and is not affiliated with or endorsed by them.
+CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a trademark of Martin Malík (REALiX). These names are used only to describe the kind of information Omni-HW shows. Omni-HW is an independent project with its own code; it does not include, bundle or wrap any of these products, and it is not affiliated with, sponsored by or endorsed by their owners.
 
 ## 📄 License
 
