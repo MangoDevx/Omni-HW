@@ -6,8 +6,7 @@
 
 <p align="center">
   <b>Your whole PC, explained.</b><br>
-  A fast, free Windows app that shows your hardware details and live sensor readings, plus a Health Check that tells you what's wrong and how to fix it.<br>
-  <sub>Omni-HW is an independent, original program. It is not CPU-Z, GPU-Z or HWiNFO, contains none of their code, and is not affiliated with or endorsed by their makers.</sub>
+  A fast, free Windows app that shows your hardware details and live sensor readings, plus a Health Check that tells you what's wrong and how to fix it.
 </p>
 
 <p align="center">
@@ -112,9 +111,11 @@ Assets/Brand/    logo, app icon and screenshots
 
 ---
 
-## ™️ Trademarks
+## ™️ Alternatives and trademarks
 
-CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a trademark of Martin Malík (REALiX). These names are used only to describe the kind of information Omni-HW shows. Omni-HW is an independent project with its own code; it does not include, bundle or wrap any of these products, and it is not affiliated with, sponsored by or endorsed by their owners.
+Omni-HW is a free, open-source, all-in-one alternative to CPU-Z, GPU-Z and HWiNFO: one app for the hardware details, live sensor readings and diagnostics you'd otherwise gather from several tools.
+
+CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a trademark of Martin Malík (REALiX). These names are used only to identify those products for comparison. Omni-HW is an independent project with its own code; it does not include, bundle or wrap any of these products, and it is not affiliated with, sponsored by or endorsed by their owners.
 
 ## 📄 License
 
