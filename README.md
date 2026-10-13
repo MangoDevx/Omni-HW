@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  🦀 Written in Rust · 🪟 Windows 10/11 · 🚫 No driver · 📦 Single exe · 🔒 100% offline
+  🦀 Written in Rust · 🪟 Windows 10/11 · 🔍 Read-only · 📦 Single exe · 🔒 100% offline
 </p>
 
 <p align="center">
@@ -59,7 +59,7 @@ Dark or light theme · adjustable UI scale · compact menus with ↑/↓ arrow-k
 ## 🚀 Getting started
 
 ### Download & run
-Grab `omnihw.exe` from the [Releases](../../releases) page and double-click it. That's it: no installer, no driver.
+Grab `omnihw.exe` from the [Releases](../../releases) page and double-click it. That's it: no installer, nothing to set up.
 
 ### Build it yourself
 You'll need:
@@ -84,7 +84,7 @@ The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --w
 ## 🔒 Privacy & permissions
 
 - 🌐 **Offline:** Omni-HW never connects to the internet. Everything stays on your PC.
-- 🧩 **No driver:** it uses standard Windows APIs and your GPU driver's own monitoring library. Nothing gets installed.
+- 🔍 **Read-only:** Omni-HW reads your hardware through standard Windows APIs and your GPU driver's own monitoring library. It never changes clocks, fans or firmware settings, and nothing gets installed.
 - 🛡️ **Admin only for SATA health:** reading SATA drive health needs administrator rights, so Omni-HW asks once at start if you have SATA drives. Say no and everything else still works, or turn the prompt off in Settings. NVMe drives don't need it.
 - 📁 **Where your files go:**
   - Settings: `%APPDATA%\OmniHW\settings.ini`
