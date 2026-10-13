@@ -4,8 +4,6 @@
 #[cfg(windows)]
 mod dxgi;
 #[cfg(windows)]
-pub(crate) mod ffi;
-#[cfg(windows)]
 pub mod nvml;
 #[cfg(windows)]
 mod pdh;
@@ -86,9 +84,33 @@ pub struct MemoryStatus {
 
 #[cfg(windows)]
 mod imp {
-    use super::ffi::*;
     use super::{Battery, MemoryStatus, OsInfo, PlanKind, PowerPlan};
     use crate::gpu::GpuAdapter;
+    use std::ptr;
+    use windows::Wdk::System::SystemServices::RtlGetVersion;
+    use windows::Win32::Foundation::{
+        CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HANDLE, HLOCAL, LocalFree,
+        STATUS_SUCCESS,
+    };
+    use windows::Win32::Security::{
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+    };
+    use windows::Win32::System::Power::{
+        CallNtPowerInformation, GetSystemPowerStatus, PROCESSOR_POWER_INFORMATION,
+        PowerGetActiveScheme, PowerReadFriendlyName, ProcessorInformation, SYSTEM_POWER_STATUS,
+    };
+    use windows::Win32::System::Registry::{
+        REG_ROUTINE_FLAGS, RRF_RT_REG_BINARY, RRF_RT_REG_DWORD, RRF_RT_REG_SZ,
+    };
+    use windows::Win32::System::SystemInformation::{
+        ComputerNamePhysicalDnsHostname, GetComputerNameExW, GetLogicalProcessorInformationEx,
+        GetSystemFirmwareTable, GetTickCount64, GlobalMemoryStatusEx, MEMORYSTATUSEX,
+        OSVERSIONINFOW, RSMB, RelationAll,
+    };
+    use windows::Win32::System::Threading::{
+        ALL_PROCESSOR_GROUPS, GetActiveProcessorCount, GetCurrentProcess, OpenProcessToken,
+    };
+    use windows::core::{GUID, PWSTR};
 
     pub fn drives() -> Vec<crate::storage::Drive> {
         super::storage::drives()
@@ -99,85 +121,88 @@ mod imp {
     }
 
     pub fn is_elevated() -> bool {
-        const TOKEN_QUERY: u32 = 0x8;
-        const TOKEN_ELEVATION: i32 = 20;
-        let mut token = ptr::null_mut();
+        let mut token = HANDLE::default();
         // SAFETY: pseudo-handle for the current process; token closed below.
-        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.is_err() {
             return false;
         }
-        let mut elevated: u32 = 0;
+        let mut elevation = TOKEN_ELEVATION::default();
         let mut len = 0u32;
-        // SAFETY: 4-byte TOKEN_ELEVATION out buffer.
+        // SAFETY: TOKEN_ELEVATION out buffer of the declared size.
         let ok = unsafe {
             GetTokenInformation(
                 token,
-                TOKEN_ELEVATION,
-                (&mut elevated as *mut u32).cast(),
-                4,
+                TokenElevation,
+                Some((&mut elevation as *mut TOKEN_ELEVATION).cast()),
+                size_of::<TOKEN_ELEVATION>() as u32,
                 &mut len,
             )
-        };
+        }
+        .is_ok();
         // SAFETY: token opened above.
-        unsafe { CloseHandle(token) };
-        ok != 0 && elevated != 0
+        let _ = unsafe { CloseHandle(token) };
+        ok && elevation.TokenIsElevated != 0
+    }
+
+    /// HKLM value into `buf`; returns the byte length read.
+    fn reg_get(
+        subkey: &str,
+        value: &str,
+        kind: REG_ROUTINE_FLAGS,
+        buf: &mut [u8],
+    ) -> Option<usize> {
+        super::registry::get(
+            super::registry::Hive::LocalMachine,
+            subkey,
+            value,
+            kind,
+            buf,
+        )
     }
 
     fn reg_string(subkey: &str, value: &str) -> Option<String> {
-        let (k, v) = (wide(subkey), wide(value));
-        let mut buf = [0u16; 256];
-        let mut len = (buf.len() * 2) as u32;
-        // SAFETY: buffer size in bytes passed in `len`.
-        let st = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                k.as_ptr(),
-                v.as_ptr(),
-                RRF_RT_REG_SZ,
-                ptr::null_mut(),
-                buf.as_mut_ptr().cast(),
-                &mut len,
-            )
-        };
-        (st == 0).then(|| {
-            String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)])
-        })
+        let mut buf = [0u8; 512];
+        reg_get(subkey, value, RRF_RT_REG_SZ, &mut buf)?;
+        let w: Vec<u16> = buf
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        Some(String::from_utf16_lossy(
+            &w[..w.iter().position(|&c| c == 0).unwrap_or(0)],
+        ))
     }
 
     fn reg_dword(subkey: &str, value: &str) -> Option<u32> {
-        let (k, v) = (wide(subkey), wide(value));
-        let mut d: u32 = 0;
-        let mut len = 4u32;
-        // SAFETY: 4-byte buffer.
-        let st = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                k.as_ptr(),
-                v.as_ptr(),
-                RRF_RT_REG_DWORD,
-                ptr::null_mut(),
-                (&mut d as *mut u32).cast(),
-                &mut len,
-            )
-        };
-        (st == 0).then_some(d)
+        let mut d = [0u8; 4];
+        reg_get(subkey, value, RRF_RT_REG_DWORD, &mut d)?;
+        Some(u32::from_le_bytes(d))
     }
 
     pub fn os_info() -> Option<OsInfo> {
         const KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-        // SAFETY: zeroed POD with size set as required.
-        let mut v: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
-        v.size = size_of::<OSVERSIONINFOW>() as u32;
-        let build = if unsafe { RtlGetVersion(&mut v) } == 0 {
-            v.build
+        let mut v = OSVERSIONINFOW {
+            dwOSVersionInfoSize: size_of::<OSVERSIONINFOW>() as u32,
+            ..Default::default()
+        };
+        // SAFETY: size field set as required.
+        let build = if unsafe { RtlGetVersion(&mut v) } == STATUS_SUCCESS {
+            v.dwBuildNumber
         } else {
             0
         };
         let product = reg_string(KEY, "ProductName").unwrap_or_else(|| "Windows".into());
         let mut name = [0u16; 256];
         let mut len = name.len() as u32;
-        // ComputerNamePhysicalDnsHostname = 5. SAFETY: length passed in characters.
-        let computer_name = if unsafe { GetComputerNameExW(5, name.as_mut_ptr(), &mut len) } != 0 {
+        // SAFETY: length passed in characters.
+        let computer_name = if unsafe {
+            GetComputerNameExW(
+                ComputerNamePhysicalDnsHostname,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+            )
+        }
+        .is_ok()
+        {
             String::from_utf16_lossy(&name[..len as usize])
         } else {
             String::new()
@@ -197,65 +222,39 @@ mod imp {
     }
 
     pub fn microcode_revision() -> Option<u32> {
-        let (k, v) = (
-            wide(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0"),
-            wide("Update Revision"),
-        );
         let mut buf = [0u8; 16];
-        let mut len = buf.len() as u32;
-        // SAFETY: buffer size passed in `len`.
-        let st = unsafe {
-            RegGetValueW(
-                HKEY_LOCAL_MACHINE,
-                k.as_ptr(),
-                v.as_ptr(),
-                RRF_RT_REG_BINARY,
-                ptr::null_mut(),
-                buf.as_mut_ptr().cast(),
-                &mut len,
-            )
-        };
-        if st != 0 {
-            return None;
-        }
-        crate::parse_microcode(&buf[..len as usize])
+        let len = reg_get(
+            r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            "Update Revision",
+            RRF_RT_REG_BINARY,
+            &mut buf,
+        )?;
+        crate::parse_microcode(&buf[..len])
     }
 
     pub fn power_plan() -> Option<PowerPlan> {
         let mut g: *mut GUID = ptr::null_mut();
         // SAFETY: out pointer; the GUID is freed with LocalFree below.
-        if unsafe { PowerGetActiveScheme(0, &mut g) } != 0 || g.is_null() {
+        if unsafe { PowerGetActiveScheme(None, &mut g) } != ERROR_SUCCESS || g.is_null() {
             return None;
         }
         // SAFETY: g points to a GUID allocated by PowerGetActiveScheme.
-        let guid = unsafe { &*g };
-        let text = format!(
-            "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{}",
-            guid.data1,
-            guid.data2,
-            guid.data3,
-            guid.data4[0],
-            guid.data4[1],
-            guid.data4[2..]
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect::<String>()
-        );
+        let text = format!("{:?}", unsafe { *g }).to_ascii_lowercase();
         let mut name = [0u16; 128];
         let mut len = (name.len() * 2) as u32;
         // SAFETY: buffer size in bytes passed in `len`.
         let ok = unsafe {
             PowerReadFriendlyName(
-                0,
-                g,
-                ptr::null(),
-                ptr::null(),
-                name.as_mut_ptr().cast(),
+                None,
+                Some(g),
+                None,
+                None,
+                Some(name.as_mut_ptr().cast()),
                 &mut len,
             )
-        } == 0;
+        } == ERROR_SUCCESS;
         // SAFETY: allocated by PowerGetActiveScheme.
-        unsafe { LocalFree(g.cast()) };
+        unsafe { LocalFree(Some(HLOCAL(g.cast()))) };
         let name = if ok {
             String::from_utf16_lossy(&name[..name.iter().position(|&c| c == 0).unwrap_or(0)])
         } else {
@@ -271,17 +270,17 @@ mod imp {
     pub fn battery() -> Option<Battery> {
         let mut s = SYSTEM_POWER_STATUS::default();
         // SAFETY: valid out pointer.
-        if unsafe { GetSystemPowerStatus(&mut s) } == 0
-            || s.battery_flag & 128 != 0
-            || s.battery_flag == 255
+        if unsafe { GetSystemPowerStatus(&mut s) }.is_err()
+            || s.BatteryFlag & 128 != 0
+            || s.BatteryFlag == 255
         {
             return None;
         }
         Some(Battery {
-            percent: s.battery_life_percent.min(100),
-            on_ac: s.ac_line_status == 1,
-            charging: s.battery_flag & 8 != 0,
-            seconds_left: (s.battery_life_time != u32::MAX).then_some(s.battery_life_time),
+            percent: s.BatteryLifePercent.min(100),
+            on_ac: s.ACLineStatus == 1,
+            charging: s.BatteryFlag & 8 != 0,
+            seconds_left: (s.BatteryLifeTime != u32::MAX).then_some(s.BatteryLifeTime),
         })
     }
 
@@ -291,38 +290,41 @@ mod imp {
         super::settings::attach_driver_dates(&mut a);
         a
     }
-    use std::ptr;
 
     pub fn topology_buffer() -> Option<Vec<u8>> {
         let mut len: u32 = 0;
-        // SAFETY: size query with null buffer.
-        unsafe { GetLogicalProcessorInformationEx(RELATION_ALL, ptr::null_mut(), &mut len) };
+        // SAFETY: size query with no buffer; the expected failure is ignored.
+        let _ = unsafe { GetLogicalProcessorInformationEx(RelationAll, None, &mut len) };
         loop {
             let mut buf = vec![0u8; len as usize];
             // SAFETY: buffer is `len` bytes.
-            let ok = unsafe {
-                GetLogicalProcessorInformationEx(RELATION_ALL, buf.as_mut_ptr(), &mut len)
+            let r = unsafe {
+                GetLogicalProcessorInformationEx(
+                    RelationAll,
+                    Some(buf.as_mut_ptr().cast()),
+                    &mut len,
+                )
             };
-            if ok != 0 {
-                buf.truncate(len as usize);
-                return Some(buf);
-            }
-            // SAFETY: trivially safe.
-            if unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER {
-                return None;
+            match r {
+                Ok(()) => {
+                    buf.truncate(len as usize);
+                    return Some(buf);
+                }
+                Err(e) if e.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() => {}
+                Err(_) => return None,
             }
         }
     }
 
     pub fn smbios_buffer() -> Option<Vec<u8>> {
-        // SAFETY: size query with null buffer.
-        let size = unsafe { GetSystemFirmwareTable(RSMB, 0, ptr::null_mut(), 0) };
+        // SAFETY: size query with no buffer.
+        let size = unsafe { GetSystemFirmwareTable(RSMB, 0, None) };
         if size == 0 {
             return None;
         }
         let mut buf = vec![0u8; size as usize];
-        // SAFETY: buffer is `size` bytes.
-        let got = unsafe { GetSystemFirmwareTable(RSMB, 0, buf.as_mut_ptr(), size) };
+        // SAFETY: buffer length passed with the slice.
+        let got = unsafe { GetSystemFirmwareTable(RSMB, 0, Some(&mut buf)) };
         if got == 0 || got > size {
             return None;
         }
@@ -338,10 +340,10 @@ mod imp {
         // SAFETY: output buffer holds `n` entries.
         let st = unsafe {
             CallNtPowerInformation(
-                PROCESSOR_INFORMATION,
-                ptr::null_mut(),
+                ProcessorInformation,
+                None,
                 0,
-                info.as_mut_ptr().cast(),
+                Some(info.as_mut_ptr().cast()),
                 bytes,
             )
         };
@@ -357,9 +359,7 @@ mod imp {
             ..Default::default()
         };
         // SAFETY: dwLength initialized as required.
-        if unsafe { GlobalMemoryStatusEx(&mut m) } == 0 {
-            return None;
-        }
+        unsafe { GlobalMemoryStatusEx(&mut m) }.ok()?;
         Some(MemoryStatus {
             load_percent: m.dwMemoryLoad,
             total_bytes: m.ullTotalPhys,

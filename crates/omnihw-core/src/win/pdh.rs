@@ -1,7 +1,15 @@
 //! Minimal PDH query wrapper shared by the sensor backends.
 
-use super::ffi::*;
-use std::ptr;
+use windows::Win32::System::Performance::{
+    PDH_CSTATUS_NEW_DATA, PDH_CSTATUS_VALID_DATA, PDH_FMT, PDH_FMT_COUNTERVALUE_ITEM_W,
+    PDH_HCOUNTER, PDH_HQUERY, PDH_MORE_DATA, PdhAddEnglishCounterW, PdhCloseQuery,
+    PdhCollectQueryData, PdhGetFormattedCounterArrayW, PdhOpenQueryW,
+};
+use windows::core::{HSTRING, PCWSTR};
+
+pub(crate) use windows::Win32::System::Performance::PDH_FMT_DOUBLE;
+/// `PDH_FMT_DOUBLE | PDH_FMT_NOCAP100`; NOCAP100 (0x8000) is missing from the `windows` crate.
+pub(crate) const PDH_FMT_DOUBLE_NOCAP100: PDH_FMT = PDH_FMT(PDH_FMT_DOUBLE.0 | 0x0000_8000);
 
 pub(crate) struct Query {
     handle: PDH_HQUERY,
@@ -23,9 +31,9 @@ unsafe impl Send for Counter {}
 
 impl Query {
     pub(crate) fn open() -> Result<Self, String> {
-        let mut handle = ptr::null_mut();
+        let mut handle = PDH_HQUERY::default();
         // SAFETY: valid out pointer; null data source = live data.
-        let st = unsafe { PdhOpenQueryW(ptr::null(), 0, &mut handle) };
+        let st = unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut handle) };
         if st != 0 {
             return Err(format!("PdhOpenQuery failed: 0x{st:08X}"));
         }
@@ -33,10 +41,9 @@ impl Query {
     }
 
     pub(crate) fn add(&self, path: &str) -> Option<Counter> {
-        let w = wide(path);
-        let mut c = ptr::null_mut();
-        // SAFETY: w is NUL-terminated and outlives the call.
-        let st = unsafe { PdhAddEnglishCounterW(self.handle, w.as_ptr(), 0, &mut c) };
+        let mut c = PDH_HCOUNTER::default();
+        // SAFETY: the path string outlives the call.
+        let st = unsafe { PdhAddEnglishCounterW(self.handle, &HSTRING::from(path), 0, &mut c) };
         (st == 0).then_some(Counter(c))
     }
 
@@ -52,13 +59,11 @@ impl Query {
 }
 
 /// Read all instances of a wildcard counter as (instance name, value).
-pub(crate) fn read_array(c: &Counter, format: u32, buf: &mut Vec<u64>) -> Vec<(String, f64)> {
+pub(crate) fn read_array(c: &Counter, format: PDH_FMT, buf: &mut Vec<u64>) -> Vec<(String, f64)> {
     let mut size: u32 = 0;
     let mut count: u32 = 0;
-    // SAFETY: size query with null buffer.
-    let st = unsafe {
-        PdhGetFormattedCounterArrayW(c.0, format, &mut size, &mut count, ptr::null_mut())
-    };
+    // SAFETY: size query with no buffer.
+    let st = unsafe { PdhGetFormattedCounterArrayW(c.0, format, &mut size, &mut count, None) };
     if st != PDH_MORE_DATA || size == 0 {
         return Vec::new();
     }
@@ -68,7 +73,8 @@ pub(crate) fn read_array(c: &Counter, format: u32, buf: &mut Vec<u64>) -> Vec<(S
     }
     let items = buf.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
     // SAFETY: buffer is at least `size` bytes and 8-byte aligned.
-    let st = unsafe { PdhGetFormattedCounterArrayW(c.0, format, &mut size, &mut count, items) };
+    let st =
+        unsafe { PdhGetFormattedCounterArrayW(c.0, format, &mut size, &mut count, Some(items)) };
     if st != 0 {
         return Vec::new();
     }
@@ -81,7 +87,14 @@ pub(crate) fn read_array(c: &Counter, format: u32, buf: &mut Vec<u64>) -> Vec<(S
             PDH_CSTATUS_VALID_DATA | PDH_CSTATUS_NEW_DATA
         );
         if ok {
-            out.push((unsafe { from_wide(item.szName) }, item.FmtValue.doubleValue));
+            let name = if item.szName.is_null() {
+                String::new()
+            } else {
+                // SAFETY: non-null NUL-terminated name inside the PDH buffer.
+                String::from_utf16_lossy(unsafe { item.szName.as_wide() })
+            };
+            // SAFETY: PDH_FMT_DOUBLE was requested, so the union holds a double.
+            out.push((name, unsafe { item.FmtValue.Anonymous.doubleValue }));
         }
     }
     out

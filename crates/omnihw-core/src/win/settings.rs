@@ -53,45 +53,34 @@ mod imp {
     use super::*;
     use crate::gpu::GpuAdapter;
     use crate::win::registry::{self, Hive};
+    use windows::Wdk::System::SystemInformation::{
+        NtQuerySystemInformation, SystemCodeIntegrityInformation,
+    };
+    use windows::Win32::Foundation::STATUS_SUCCESS;
+    use windows::Win32::System::WindowsProgramming::{
+        CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED, SYSTEM_CODEINTEGRITY_INFORMATION,
+    };
 
     const DISPLAY_CLASS: &str =
         r"SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
 
-    const SYSTEM_CODE_INTEGRITY_INFORMATION: u32 = 103;
-    const CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED: u32 = 0x400;
-
-    #[repr(C)]
-    struct CodeIntegrityInfo {
-        length: u32,
-        options: u32,
-    }
-
-    #[link(name = "ntdll")]
-    unsafe extern "system" {
-        fn NtQuerySystemInformation(
-            class: u32,
-            info: *mut CodeIntegrityInfo,
-            len: u32,
-            ret: *mut u32,
-        ) -> i32;
-    }
-
     fn hvci_running() -> Option<bool> {
-        let mut info = CodeIntegrityInfo {
-            length: size_of::<CodeIntegrityInfo>() as u32,
-            options: 0,
+        let mut info = SYSTEM_CODEINTEGRITY_INFORMATION {
+            Length: size_of::<SYSTEM_CODEINTEGRITY_INFORMATION>() as u32,
+            CodeIntegrityOptions: 0,
         };
         let mut ret = 0;
         // SAFETY: Length set as required; buffer size matches.
         let st = unsafe {
             NtQuerySystemInformation(
-                SYSTEM_CODE_INTEGRITY_INFORMATION,
-                &mut info,
-                info.length,
+                SystemCodeIntegrityInformation,
+                (&mut info as *mut SYSTEM_CODEINTEGRITY_INFORMATION).cast(),
+                info.Length,
                 &mut ret,
             )
         };
-        (st == 0).then_some(info.options & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED != 0)
+        (st == STATUS_SUCCESS)
+            .then_some(info.CodeIntegrityOptions & CODEINTEGRITY_OPTION_HVCI_KMCI_ENABLED != 0)
     }
 
     pub fn windows_settings() -> WindowsSettings {

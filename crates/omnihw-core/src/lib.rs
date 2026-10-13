@@ -1,4 +1,4 @@
-//! Omni-HW core: hardware detection and data model. No external dependencies.
+//! Omni-HW core: hardware detection and data model.
 //!
 //! Parsers (`cpuid`, `codename`, `topology`, `smbios`) are platform-agnostic;
 //! Windows calls live in [`win`] with non-Windows stubs.

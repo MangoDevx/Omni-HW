@@ -1,21 +1,32 @@
 //! Physical drives via `\\.\PhysicalDriveN` storage IOCTLs, volumes, and live disk sensors.
 
-use super::ffi::*;
-use super::pdh::{Counter, Query, read_array};
+use super::pdh::{Counter, PDH_FMT_DOUBLE_NOCAP100, Query, read_array};
 use crate::sensors::{Reading, SensorBackend, Unit};
 use crate::smart::{AtaSmart, parse_ata_smart};
 use crate::storage::*;
-use std::ffi::c_void;
+use std::mem::offset_of;
 use std::ptr;
+use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+use windows::Win32::Storage::FileSystem::{
+    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
+    GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+};
+use windows::Win32::Storage::Nvme::NVME_LOG_PAGE_HEALTH_INFO;
+use windows::Win32::System::IO::DeviceIoControl;
+use windows::Win32::System::Ioctl::{
+    DISK_GEOMETRY_EX, IDEREGS, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_GET_DEVICE_NUMBER,
+    IOCTL_STORAGE_QUERY_PROPERTY, NVMeDataTypeLogPage, PropertyStandardQuery, ProtocolTypeNvme,
+    READ_ATTRIBUTES, SENDCMDINPARAMS, SENDCMDOUTPARAMS, SMART_CMD, SMART_CYL_HI, SMART_CYL_LOW,
+    SMART_RCV_DRIVE_DATA, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_ID, STORAGE_PROPERTY_QUERY,
+    STORAGE_PROTOCOL_DATA_DESCRIPTOR, STORAGE_PROTOCOL_SPECIFIC_DATA, StorageDeviceProperty,
+    StorageDeviceProtocolSpecificProperty, StorageDeviceSeekPenaltyProperty,
+};
+use windows::core::HSTRING;
 
-const PROP_DEVICE: u32 = 0;
-const PROP_SEEK_PENALTY: u32 = 7;
-const PROP_TEMPERATURE: u32 = 11;
-const PROP_DEVICE_PROTOCOL_SPECIFIC: u32 = 50;
-const PROTOCOL_TYPE_NVME: u32 = 3;
-const NVME_DATA_TYPE_LOG_PAGE: u32 = 2;
-const NVME_LOG_HEALTH: u32 = 2;
-const PROTOCOL_SPECIFIC_DATA_SIZE: usize = 40;
+/// Property 11, kept from the original hand-written code. Note that 11 is
+/// `StorageDeviceLBProvisioningProperty`; `StorageDeviceTemperatureProperty` is 52.
+const PROP_TEMPERATURE: STORAGE_PROPERTY_ID = STORAGE_PROPERTY_ID(11);
+const NVME_LOG_DATA_SIZE: u32 = 512;
 
 /// Owned Win32 handle.
 struct Handle(HANDLE);
@@ -26,51 +37,62 @@ unsafe impl Send for Handle {}
 impl Drop for Handle {
     fn drop(&mut self) {
         // SAFETY: valid handle owned by us.
-        unsafe { CloseHandle(self.0) };
+        let _ = unsafe { CloseHandle(self.0) };
     }
 }
 
 fn open(path: &str, access: u32) -> Option<Handle> {
-    let w = wide(path);
     // SAFETY: NUL-terminated path; no template.
-    let h = unsafe {
+    unsafe {
         CreateFileW(
-            w.as_ptr(),
+            &HSTRING::from(path),
             access,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
-            ptr::null_mut(),
+            None,
             OPEN_EXISTING,
-            0,
-            ptr::null_mut(),
+            FILE_FLAGS_AND_ATTRIBUTES(0),
+            None,
         )
-    };
-    (h != INVALID_HANDLE_VALUE && !h.is_null()).then_some(Handle(h))
+    }
+    .ok()
+    .map(Handle)
 }
 
-fn ioctl(h: &Handle, code: u32, input: &mut [u8], out: &mut [u8]) -> Option<usize> {
+/// `DeviceIoControl` with `input` sent as-is; returns the number of bytes written to `out`.
+fn ioctl<I: ?Sized>(h: &Handle, code: u32, input: &I, out: &mut [u8]) -> Option<usize> {
     let mut got = 0;
     // SAFETY: buffers are valid for the given lengths.
-    let ok = unsafe {
+    unsafe {
         DeviceIoControl(
             h.0,
             code,
-            input.as_mut_ptr() as *mut c_void,
-            input.len() as u32,
-            out.as_mut_ptr() as *mut c_void,
+            Some((input as *const I).cast()),
+            size_of_val(input) as u32,
+            Some(out.as_mut_ptr().cast()),
             out.len() as u32,
-            &mut got,
-            ptr::null_mut(),
+            Some(&mut got),
+            None,
         )
-    };
-    (ok != 0).then_some(got as usize)
+    }
+    .ok()?;
+    Some(got as usize)
+}
+
+/// A Win32 struct from the start of an IOCTL output buffer.
+fn read_struct<T: Copy>(b: &[u8]) -> Option<T> {
+    // SAFETY: length checked; the buffer is fully initialized and the read is unaligned-safe.
+    (b.len() >= size_of::<T>()).then(|| unsafe { ptr::read_unaligned(b.as_ptr().cast()) })
 }
 
 /// `IOCTL_STORAGE_QUERY_PROPERTY` with a standard query for `property`.
-fn query_property(h: &Handle, property: u32, out_len: usize) -> Option<Vec<u8>> {
-    let mut q = [0u8; 12];
-    q[0..4].copy_from_slice(&property.to_le_bytes());
+fn query_property(h: &Handle, property: STORAGE_PROPERTY_ID, out_len: usize) -> Option<Vec<u8>> {
+    let q = STORAGE_PROPERTY_QUERY {
+        PropertyId: property,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
     let mut out = vec![0u8; out_len];
-    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, &mut q, &mut out)?;
+    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, &mut out)?;
     out.truncate(n);
     Some(out)
 }
@@ -80,53 +102,74 @@ fn temperature(h: &Handle) -> Option<TemperatureData> {
 }
 
 fn nvme_health(h: &Handle) -> Option<NvmeHealth> {
-    let mut q = vec![0u8; 8 + PROTOCOL_SPECIFIC_DATA_SIZE + 512];
-    let put = |q: &mut [u8], o: usize, v: u32| q[o..o + 4].copy_from_slice(&v.to_le_bytes());
-    put(&mut q, 0, PROP_DEVICE_PROTOCOL_SPECIFIC);
-    // STORAGE_PROTOCOL_SPECIFIC_DATA starts at offset 8.
-    put(&mut q, 8, PROTOCOL_TYPE_NVME);
-    put(&mut q, 12, NVME_DATA_TYPE_LOG_PAGE);
-    put(&mut q, 16, NVME_LOG_HEALTH);
-    put(&mut q, 24, PROTOCOL_SPECIFIC_DATA_SIZE as u32);
-    put(&mut q, 28, 512);
+    // STORAGE_PROPERTY_QUERY whose AdditionalParameters hold STORAGE_PROTOCOL_SPECIFIC_DATA,
+    // followed by room for the log page.
+    const SPEC_AT: usize = offset_of!(STORAGE_PROPERTY_QUERY, AdditionalParameters);
+    const SPEC_SIZE: usize = size_of::<STORAGE_PROTOCOL_SPECIFIC_DATA>();
+    let mut q = vec![0u8; SPEC_AT + SPEC_SIZE + NVME_LOG_DATA_SIZE as usize];
+    let query = STORAGE_PROPERTY_QUERY {
+        PropertyId: StorageDeviceProtocolSpecificProperty,
+        QueryType: PropertyStandardQuery,
+        AdditionalParameters: [0],
+    };
+    let spec = STORAGE_PROTOCOL_SPECIFIC_DATA {
+        ProtocolType: ProtocolTypeNvme,
+        DataType: NVMeDataTypeLogPage.0 as u32,
+        ProtocolDataRequestValue: NVME_LOG_PAGE_HEALTH_INFO.0 as u32,
+        ProtocolDataOffset: SPEC_SIZE as u32,
+        ProtocolDataLength: NVME_LOG_DATA_SIZE,
+        ..Default::default()
+    };
+    // SAFETY: both writes are in bounds; `spec` overwrites the query's AdditionalParameters.
+    unsafe {
+        ptr::write_unaligned(q.as_mut_ptr().cast(), query);
+        ptr::write_unaligned(q.as_mut_ptr().add(SPEC_AT).cast(), spec);
+    }
     let mut out = vec![0u8; q.len()];
-    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, &mut q, &mut out)?;
-    // STORAGE_PROTOCOL_DATA_DESCRIPTOR: Version, Size, then the protocol data header.
-    let data_offset = u32::from_le_bytes(out.get(24..28)?.try_into().ok()?) as usize;
-    let data_len = u32::from_le_bytes(out.get(28..32)?.try_into().ok()?) as usize;
-    let start = 8 + data_offset;
-    parse_nvme_health(out.get(start..(start + data_len).min(n))?)
+    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, q.as_slice(), &mut out)?;
+    let d: STORAGE_PROTOCOL_DATA_DESCRIPTOR = read_struct(&out)?;
+    let data = d.ProtocolSpecificData;
+    let start = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData)
+        + data.ProtocolDataOffset as usize;
+    parse_nvme_health(out.get(start..(start + data.ProtocolDataLength as usize).min(n))?)
 }
-
-/// `SMART_RCV_DRIVE_DATA`: CTL_CODE(IOCTL_DISK_BASE, 0x22, METHOD_BUFFERED, read|write access).
-const SMART_RCV_DRIVE_DATA: u32 = 0x0007_C088;
-/// SENDCMDOUTPARAMS header (cBufferSize + DRIVERSTATUS) before the 512-byte sector.
-const SENDCMDOUT_HEADER: usize = 16;
 
 /// ATA SMART READ DATA through the legacy SMART IOCTL. Needs a read/write handle, which
 /// Windows only grants to administrators for physical drives.
 fn ata_smart(h: &Handle, drive: u32) -> Option<AtaSmart> {
-    // SENDCMDINPARAMS (packed): cBufferSize u32, IDEREGS[8], bDriveNumber, reserved[3],
-    // dwReserved[4]; the trailing 1-byte buffer is not sent.
-    let mut input = [0u8; 32];
-    input[0..4].copy_from_slice(&512u32.to_le_bytes());
-    input[4] = 0xD0; // features: SMART READ DATA
-    input[5] = 1; // sector count
-    input[6] = 1; // sector number
-    input[7] = 0x4F; // cylinder low (SMART signature)
-    input[8] = 0xC2; // cylinder high (SMART signature)
-    input[9] = 0xA0 | (((drive & 1) as u8) << 4); // drive/head
-    input[10] = 0xB0; // command: SMART
-    input[12] = drive as u8;
-    let mut out = [0u8; SENDCMDOUT_HEADER + 512];
-    let n = ioctl(h, SMART_RCV_DRIVE_DATA, &mut input, &mut out)?;
-    parse_ata_smart(out.get(SENDCMDOUT_HEADER..n)?)
+    let input = SENDCMDINPARAMS {
+        cBufferSize: 512,
+        irDriveRegs: IDEREGS {
+            bFeaturesReg: READ_ATTRIBUTES as u8,
+            bSectorCountReg: 1,
+            bSectorNumberReg: 1,
+            bCylLowReg: SMART_CYL_LOW as u8,
+            bCylHighReg: SMART_CYL_HI as u8,
+            bDriveHeadReg: 0xA0 | (((drive & 1) as u8) << 4),
+            bCommandReg: SMART_CMD as u8,
+            bReserved: 0,
+        },
+        bDriveNumber: drive as u8,
+        ..Default::default()
+    };
+    // SAFETY: SENDCMDINPARAMS is packed(1) with no padding; the trailing 1-byte buffer is
+    // not sent.
+    let input = unsafe {
+        std::slice::from_raw_parts(
+            (&input as *const SENDCMDINPARAMS).cast::<u8>(),
+            offset_of!(SENDCMDINPARAMS, bBuffer),
+        )
+    };
+    const HEADER: usize = offset_of!(SENDCMDOUTPARAMS, bBuffer);
+    let mut out = [0u8; HEADER + 512];
+    let n = ioctl(h, SMART_RCV_DRIVE_DATA, input, &mut out)?;
+    parse_ata_smart(out.get(HEADER..n)?)
 }
 
 fn disk_size(h: &Handle) -> Option<u64> {
     let mut out = [0u8; 256];
-    ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, &mut [], &mut out)?;
-    Some(u64::from_le_bytes(out[24..32].try_into().ok()?))
+    ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, &[0u8; 0], &mut out)?;
+    Some(read_struct::<DISK_GEOMETRY_EX>(&out)?.DiskSize as u64)
 }
 
 fn utf16_z(b: &[u16]) -> String {
@@ -146,29 +189,24 @@ fn volumes() -> Vec<(u32, Volume)> {
         let Some(h) = open(&format!(r"\\.\{letter}:"), 0) else {
             continue;
         };
-        let mut num = [0u8; 12];
-        if ioctl(&h, IOCTL_STORAGE_GET_DEVICE_NUMBER, &mut [], &mut num).is_none() {
+        let mut num = [0u8; size_of::<STORAGE_DEVICE_NUMBER>()];
+        if ioctl(&h, IOCTL_STORAGE_GET_DEVICE_NUMBER, &[0u8; 0], &mut num).is_none() {
             continue;
         }
-        let disk = u32::from_le_bytes(num[4..8].try_into().unwrap());
-        let root = wide(&format!(r"{letter}:\"));
+        let disk = read_struct::<STORAGE_DEVICE_NUMBER>(&num)
+            .unwrap()
+            .DeviceNumber;
+        let root = HSTRING::from(format!(r"{letter}:\"));
         let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
         // SAFETY: valid root path and out pointers.
-        unsafe { GetDiskFreeSpaceExW(root.as_ptr(), &mut avail, &mut total, &mut free) };
+        let _ = unsafe {
+            GetDiskFreeSpaceExW(&root, Some(&mut avail), Some(&mut total), Some(&mut free))
+        };
         let mut label = [0u16; 128];
         let mut fs = [0u16; 32];
-        // SAFETY: buffer lengths passed explicitly.
-        unsafe {
-            GetVolumeInformationW(
-                root.as_ptr(),
-                label.as_mut_ptr(),
-                label.len() as u32,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                fs.as_mut_ptr(),
-                fs.len() as u32,
-            )
+        // SAFETY: buffer lengths passed with the slices.
+        let _ = unsafe {
+            GetVolumeInformationW(&root, Some(&mut label), None, None, None, Some(&mut fs))
         };
         out.push((
             disk,
@@ -200,22 +238,23 @@ pub fn drives() -> Vec<Drive> {
             continue;
         };
         misses = 0;
-        let Some(desc) =
-            query_property(&h, PROP_DEVICE, 1024).and_then(|b| parse_device_descriptor(&b))
+        let Some(desc) = query_property(&h, StorageDeviceProperty, 1024)
+            .and_then(|b| parse_device_descriptor(&b))
         else {
             continue;
         };
-        let ssd = query_property(&h, PROP_SEEK_PENALTY, 12).and_then(|b| b.get(8).map(|&v| v == 0));
+        let ssd = query_property(&h, StorageDeviceSeekPenaltyProperty, 12)
+            .and_then(|b| b.get(8).map(|&v| v == 0));
         let nvme_health = if desc.bus == BusType::Nvme {
             // The protocol-specific query generally needs read/write access (administrator).
-            open(&path, GENERIC_READ | GENERIC_WRITE)
+            open(&path, (GENERIC_READ | GENERIC_WRITE).0)
                 .and_then(|rw| nvme_health(&rw))
                 .or_else(|| nvme_health(&h))
         } else {
             None
         };
         let ata_smart = if desc.bus.smart_capable() {
-            open(&path, GENERIC_READ | GENERIC_WRITE).and_then(|rw| ata_smart(&rw, index))
+            open(&path, (GENERIC_READ | GENERIC_WRITE).0).and_then(|rw| ata_smart(&rw, index))
         } else {
             None
         };
@@ -322,7 +361,7 @@ impl SensorBackend for StorageBackend {
         ];
         for (counter, id, label, unit) in specs {
             let Some(c) = counter else { continue };
-            for (name, v) in read_array(c, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &mut self.buf) {
+            for (name, v) in read_array(c, PDH_FMT_DOUBLE_NOCAP100, &mut self.buf) {
                 let Some(disk) = parse_disk_instance(&name) else {
                     continue;
                 };
@@ -360,7 +399,7 @@ pub fn has_smart_capable_drive() -> bool {
             continue;
         };
         misses = 0;
-        if query_property(&h, PROP_DEVICE, 1024)
+        if query_property(&h, StorageDeviceProperty, 1024)
             .and_then(|b| parse_device_descriptor(&b))
             .is_some_and(|d| d.bus.smart_capable())
         {

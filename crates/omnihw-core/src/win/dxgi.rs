@@ -1,73 +1,20 @@
-//! DXGI adapter enumeration through hand-written COM vtable calls.
+//! DXGI adapter enumeration through the `windows` crate's COM bindings.
 
-use super::ffi::*;
 use crate::gpu::{Display, GpuAdapter};
-use std::ffi::c_void;
-use std::ptr;
-
-const IID_IDXGI_FACTORY1: GUID = GUID {
-    data1: 0x770a_ae78,
-    data2: 0xf26f,
-    data3: 0x4dba,
-    data4: [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87],
+use windows::Wdk::Graphics::Direct3D::{
+    D3DKMT_ADAPTERTYPE, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID, D3DKMT_QUERYADAPTERINFO,
+    D3DKMTCloseAdapter, D3DKMTOpenAdapterFromLuid, D3DKMTQueryAdapterInfo, KMTQAITYPE_ADAPTERTYPE,
 };
-/// Passing IDXGIDevice to CheckInterfaceSupport returns the UMD driver version.
-const IID_IDXGI_DEVICE: GUID = GUID {
-    data1: 0x54ec_77fa,
-    data2: 0x1377,
-    data3: 0x44e6,
-    data4: [0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c],
+use windows::Win32::Foundation::{LUID, STATUS_SUCCESS};
+use windows::Win32::Graphics::Dxgi::{
+    CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter1, IDXGIDevice, IDXGIFactory1,
 };
-const DXGI_ERROR_NOT_FOUND: i32 = 0x887A_0002_u32 as i32;
-const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2;
+use windows::core::Interface;
 
-// Vtable slots (IUnknown 0-2, IDXGIObject 3-6).
-const SLOT_RELEASE: usize = 2;
-const SLOT_FACTORY1_ENUM_ADAPTERS1: usize = 12;
-const SLOT_ADAPTER_ENUM_OUTPUTS: usize = 7;
-const SLOT_ADAPTER_CHECK_INTERFACE_SUPPORT: usize = 9;
-const SLOT_OUTPUT_GET_DESC: usize = 7;
-const SLOT_ADAPTER1_GET_DESC1: usize = 10;
-
-#[repr(C)]
-struct DxgiAdapterDesc1 {
-    description: [u16; 128],
-    vendor_id: u32,
-    device_id: u32,
-    sub_sys_id: u32,
-    revision: u32,
-    dedicated_video_memory: usize,
-    dedicated_system_memory: usize,
-    shared_system_memory: usize,
-    luid_low: u32,
-    luid_high: i32,
-    flags: u32,
-}
-
-/// Owned COM pointer, released on drop.
-struct Com(*mut c_void);
-
-impl Com {
-    /// # Safety
-    /// `slot` must be a valid vtable index whose function has signature `F`.
-    unsafe fn method<F: Copy>(&self, slot: usize) -> F {
-        // SAFETY: COM objects start with a pointer to their vtable.
-        unsafe {
-            let vtbl = *(self.0 as *const *const *const c_void);
-            std::mem::transmute_copy(&*vtbl.add(slot))
-        }
-    }
-}
-
-impl Drop for Com {
-    fn drop(&mut self) {
-        // SAFETY: IUnknown::Release on a pointer we own.
-        unsafe {
-            let release: unsafe extern "system" fn(*mut c_void) -> u32 = self.method(SLOT_RELEASE);
-            release(self.0);
-        }
-    }
-}
+/// `D3DKMT_ADAPTERTYPE` bits; the crate exposes the bitfield only as a raw `u32`.
+const ADAPTERTYPE_RENDER_SUPPORTED: u32 = 1 << 0;
+const ADAPTERTYPE_SOFTWARE_DEVICE: u32 = 1 << 2;
+const ADAPTERTYPE_INDIRECT_DISPLAY: u32 = 1 << 6;
 
 fn version_string(v: i64) -> String {
     let v = v as u64;
@@ -81,66 +28,54 @@ fn version_string(v: i64) -> String {
 }
 
 /// Kernel adapter type flags (`D3DKMT_ADAPTERTYPE`) for a LUID.
-fn kmt_adapter_type(luid_low: u32, luid_high: i32) -> Option<u32> {
+fn kmt_adapter_type(luid: LUID) -> Option<u32> {
     let mut open = D3DKMT_OPENADAPTERFROMLUID {
-        luid_low,
-        luid_high,
-        adapter: 0,
+        AdapterLuid: luid,
+        hAdapter: 0,
     };
     // SAFETY: valid in/out struct.
-    if unsafe { D3DKMTOpenAdapterFromLuid(&mut open) } != 0 {
+    if unsafe { D3DKMTOpenAdapterFromLuid(&mut open) } != STATUS_SUCCESS {
         return None;
     }
-    let mut flags: u32 = 0;
+    let mut flags = D3DKMT_ADAPTERTYPE::default();
     let mut q = D3DKMT_QUERYADAPTERINFO {
-        adapter: open.adapter,
-        kind: KMTQAITYPE_ADAPTERTYPE,
-        data: (&mut flags as *mut u32).cast(),
-        data_size: 4,
+        hAdapter: open.hAdapter,
+        Type: KMTQAITYPE_ADAPTERTYPE,
+        pPrivateDriverData: (&mut flags as *mut D3DKMT_ADAPTERTYPE).cast(),
+        PrivateDriverDataSize: size_of::<D3DKMT_ADAPTERTYPE>() as u32,
     };
-    // SAFETY: data points to a u32 of the declared size; adapter closed once.
+    // SAFETY: data points to a D3DKMT_ADAPTERTYPE of the declared size; adapter closed once.
     let st = unsafe { D3DKMTQueryAdapterInfo(&mut q) };
-    unsafe { D3DKMTCloseAdapter(&mut open.adapter) };
-    (st == 0).then_some(flags)
-}
-
-#[repr(C)]
-struct DxgiOutputDesc {
-    device_name: [u16; 32],
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-    attached_to_desktop: i32,
-    rotation: u32,
-    monitor: *mut c_void,
+    let _ = unsafe {
+        D3DKMTCloseAdapter(&D3DKMT_CLOSEADAPTER {
+            hAdapter: open.hAdapter,
+        })
+    };
+    // SAFETY: every bit pattern is a valid u32.
+    (st == STATUS_SUCCESS).then_some(unsafe { flags.Anonymous.Value })
 }
 
 /// Desktop-attached outputs (connected displays) driven by this adapter.
-fn outputs(adapter: &Com) -> Vec<Display> {
-    type EnumOutputs = unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
-    type GetDesc = unsafe extern "system" fn(*mut c_void, *mut DxgiOutputDesc) -> i32;
+fn outputs(adapter: &IDXGIAdapter1) -> Vec<Display> {
     let mut out = Vec::new();
-    // SAFETY: slot 7 of IDXGIAdapter is EnumOutputs.
-    let enum_outputs: EnumOutputs = unsafe { adapter.method(SLOT_ADAPTER_ENUM_OUTPUTS) };
     for i in 0..16 {
-        let mut o = ptr::null_mut();
-        // SAFETY: valid adapter and out pointer.
-        if unsafe { enum_outputs(adapter.0, i, &mut o) } < 0 || o.is_null() {
+        // SAFETY: valid adapter; errors (DXGI_ERROR_NOT_FOUND) end the list.
+        let Ok(output) = (unsafe { adapter.EnumOutputs(i) }) else {
             break;
-        }
-        let output = Com(o);
-        // SAFETY: zeroed POD out-struct; slot 7 of IDXGIOutput is GetDesc.
-        let mut d: DxgiOutputDesc = unsafe { std::mem::zeroed() };
-        let get_desc: GetDesc = unsafe { output.method(SLOT_OUTPUT_GET_DESC) };
-        if unsafe { get_desc(output.0, &mut d) } < 0 || d.attached_to_desktop == 0 {
+        };
+        // SAFETY: valid output.
+        let Ok(d) = (unsafe { output.GetDesc() }) else {
+            continue;
+        };
+        if !d.AttachedToDesktop.as_bool() {
             continue;
         }
-        let len = d.device_name.iter().position(|&c| c == 0).unwrap_or(32);
+        let len = d.DeviceName.iter().position(|&c| c == 0).unwrap_or(32);
+        let r = d.DesktopCoordinates;
         out.push(Display {
-            name: String::from_utf16_lossy(&d.device_name[..len]),
-            width: (d.right - d.left).unsigned_abs(),
-            height: (d.bottom - d.top).unsigned_abs(),
+            name: String::from_utf16_lossy(&d.DeviceName[..len]),
+            width: (r.right - r.left).unsigned_abs(),
+            height: (r.bottom - r.top).unsigned_abs(),
         });
     }
     out
@@ -150,59 +85,49 @@ fn outputs(adapter: &Com) -> Vec<Display> {
 /// (virtual monitor) adapters, which mirror their render GPU's description, are skipped.
 pub fn adapters() -> Vec<GpuAdapter> {
     let mut out = Vec::new();
-    let mut f = ptr::null_mut();
-    // SAFETY: valid IID and out pointer.
-    if unsafe { CreateDXGIFactory1(&IID_IDXGI_FACTORY1, &mut f) } < 0 || f.is_null() {
+    // SAFETY: plain factory creation.
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
         return out;
-    }
-    let factory = Com(f);
-    type EnumAdapters1 = unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
-    type GetDesc1 = unsafe extern "system" fn(*mut c_void, *mut DxgiAdapterDesc1) -> i32;
-    type CheckSupport = unsafe extern "system" fn(*mut c_void, *const GUID, *mut i64) -> i32;
-    // SAFETY: slot 12 of IDXGIFactory1 is EnumAdapters1.
-    let enum_adapters: EnumAdapters1 = unsafe { factory.method(SLOT_FACTORY1_ENUM_ADAPTERS1) };
+    };
     for i in 0..16 {
-        let mut a = ptr::null_mut();
-        // SAFETY: valid factory and out pointer.
-        let hr = unsafe { enum_adapters(factory.0, i, &mut a) };
-        if hr == DXGI_ERROR_NOT_FOUND || hr < 0 || a.is_null() {
+        // SAFETY: valid factory; DXGI_ERROR_NOT_FOUND (or any error) ends the list.
+        let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else {
             break;
-        }
-        let adapter = Com(a);
-        // SAFETY: zeroed POD out-struct; slot 10 of IDXGIAdapter1 is GetDesc1.
-        let mut d: DxgiAdapterDesc1 = unsafe { std::mem::zeroed() };
-        let get_desc: GetDesc1 = unsafe { adapter.method(SLOT_ADAPTER1_GET_DESC1) };
-        if unsafe { get_desc(adapter.0, &mut d) } < 0 || d.flags & DXGI_ADAPTER_FLAG_SOFTWARE != 0 {
+        };
+        // SAFETY: valid adapter.
+        let Ok(d) = (unsafe { adapter.GetDesc1() }) else {
+            continue;
+        };
+        if d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
             continue;
         }
-        if let Some(t) = kmt_adapter_type(d.luid_low, d.luid_high)
+        if let Some(t) = kmt_adapter_type(d.AdapterLuid)
             && (t & (ADAPTERTYPE_INDIRECT_DISPLAY | ADAPTERTYPE_SOFTWARE_DEVICE) != 0
                 || t & ADAPTERTYPE_RENDER_SUPPORTED == 0)
         {
             continue;
         }
-        let mut umd: i64 = 0;
-        // SAFETY: slot 9 of IDXGIAdapter is CheckInterfaceSupport.
-        let check: CheckSupport = unsafe { adapter.method(SLOT_ADAPTER_CHECK_INTERFACE_SUPPORT) };
-        let driver_version = if unsafe { check(adapter.0, &IID_IDXGI_DEVICE, &mut umd) } >= 0 {
-            version_string(umd)
-        } else {
-            String::new()
+        // Passing IDXGIDevice to CheckInterfaceSupport returns the UMD driver version.
+        // SAFETY: valid adapter and IID.
+        let driver_version = match unsafe { adapter.CheckInterfaceSupport(&IDXGIDevice::IID) } {
+            Ok(umd) => version_string(umd),
+            Err(_) => String::new(),
         };
-        let len = d.description.iter().position(|&c| c == 0).unwrap_or(128);
+        let len = d.Description.iter().position(|&c| c == 0).unwrap_or(128);
         let displays = outputs(&adapter);
+        let luid = d.AdapterLuid;
         out.push(GpuAdapter {
             displays,
-            name: String::from_utf16_lossy(&d.description[..len])
+            name: String::from_utf16_lossy(&d.Description[..len])
                 .trim()
                 .to_string(),
-            vendor_id: d.vendor_id,
-            device_id: d.device_id,
-            subsys_id: d.sub_sys_id,
-            revision: d.revision,
-            dedicated_vram: d.dedicated_video_memory as u64,
-            shared_memory: d.shared_system_memory as u64,
-            luid: ((d.luid_high as u32 as u64) << 32) | d.luid_low as u64,
+            vendor_id: d.VendorId,
+            device_id: d.DeviceId,
+            subsys_id: d.SubSysId,
+            revision: d.Revision,
+            dedicated_vram: d.DedicatedVideoMemory as u64,
+            shared_memory: d.SharedSystemMemory as u64,
+            luid: ((luid.HighPart as u32 as u64) << 32) | luid.LowPart as u64,
             driver_version,
             nvml: None,
             driver_date: None,

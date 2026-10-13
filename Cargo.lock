@@ -2201,6 +2201,9 @@ dependencies = [
 [[package]]
 name = "omnihw-core"
 version = "0.1.0"
+dependencies = [
+ "windows",
+]
 
 [[package]]
 name = "once_cell"

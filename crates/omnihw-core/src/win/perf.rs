@@ -37,8 +37,7 @@ mod imp {
     use crate::gpu::{GpuAdapter, aggregate_engine_load, engtype_label, parse_adapter_instance};
     use crate::sensors::{Reading, SensorBackend, Unit};
     use crate::topology::Topology;
-    use crate::win::ffi::*;
-    use crate::win::pdh::{Counter, Query, read_array};
+    use crate::win::pdh::{Counter, PDH_FMT_DOUBLE, PDH_FMT_DOUBLE_NOCAP100, Query, read_array};
     use std::collections::HashMap;
 
     /// Per-core clocks, per-thread load, total load and (if exposed) RAPL power.
@@ -95,7 +94,7 @@ mod imp {
 
         fn poll(&mut self, out: &mut Vec<Reading>) -> Result<(), String> {
             self.query.collect()?;
-            let fmt = PDH_FMT_DOUBLE | PDH_FMT_NOCAP100;
+            let fmt = PDH_FMT_DOUBLE_NOCAP100;
 
             if let Some(c) = &self.perf {
                 let mut per_core: Vec<f64> = vec![f64::NAN; self.core_labels.len()];
@@ -243,7 +242,7 @@ mod imp {
         fn poll(&mut self, out: &mut Vec<Reading>) -> Result<(), String> {
             self.query.collect()?;
             if let Some(c) = &self.engines {
-                let samples = read_array(c, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, &mut self.buf);
+                let samples = read_array(c, PDH_FMT_DOUBLE_NOCAP100, &mut self.buf);
                 let loads = aggregate_engine_load(samples.iter().map(|(n, v)| (n.as_str(), *v)));
                 let mut luids: Vec<_> = loads.keys().copied().collect();
                 luids.sort();

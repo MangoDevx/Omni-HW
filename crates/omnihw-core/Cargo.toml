@@ -1,9 +1,30 @@
 [package]
 name = "omnihw-core"
-description = "Hardware detection and data model for Omni-HW (no external dependencies)"
+description = "Hardware detection and data model for Omni-HW"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Wdk_Graphics_Direct3D",
+    "Wdk_System_SystemInformation",
+    "Wdk_System_SystemServices",
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_Storage_Nvme",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Power",
+    "Win32_System_Registry",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
+] }

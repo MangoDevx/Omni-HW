@@ -1,12 +1,18 @@
 //! NVIDIA NVML, loaded at runtime from `nvml.dll` (ships with the driver).
 //! Absent library or missing entry points simply disable the related data.
 
-use super::ffi::*;
 use crate::gpu::{GpuAdapter, NvmlDetails};
 use crate::sensors::{Reading, SensorBackend, Unit};
 use std::ffi::c_void;
 use std::ptr;
+use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+use windows::Win32::System::LibraryLoader::{
+    GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+};
+use windows::core::{s, w};
 
+// NVML is a third-party driver DLL with no `windows` crate bindings, so its handle type,
+// structs and entry-point signatures below stay hand-written (from nvml.h).
 type Device = *mut c_void;
 type Ret = i32;
 const SUCCESS: Ret = 0;
@@ -94,39 +100,26 @@ fn c_str(buf: &[u8]) -> String {
 
 impl Nvml {
     pub fn load() -> Option<Nvml> {
-        let lib = {
-            let sys = wide("nvml.dll");
-            // SAFETY: NUL-terminated name; System32-only search avoids DLL planting.
-            let h = unsafe {
-                LoadLibraryExW(sys.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32)
-            };
-            if h.is_null() {
-                let legacy = wide(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll");
-                // SAFETY: absolute path, NUL-terminated.
-                unsafe { LoadLibraryExW(legacy.as_ptr(), ptr::null_mut(), 0) }
-            } else {
-                h
-            }
-        };
-        if lib.is_null() {
-            return None;
+        // SAFETY: literal names; System32-only search avoids DLL planting, and the
+        // legacy fallback is an absolute path.
+        let lib = unsafe {
+            LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).or_else(|_| {
+                LoadLibraryExW(
+                    w!(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"),
+                    None,
+                    LOAD_LIBRARY_FLAGS(0),
+                )
+            })
         }
-        let sym = |name: &str| -> *mut c_void {
-            let mut n = name.as_bytes().to_vec();
-            n.push(0);
-            // SAFETY: valid module and NUL-terminated name.
-            unsafe { GetProcAddress(lib, n.as_ptr()) }
-        };
+        .ok()?;
         macro_rules! opt {
-            ($name:expr, $t:ty) => {{
-                let p = sym($name);
-                // SAFETY: NVML exports these symbols with the declared C signatures.
-                if p.is_null() {
-                    None
-                } else {
-                    Some(unsafe { std::mem::transmute::<*mut c_void, $t>(p) })
-                }
-            }};
+            ($name:literal, $t:ty) => {
+                // SAFETY: valid module and NUL-terminated name; NVML exports these
+                // symbols with the declared C signatures.
+                unsafe { GetProcAddress(lib, s!($name)) }.map(|p| unsafe {
+                    std::mem::transmute::<unsafe extern "system" fn() -> isize, $t>(p)
+                })
+            };
         }
         let (Some(init), Some(shutdown), Some(count), Some(handle)) = (
             opt!("nvmlInit_v2", FnVoid),
@@ -135,12 +128,12 @@ impl Nvml {
             opt!("nvmlDeviceGetHandleByIndex_v2", FnHandle),
         ) else {
             // SAFETY: module loaded above.
-            unsafe { FreeLibrary(lib) };
+            let _ = unsafe { FreeLibrary(lib) };
             return None;
         };
         // SAFETY: entry points resolved above.
         if unsafe { init() } != SUCCESS {
-            unsafe { FreeLibrary(lib) };
+            let _ = unsafe { FreeLibrary(lib) };
             return None;
         }
         let f = Fns {
@@ -285,7 +278,7 @@ impl Drop for Nvml {
         // SAFETY: initialized in load(); library freed once.
         unsafe {
             (self.f.shutdown)();
-            FreeLibrary(self.lib);
+            let _ = FreeLibrary(self.lib);
         }
     }
 }
