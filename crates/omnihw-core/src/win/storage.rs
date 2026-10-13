@@ -20,12 +20,10 @@ use windows::Win32::System::Ioctl::{
     SMART_RCV_DRIVE_DATA, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_ID, STORAGE_PROPERTY_QUERY,
     STORAGE_PROTOCOL_DATA_DESCRIPTOR, STORAGE_PROTOCOL_SPECIFIC_DATA, StorageDeviceProperty,
     StorageDeviceProtocolSpecificProperty, StorageDeviceSeekPenaltyProperty,
+    StorageDeviceTemperatureProperty,
 };
 use windows::core::HSTRING;
 
-/// Property 11, kept from the original hand-written code. Note that 11 is
-/// `StorageDeviceLBProvisioningProperty`; `StorageDeviceTemperatureProperty` is 52.
-const PROP_TEMPERATURE: STORAGE_PROPERTY_ID = STORAGE_PROPERTY_ID(11);
 const NVME_LOG_DATA_SIZE: u32 = 512;
 
 /// Owned Win32 handle.
@@ -98,7 +96,7 @@ fn query_property(h: &Handle, property: STORAGE_PROPERTY_ID, out_len: usize) -> 
 }
 
 fn temperature(h: &Handle) -> Option<TemperatureData> {
-    parse_temperature_descriptor(&query_property(h, PROP_TEMPERATURE, 512)?)
+    parse_temperature_descriptor(&query_property(h, StorageDeviceTemperatureProperty, 512)?)
 }
 
 fn nvme_health(h: &Handle) -> Option<NvmeHealth> {
