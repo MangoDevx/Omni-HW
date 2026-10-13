@@ -38,91 +38,64 @@ fn command_line(exe: &str, minimized: bool) -> String {
 
 #[cfg(windows)]
 mod imp {
-    use std::ffi::c_void;
+    use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS};
+    use windows::Win32::System::Registry::{
+        HKEY_CURRENT_USER, REG_SZ, RRF_RT_REG_SZ, RegDeleteKeyValueW, RegGetValueW, RegSetKeyValueW,
+    };
+    use windows::core::{PCWSTR, w};
 
-    const HKEY_CURRENT_USER: isize = 0x8000_0001u32 as i32 as isize;
-    const REG_SZ: u32 = 1;
-    const RRF_RT_REG_SZ: u32 = 0x2;
-    const ERROR_FILE_NOT_FOUND: i32 = 2;
-    const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-    const VALUE: &str = "Omni-HW";
-
-    #[link(name = "advapi32")]
-    unsafe extern "system" {
-        fn RegSetKeyValueW(
-            key: isize,
-            subkey: *const u16,
-            value: *const u16,
-            kind: u32,
-            data: *const c_void,
-            len: u32,
-        ) -> i32;
-        fn RegDeleteKeyValueW(key: isize, subkey: *const u16, value: *const u16) -> i32;
-        fn RegGetValueW(
-            key: isize,
-            subkey: *const u16,
-            value: *const u16,
-            flags: u32,
-            kind: *mut u32,
-            data: *mut c_void,
-            len: *mut u32,
-        ) -> i32;
-    }
-
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
+    const RUN_KEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Run");
+    const VALUE: PCWSTR = w!("Omni-HW");
 
     pub fn current() -> Option<String> {
-        let (k, v) = (wide(RUN_KEY), wide(VALUE));
         let mut buf = [0u16; 1024];
         let mut len = (buf.len() * 2) as u32;
         // SAFETY: buffer size in bytes passed in `len`.
         let st = unsafe {
             RegGetValueW(
                 HKEY_CURRENT_USER,
-                k.as_ptr(),
-                v.as_ptr(),
+                RUN_KEY,
+                VALUE,
                 RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                buf.as_mut_ptr().cast(),
-                &mut len,
+                None,
+                Some(buf.as_mut_ptr().cast()),
+                Some(&mut len),
             )
         };
-        (st == 0).then(|| {
+        (st == ERROR_SUCCESS).then(|| {
             String::from_utf16_lossy(&buf[..buf.iter().position(|&c| c == 0).unwrap_or(0)])
         })
     }
 
     pub fn write(cmd: &str) -> Result<(), String> {
-        let (k, v, data) = (wide(RUN_KEY), wide(VALUE), wide(cmd));
+        let data: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: NUL-terminated strings; data length in bytes includes the terminator.
         let st = unsafe {
             RegSetKeyValueW(
                 HKEY_CURRENT_USER,
-                k.as_ptr(),
-                v.as_ptr(),
-                REG_SZ,
-                data.as_ptr().cast(),
+                RUN_KEY,
+                VALUE,
+                REG_SZ.0,
+                Some(data.as_ptr().cast()),
                 (data.len() * 2) as u32,
             )
         };
-        if st == 0 {
+        if st == ERROR_SUCCESS {
             Ok(())
         } else {
-            Err(format!("Could not add Omni-HW to startup (error {st})"))
+            Err(format!("Could not add Omni-HW to startup (error {})", st.0))
         }
     }
 
     pub fn remove() -> Result<(), String> {
-        let (k, v) = (wide(RUN_KEY), wide(VALUE));
         // SAFETY: NUL-terminated strings.
-        let st = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, k.as_ptr(), v.as_ptr()) };
-        if st == 0 || st == ERROR_FILE_NOT_FOUND {
+        let st = unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, VALUE) };
+        if st == ERROR_SUCCESS || st == ERROR_FILE_NOT_FOUND {
             Ok(())
         } else {
             Err(format!(
-                "Could not remove Omni-HW from startup (error {st})"
+                "Could not remove Omni-HW from startup (error {})",
+                st.0
             ))
         }
     }

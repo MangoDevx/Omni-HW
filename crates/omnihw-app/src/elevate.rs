@@ -34,41 +34,29 @@ fn quote(a: &str) -> String {
 
 #[cfg(windows)]
 fn run_as_admin(params: &str) -> bool {
-    use std::ffi::c_void;
-    #[link(name = "shell32")]
-    unsafe extern "system" {
-        fn ShellExecuteW(
-            hwnd: *mut c_void,
-            op: *const u16,
-            file: *const u16,
-            params: *const u16,
-            dir: *const u16,
-            show: i32,
-        ) -> isize;
-    }
-    let wide = |s: &str| {
-        s.encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<u16>>()
-    };
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::core::{HSTRING, PCWSTR, w};
     let Ok(exe) = std::env::current_exe() else {
         return false;
     };
-    let (op, file, params) = (wide("runas"), wide(&exe.to_string_lossy()), wide(params));
-    const SW_SHOWNORMAL: i32 = 1;
+    let (file, params) = (
+        HSTRING::from(&*exe.to_string_lossy()),
+        HSTRING::from(params),
+    );
     // SAFETY: NUL-terminated strings that outlive the call. Shows the UAC prompt; returns a
     // value <= 32 if it failed or the user declined.
     let r = unsafe {
         ShellExecuteW(
-            std::ptr::null_mut(),
-            op.as_ptr(),
-            file.as_ptr(),
-            params.as_ptr(),
-            std::ptr::null(),
+            None,
+            w!("runas"),
+            &file,
+            &params,
+            PCWSTR::null(),
             SW_SHOWNORMAL,
         )
     };
-    r > 32
+    r.0 as isize > 32
 }
 
 #[cfg(not(windows))]
