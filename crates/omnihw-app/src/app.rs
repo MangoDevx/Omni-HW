@@ -127,6 +127,7 @@ pub struct OmniApp {
     minimize_on_start: bool,
     /// In-app documentation window.
     help: crate::help::HelpState,
+    updates: crate::update::UpdateChecker,
 }
 
 impl OmniApp {
@@ -141,6 +142,10 @@ impl OmniApp {
         let sampler = Sampler::start(cc.egui_ctx.clone());
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
+        let updates = crate::update::UpdateChecker::default();
+        if settings.check_updates_at_start {
+            updates.start(&cc.egui_ctx);
+        }
         OmniApp {
             tab: Tab::from_key(&settings.start_page).unwrap_or(Tab::Overview),
             settings,
@@ -152,6 +157,7 @@ impl OmniApp {
             hwnd_sent: false,
             minimize_on_start: crate::autostart::launch_flags().1,
             help: Default::default(),
+            updates,
         }
     }
 
@@ -276,6 +282,15 @@ impl OmniApp {
             }
         });
 
+        if let crate::update::Status::Available(v) = self.updates.status()
+            && ui
+                .button(format!("Update {v} available"))
+                .on_hover_text("Open Settings to check or download the new version")
+                .clicked()
+        {
+            self.tab = Tab::Settings;
+        }
+
         let mut open_about = false;
         egui::containers::menu::MenuButton::new("Info  ⏷").ui(ui, |ui| {
             if ui.button("Feature guide").clicked() {
@@ -392,7 +407,12 @@ impl eframe::App for OmniApp {
                         return tabs::sensors::show(ui, &self.sampler);
                     }
                     if self.tab == Tab::Settings {
-                        if tabs::settings::show(ui, &mut self.settings, &self.sampler) {
+                        if tabs::settings::show(
+                            ui,
+                            &mut self.settings,
+                            &self.sampler,
+                            &self.updates,
+                        ) {
                             crate::settings::apply_visuals(ui.ctx(), &self.settings);
                             if let Err(e) = self.settings.save() {
                                 self.status = Some((e, Instant::now()));

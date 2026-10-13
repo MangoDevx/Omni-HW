@@ -6,6 +6,7 @@ use crate::autostart;
 use crate::heat::ORANGE;
 use crate::sampler::Sampler;
 use crate::settings::{INTERVALS_MS, NavStyle, PAGES, Settings, Theme, UI_SCALE_RANGE};
+use crate::update::{RELEASES_URL, Status, UpdateChecker};
 use egui::{RichText, Ui};
 use std::path::PathBuf;
 
@@ -37,7 +38,7 @@ fn parse_percent(text: &str) -> Option<f64> {
 }
 
 /// Returns true when a setting changed; the caller saves and applies them.
-pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler) -> bool {
+pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateChecker) -> bool {
     let before = s.clone();
     ui.label(RichText::new("Settings").size(20.0).strong());
     ui.weak("Changes apply immediately and are saved automatically.");
@@ -239,6 +240,57 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler) -> bool {
         if !err.is_empty() {
             ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), err);
         }
+    });
+
+    group(ui, "Updates", |ui| {
+        ui.horizontal_wrapped(|ui| {
+            let status = updates.status();
+            let checking = status == Status::Checking;
+            if ui
+                .add_enabled(!checking, egui::Button::new("Check for updates"))
+                .clicked()
+            {
+                updates.start(ui.ctx());
+            }
+            let version = env!("CARGO_PKG_VERSION");
+            match status {
+                Status::Idle => {
+                    ui.weak(format!("You have version {version}."));
+                }
+                Status::Checking => {
+                    ui.spinner();
+                    ui.label("Checking GitHub...");
+                }
+                Status::UpToDate => {
+                    ui.label(format!("Omni-HW {version} is the latest version."));
+                }
+                Status::Available(latest) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "Version {latest} is available (you have {version})."
+                        ))
+                        .strong(),
+                    );
+                    ui.hyperlink_to("Open the download page", RELEASES_URL);
+                }
+                Status::AheadOfRelease(latest) => {
+                    ui.label(format!(
+                        "You have {version}, newer than the latest release ({latest})."
+                    ));
+                }
+                Status::Failed(e) => {
+                    ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), e);
+                }
+            }
+        });
+        ui.checkbox(
+            &mut s.check_updates_at_start,
+            "Check for updates when Omni-HW starts",
+        );
+        ui.weak(
+            "Update checks are Omni-HW's only network request and happen only when you click the button or turn this on. \
+             They ask GitHub for the latest release's version number; nothing about your PC is sent.",
+        );
     });
 
     if let Some(p) = Settings::path() {

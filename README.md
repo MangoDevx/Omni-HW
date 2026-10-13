@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  🦀 Written in Rust · 🪟 Windows 10/11 · 🔍 Read-only · 📦 Single exe · 🔒 100% offline
+  🦀 Written in Rust · 🪟 Windows 10/11 · 🔍 Read-only · 📦 Single exe · 🔒 Offline by default
 </p>
 
 <p align="center">
@@ -83,7 +83,7 @@ The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --w
 
 ## 🔒 Privacy & permissions
 
-- 🌐 **Offline:** Omni-HW never connects to the internet. Everything stays on your PC.
+- 🌐 **Offline:** Omni-HW never connects to the internet on its own. Everything stays on your PC. The only exception is the optional update check (Settings > Updates), which runs only when you click it or turn on the check at start (off by default) and only asks GitHub for the latest version number.
 - 🔍 **Read-only:** Omni-HW reads your hardware through standard Windows APIs and your GPU driver's own monitoring library. It never changes clocks, fans or firmware settings, and nothing gets installed.
 - 🛡️ **Admin only for SATA health:** reading SATA drive health needs administrator rights, so Omni-HW asks once at start if you have SATA drives. Say no and everything else still works, or turn the prompt off in Settings. NVMe drives don't need it.
 - 📁 **Where your files go:**

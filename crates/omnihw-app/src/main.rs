@@ -13,6 +13,7 @@ mod sampler;
 mod settings;
 mod tabs;
 mod tray;
+mod update;
 
 fn main() -> eframe::Result {
     if elevate::relaunch_elevated_if_useful() {

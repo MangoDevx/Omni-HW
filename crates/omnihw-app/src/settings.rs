@@ -62,6 +62,8 @@ pub struct Settings {
     pub alert_notifications: bool,
     /// Where recordings and reports are saved; `None` = Documents.
     pub data_dir: Option<PathBuf>,
+    /// Check GitHub for a newer release at start (the app's only network request).
+    pub check_updates_at_start: bool,
 }
 
 impl Default for Settings {
@@ -78,6 +80,7 @@ impl Default for Settings {
             ask_admin_at_start: true,
             alert_notifications: true,
             data_dir: None,
+            check_updates_at_start: false,
         }
     }
 }
@@ -131,7 +134,8 @@ impl Settings {
              minimize_to_tray={}\n\
              ask_admin_at_start={}\n\
              alert_notifications={}\n\
-             data_dir={data_dir}\n",
+             data_dir={data_dir}\n\
+             check_updates_at_start={}\n",
             self.ui_scale,
             self.start_page,
             self.sample_interval_ms,
@@ -140,6 +144,7 @@ impl Settings {
             bool_str(self.minimize_to_tray),
             bool_str(self.ask_admin_at_start),
             bool_str(self.alert_notifications),
+            bool_str(self.check_updates_at_start),
         )
     }
 
@@ -200,6 +205,9 @@ impl Settings {
                     s.alert_notifications = parse_bool(v).unwrap_or(s.alert_notifications)
                 }
                 "data_dir" => s.data_dir = (!v.is_empty()).then(|| PathBuf::from(v)),
+                "check_updates_at_start" => {
+                    s.check_updates_at_start = parse_bool(v).unwrap_or(s.check_updates_at_start)
+                }
                 _ => {}
             }
         }
@@ -263,6 +271,7 @@ mod tests {
             ask_admin_at_start: false,
             alert_notifications: false,
             data_dir: Some(PathBuf::from(r"D:\Omni HW\data")),
+            check_updates_at_start: true,
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);
         assert_eq!(

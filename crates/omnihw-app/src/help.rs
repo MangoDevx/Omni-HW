@@ -693,7 +693,8 @@ fn privacy(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Omni-HW makes no network connections: no telemetry, no update checks, no uploads.",
+            "Omni-HW makes no network connections on its own: no telemetry, no uploads.",
+            "The one exception is the update check, which only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
             "It only reads hardware information and settings; it never changes your system settings. The one exception is the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
             "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in AppData.",
         ],
