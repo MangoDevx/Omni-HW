@@ -3,22 +3,10 @@
 
 #[cfg(windows)]
 mod imp {
-    #[repr(C)]
-    struct FlashInfo {
-        cb_size: u32,
-        hwnd: isize,
-        flags: u32,
-        count: u32,
-        timeout: u32,
-    }
-
-    const FLASHW_ALL_UNTIL_FOREGROUND: u32 = 0x3 | 0xC;
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn FlashWindowEx(info: *mut FlashInfo) -> i32;
-        fn GetForegroundWindow() -> isize;
-    }
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        FLASHW_ALL, FLASHW_TIMERNOFG, FLASHWINFO, FlashWindowEx, GetForegroundWindow,
+    };
 
     pub struct Notifier {
         hwnd: isize,
@@ -31,17 +19,18 @@ mod imp {
 
         pub fn show(&mut self, title: &str, message: &str) {
             crate::tray::balloon(title, message);
+            let hwnd = HWND(self.hwnd as *mut _);
             // SAFETY: trivially safe.
-            if self.hwnd != 0 && unsafe { GetForegroundWindow() } != self.hwnd {
-                let mut f = FlashInfo {
-                    cb_size: size_of::<FlashInfo>() as u32,
-                    hwnd: self.hwnd,
-                    flags: FLASHW_ALL_UNTIL_FOREGROUND,
-                    count: 3,
-                    timeout: 0,
+            if self.hwnd != 0 && unsafe { GetForegroundWindow() } != hwnd {
+                let f = FLASHWINFO {
+                    cbSize: size_of::<FLASHWINFO>() as u32,
+                    hwnd,
+                    dwFlags: FLASHW_ALL | FLASHW_TIMERNOFG,
+                    uCount: 3,
+                    dwTimeout: 0,
                 };
                 // SAFETY: valid struct.
-                unsafe { FlashWindowEx(&mut f) };
+                let _ = unsafe { FlashWindowEx(&f) };
             }
         }
     }

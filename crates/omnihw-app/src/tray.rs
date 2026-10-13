@@ -7,85 +7,25 @@
 
 #[cfg(windows)]
 mod imp {
-    use std::ffi::c_void;
     use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
     use std::sync::{Mutex, OnceLock};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Shell::{
+        NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_TIP, NIIF_WARNING, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+        NOTIFYICONDATAW, Shell_NotifyIconW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
+        DispatchMessageW, GetCursorPos, GetMessageW, IDI_APPLICATION, LoadIconW, MF_STRING, MSG,
+        PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_HIDE,
+        SW_RESTORE, SendMessageW, SetForegroundWindow, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+        TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
+        WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
+        WM_RBUTTONUP, WNDCLASSEXW,
+    };
+    use windows::core::{PCWSTR, w};
 
-    type Hwnd = isize;
-
-    #[repr(C)]
-    struct NotifyIconData {
-        cb_size: u32,
-        hwnd: Hwnd,
-        id: u32,
-        flags: u32,
-        callback_message: u32,
-        icon: *mut c_void,
-        tip: [u16; 128],
-        state: u32,
-        state_mask: u32,
-        info: [u16; 256],
-        version: u32,
-        info_title: [u16; 64],
-        info_flags: u32,
-        guid: [u8; 16],
-        balloon_icon: *mut c_void,
-    }
-
-    #[repr(C)]
-    struct WndClassEx {
-        cb_size: u32,
-        style: u32,
-        wnd_proc: unsafe extern "system" fn(Hwnd, u32, usize, isize) -> isize,
-        cls_extra: i32,
-        wnd_extra: i32,
-        instance: *mut c_void,
-        icon: *mut c_void,
-        cursor: *mut c_void,
-        background: *mut c_void,
-        menu_name: *const u16,
-        class_name: *const u16,
-        icon_small: *mut c_void,
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct Msg {
-        hwnd: Hwnd,
-        message: u32,
-        wparam: usize,
-        lparam: isize,
-        time: u32,
-        pt_x: i32,
-        pt_y: i32,
-        private: u32,
-    }
-
-    #[repr(C)]
-    #[derive(Default)]
-    struct Point {
-        x: i32,
-        y: i32,
-    }
-
-    const NIM_ADD: u32 = 0;
-    const NIM_MODIFY: u32 = 1;
-    const NIM_DELETE: u32 = 2;
-    const NIF_MESSAGE: u32 = 0x1;
-    const NIF_ICON: u32 = 0x2;
-    const NIF_TIP: u32 = 0x4;
-    const NIF_INFO: u32 = 0x10;
-    const NIIF_WARNING: u32 = 0x2;
-
-    const WM_NULL: u32 = 0;
-    const WM_DESTROY: u32 = 0x2;
-    const WM_CLOSE: u32 = 0x10;
-    const WM_COMMAND: u32 = 0x111;
-    const WM_LBUTTONUP: u32 = 0x202;
-    const WM_LBUTTONDBLCLK: u32 = 0x203;
-    const WM_RBUTTONUP: u32 = 0x205;
-    const WM_CONTEXTMENU: u32 = 0x7B;
-    const WM_APP: u32 = 0x8000;
     /// Mouse messages from the tray icon.
     const MSG_TRAY: u32 = WM_APP + 1;
     /// A balloon is waiting in `PENDING_BALLOON`.
@@ -97,66 +37,6 @@ mod imp {
 
     const ID_OPEN: usize = 1;
     const ID_EXIT: usize = 2;
-    const MF_STRING: u32 = 0;
-    const TPM_RIGHTBUTTON: u32 = 0x2;
-    const TPM_RETURNCMD: u32 = 0x100;
-    const SW_HIDE: i32 = 0;
-    const SW_RESTORE: i32 = 9;
-    const IDI_APPLICATION: usize = 32512;
-
-    #[link(name = "shell32")]
-    unsafe extern "system" {
-        fn Shell_NotifyIconW(message: u32, data: *mut NotifyIconData) -> i32;
-    }
-
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn RegisterClassExW(class: *const WndClassEx) -> u16;
-        fn CreateWindowExW(
-            ex_style: u32,
-            class: *const u16,
-            name: *const u16,
-            style: u32,
-            x: i32,
-            y: i32,
-            w: i32,
-            h: i32,
-            parent: Hwnd,
-            menu: *mut c_void,
-            instance: *mut c_void,
-            param: *mut c_void,
-        ) -> Hwnd;
-        fn DefWindowProcW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
-        fn DestroyWindow(hwnd: Hwnd) -> i32;
-        fn GetMessageW(msg: *mut Msg, hwnd: Hwnd, min: u32, max: u32) -> i32;
-        fn TranslateMessage(msg: *const Msg) -> i32;
-        fn DispatchMessageW(msg: *const Msg) -> isize;
-        fn PostMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> i32;
-        fn SendMessageW(hwnd: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
-        fn PostQuitMessage(code: i32);
-        fn RegisterWindowMessageW(name: *const u16) -> u32;
-        fn LoadIconW(instance: *mut c_void, name: usize) -> *mut c_void;
-        fn CreatePopupMenu() -> *mut c_void;
-        fn AppendMenuW(menu: *mut c_void, flags: u32, id: usize, text: *const u16) -> i32;
-        fn TrackPopupMenu(
-            menu: *mut c_void,
-            flags: u32,
-            x: i32,
-            y: i32,
-            reserved: i32,
-            hwnd: Hwnd,
-            rect: *const c_void,
-        ) -> i32;
-        fn DestroyMenu(menu: *mut c_void) -> i32;
-        fn GetCursorPos(point: *mut Point) -> i32;
-        fn SetForegroundWindow(hwnd: Hwnd) -> i32;
-        fn ShowWindow(hwnd: Hwnd, cmd: i32) -> i32;
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetModuleHandleW(name: *const u16) -> *mut c_void;
-    }
 
     /// The hidden tray window (0 until the thread has created it).
     static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
@@ -171,8 +51,9 @@ mod imp {
     static CTX: OnceLock<egui::Context> = OnceLock::new();
     static STARTED: OnceLock<()> = OnceLock::new();
 
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(std::iter::once(0)).collect()
+    /// HWNDs cross threads as `isize` (the crate's `HWND` wraps a raw pointer, so it isn't `Send`).
+    fn hwnd(raw: isize) -> HWND {
+        HWND(raw as *mut _)
     }
 
     fn copy_wide(dst: &mut [u16], s: &str) {
@@ -185,48 +66,46 @@ mod imp {
         dst[n] = 0;
     }
 
-    fn icon_data(hwnd: Hwnd) -> NotifyIconData {
-        // SAFETY: plain-old-data struct; all-zero is a valid initial state.
-        let mut d: NotifyIconData = unsafe { std::mem::zeroed() };
-        d.cb_size = size_of::<NotifyIconData>() as u32;
-        d.hwnd = hwnd;
-        d.id = 1;
-        d
+    fn icon_data(hwnd: HWND) -> NOTIFYICONDATAW {
+        NOTIFYICONDATAW {
+            cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+            hWnd: hwnd,
+            uID: 1,
+            ..Default::default()
+        }
     }
 
     /// Add the icon if it isn't there yet (tray thread only).
-    fn add_icon(hwnd: Hwnd) {
+    fn add_icon(hwnd: HWND) {
         if ICON_ADDED.load(Ordering::Relaxed) {
             return;
         }
         let mut d = icon_data(hwnd);
-        d.flags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-        d.callback_message = MSG_TRAY;
+        d.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+        d.uCallbackMessage = MSG_TRAY;
         // SAFETY: the executable's first icon resource if it has one, else the stock app icon.
-        d.icon = unsafe {
-            let own = LoadIconW(GetModuleHandleW(std::ptr::null()), 1);
-            if own.is_null() {
-                LoadIconW(std::ptr::null_mut(), IDI_APPLICATION)
-            } else {
-                own
-            }
+        d.hIcon = unsafe {
+            let instance = GetModuleHandleW(PCWSTR::null()).ok().map(HINSTANCE::from);
+            LoadIconW(instance, PCWSTR(1 as _))
+                .or_else(|_| LoadIconW(None, IDI_APPLICATION))
+                .unwrap_or_default()
         };
-        copy_wide(&mut d.tip, "Omni-HW");
+        copy_wide(&mut d.szTip, "Omni-HW");
         // SAFETY: fully initialized struct.
-        if unsafe { Shell_NotifyIconW(NIM_ADD, &mut d) } != 0 {
+        if unsafe { Shell_NotifyIconW(NIM_ADD, &d) }.as_bool() {
             ICON_ADDED.store(true, Ordering::Relaxed);
         }
     }
 
-    fn remove_icon(hwnd: Hwnd) {
+    fn remove_icon(hwnd: HWND) {
         if ICON_ADDED.swap(false, Ordering::Relaxed) {
-            let mut d = icon_data(hwnd);
+            let d = icon_data(hwnd);
             // SAFETY: removes the icon this window added.
-            unsafe { Shell_NotifyIconW(NIM_DELETE, &mut d) };
+            let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &d) };
         }
     }
 
-    fn show_pending_balloon(hwnd: Hwnd) {
+    fn show_pending_balloon(hwnd: HWND) {
         let Some((title, message)) = PENDING_BALLOON
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -236,12 +115,12 @@ mod imp {
         };
         add_icon(hwnd);
         let mut d = icon_data(hwnd);
-        d.flags = NIF_INFO;
-        d.info_flags = NIIF_WARNING;
-        copy_wide(&mut d.info_title, &title);
-        copy_wide(&mut d.info, &message);
+        d.uFlags = NIF_INFO;
+        d.dwInfoFlags = NIIF_WARNING;
+        copy_wide(&mut d.szInfoTitle, &title);
+        copy_wide(&mut d.szInfo, &message);
         // SAFETY: valid struct for the icon added above.
-        unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut d) };
+        let _ = unsafe { Shell_NotifyIconW(NIM_MODIFY, &d) };
     }
 
     /// Bring the main window back from the tray (or from the taskbar) and focus it.
@@ -253,45 +132,44 @@ mod imp {
         // SAFETY: plain window calls on the app's main window. SW_RESTORE alone both shows a
         // hidden window and un-minimizes it, so no frame can observe a shown-but-minimized state.
         unsafe {
-            ShowWindow(main, SW_RESTORE);
-            SetForegroundWindow(main);
+            let _ = ShowWindow(hwnd(main), SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd(main));
         }
         if let Some(ctx) = CTX.get() {
             ctx.request_repaint();
         }
     }
 
-    fn context_menu(hwnd: Hwnd) {
+    fn context_menu(tray: HWND) {
         // SAFETY: standard popup-menu sequence; the menu is destroyed before returning.
         unsafe {
-            let menu = CreatePopupMenu();
-            if menu.is_null() {
+            let Ok(menu) = CreatePopupMenu() else {
                 return;
-            }
-            AppendMenuW(menu, MF_STRING, ID_OPEN, wide("Open Omni-HW").as_ptr());
-            AppendMenuW(menu, MF_STRING, ID_EXIT, wide("Exit").as_ptr());
-            let mut pt = Point::default();
-            GetCursorPos(&mut pt);
+            };
+            let _ = AppendMenuW(menu, MF_STRING, ID_OPEN, w!("Open Omni-HW"));
+            let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, w!("Exit"));
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
             // Without this the menu doesn't close when clicking elsewhere.
-            SetForegroundWindow(hwnd);
+            let _ = SetForegroundWindow(tray);
             let cmd = TrackPopupMenu(
                 menu,
                 TPM_RIGHTBUTTON | TPM_RETURNCMD,
                 pt.x,
                 pt.y,
-                0,
-                hwnd,
-                std::ptr::null(),
+                None,
+                tray,
+                None,
             );
-            PostMessageW(hwnd, WM_NULL, 0, 0);
-            DestroyMenu(menu);
-            match cmd as usize {
+            let _ = PostMessageW(Some(tray), WM_NULL, WPARAM(0), LPARAM(0));
+            let _ = DestroyMenu(menu);
+            match cmd.0 as usize {
                 ID_OPEN => restore_main(),
                 ID_EXIT => {
                     let main = MAIN_HWND.load(Ordering::Relaxed);
                     if main != 0 {
                         // Closing the main window ends the app; OmniApp's Drop removes the icon.
-                        PostMessageW(main, WM_CLOSE, 0, 0);
+                        let _ = PostMessageW(Some(hwnd(main)), WM_CLOSE, WPARAM(0), LPARAM(0));
                     }
                 }
                 _ => {}
@@ -300,20 +178,20 @@ mod imp {
     }
 
     unsafe extern "system" fn wnd_proc(
-        hwnd: Hwnd,
+        hwnd: HWND,
         msg: u32,
-        wparam: usize,
-        lparam: isize,
-    ) -> isize {
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
         match msg {
-            MSG_TRAY => match lparam as u32 {
+            MSG_TRAY => match lparam.0 as u32 {
                 WM_LBUTTONUP | WM_LBUTTONDBLCLK => restore_main(),
                 WM_RBUTTONUP | WM_CONTEXTMENU => context_menu(hwnd),
                 _ => {}
             },
             MSG_BALLOON => show_pending_balloon(hwnd),
             MSG_SET_ICON => {
-                if wparam != 0 {
+                if wparam.0 != 0 {
                     add_icon(hwnd);
                 } else {
                     remove_icon(hwnd);
@@ -322,7 +200,7 @@ mod imp {
             MSG_SHUTDOWN => {
                 remove_icon(hwnd);
                 // SAFETY: our own window, destroyed on its own thread.
-                unsafe { DestroyWindow(hwnd) };
+                let _ = unsafe { DestroyWindow(hwnd) };
             }
             WM_DESTROY => {
                 remove_icon(hwnd);
@@ -341,59 +219,53 @@ mod imp {
             // SAFETY: default handling for everything else.
             _ => return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
         }
-        0
+        LRESULT(0)
     }
 
     fn run_thread() {
-        let class = wide("OmniHwTrayWindow");
+        let class = w!("OmniHwTrayWindow");
         // SAFETY: class struct and strings outlive the calls; window lives on this thread.
         unsafe {
-            let instance = GetModuleHandleW(std::ptr::null());
-            let wc = WndClassEx {
-                cb_size: size_of::<WndClassEx>() as u32,
-                style: 0,
-                wnd_proc,
-                cls_extra: 0,
-                wnd_extra: 0,
-                instance,
-                icon: std::ptr::null_mut(),
-                cursor: std::ptr::null_mut(),
-                background: std::ptr::null_mut(),
-                menu_name: std::ptr::null(),
-                class_name: class.as_ptr(),
-                icon_small: std::ptr::null_mut(),
+            let instance = GetModuleHandleW(PCWSTR::null())
+                .map(HINSTANCE::from)
+                .unwrap_or_default();
+            let wc = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(wnd_proc),
+                hInstance: instance,
+                lpszClassName: class,
+                ..Default::default()
             };
             RegisterClassExW(&wc);
             TASKBAR_CREATED.store(
-                RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()),
+                RegisterWindowMessageW(w!("TaskbarCreated")),
                 Ordering::Relaxed,
             );
             // A hidden top-level window (not message-only) so it receives the TaskbarCreated broadcast.
-            let hwnd = CreateWindowExW(
-                0,
-                class.as_ptr(),
-                wide("Omni-HW tray").as_ptr(),
-                0,
-                0,
-                0,
+            let Ok(tray) = CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                class,
+                w!("Omni-HW tray"),
+                WINDOW_STYLE(0),
                 0,
                 0,
                 0,
-                std::ptr::null_mut(),
-                instance,
-                std::ptr::null_mut(),
-            );
-            if hwnd == 0 {
+                0,
+                None,
+                None,
+                Some(instance),
+                None,
+            ) else {
                 return;
-            }
-            TRAY_HWND.store(hwnd, Ordering::Relaxed);
+            };
+            TRAY_HWND.store(tray.0 as isize, Ordering::Relaxed);
             if ICON_WANTED.load(Ordering::Relaxed) {
-                add_icon(hwnd);
+                add_icon(tray);
             }
-            show_pending_balloon(hwnd);
-            let mut msg = Msg::default();
-            while GetMessageW(&mut msg, 0, 0, 0) > 0 {
-                TranslateMessage(&msg);
+            show_pending_balloon(tray);
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).0 > 0 {
+                let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
         }
@@ -422,7 +294,14 @@ mod imp {
         let tray = TRAY_HWND.load(Ordering::Relaxed);
         if tray != 0 {
             // SAFETY: posts to our own window; handled on the tray thread.
-            unsafe { PostMessageW(tray, MSG_SET_ICON, usize::from(on), 0) };
+            let _ = unsafe {
+                PostMessageW(
+                    Some(hwnd(tray)),
+                    MSG_SET_ICON,
+                    WPARAM(usize::from(on)),
+                    LPARAM(0),
+                )
+            };
         }
     }
 
@@ -433,7 +312,7 @@ mod imp {
         let tray = TRAY_HWND.load(Ordering::Relaxed);
         if tray != 0 {
             // SAFETY: posts to our own window; handled on the tray thread.
-            unsafe { PostMessageW(tray, MSG_BALLOON, 0, 0) };
+            let _ = unsafe { PostMessageW(Some(hwnd(tray)), MSG_BALLOON, WPARAM(0), LPARAM(0)) };
         }
         // Otherwise the thread shows it as soon as its window exists.
     }
@@ -443,7 +322,7 @@ mod imp {
         let main = MAIN_HWND.load(Ordering::Relaxed);
         if main != 0 {
             // SAFETY: plain window call on the app's main window.
-            unsafe { ShowWindow(main, SW_HIDE) };
+            let _ = unsafe { ShowWindow(hwnd(main), SW_HIDE) };
         }
     }
 
@@ -452,7 +331,7 @@ mod imp {
         let tray = TRAY_HWND.load(Ordering::Relaxed);
         if tray != 0 {
             // SAFETY: synchronous message to our own window on the tray thread.
-            unsafe { SendMessageW(tray, MSG_SHUTDOWN, 0, 0) };
+            unsafe { SendMessageW(hwnd(tray), MSG_SHUTDOWN, None, None) };
         }
     }
 }

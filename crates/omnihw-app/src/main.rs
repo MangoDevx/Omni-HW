@@ -48,25 +48,22 @@ fn initial_size() -> [f32; 2] {
 
 #[cfg(windows)]
 fn work_area_points() -> Option<[f32; 2]> {
-    #[repr(C)]
-    #[derive(Default)]
-    struct Rect {
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-    }
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn SystemParametersInfoW(action: u32, param: u32, out: *mut Rect, flags: u32) -> i32;
-        fn GetDpiForSystem() -> u32;
-    }
-    const SPI_GETWORKAREA: u32 = 0x30;
-    let mut r = Rect::default();
+    use windows::Win32::Foundation::RECT;
+    use windows::Win32::UI::HiDpi::GetDpiForSystem;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+    let mut r = RECT::default();
     // SAFETY: valid RECT out pointer.
-    if unsafe { SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut r, 0) } == 0 {
-        return None;
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETWORKAREA,
+            0,
+            Some((&raw mut r).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
     }
+    .ok()?;
     // SAFETY: trivially safe.
     let scale = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0;
     Some([
