@@ -21,6 +21,9 @@ fn sections(info: &SystemInfo, snap: &Snapshot) -> Vec<report::Section> {
         rows,
     }];
     out.extend(report::sections(info, omnihw_core::win::uptime_secs()));
+    if let Some(p) = &snap.power {
+        out.push(omnihw_core::power::report_section(p));
+    }
     out
 }
 

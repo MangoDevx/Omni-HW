@@ -99,6 +99,56 @@ pub fn restart_to_firmware() -> Result<(), String> {
     Err("Only supported on Windows".into())
 }
 
+/// Run this executable elevated with `params` (shows the UAC prompt), wait for it to finish and
+/// return its exit code. Errors if the prompt was declined or the launch failed. Blocks, so call
+/// it off the UI thread.
+#[cfg(windows)]
+pub fn run_as_admin_wait(params: &str) -> Result<u32, String> {
+    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
+    use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{
+        SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::{HSTRING, w};
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let (file, params) = (
+        HSTRING::from(&*exe.to_string_lossy()),
+        HSTRING::from(params),
+    );
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
+        lpVerb: w!("runas"),
+        lpFile: windows::core::PCWSTR(file.as_ptr()),
+        lpParameters: windows::core::PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    // SAFETY: the strings outlive the call; shows the UAC prompt.
+    unsafe { ShellExecuteExW(&mut info) }
+        .map_err(|_| "Administrator permission was not granted".to_string())?;
+    if info.hProcess.is_invalid() {
+        return Err("Could not start the elevated helper".into());
+    }
+    let mut code = 1u32;
+    // SAFETY: process handle from ShellExecuteExW, closed below.
+    unsafe {
+        let ok = WaitForSingleObject(info.hProcess, INFINITE) == WAIT_OBJECT_0
+            && GetExitCodeProcess(info.hProcess, &mut code).is_ok();
+        let _ = CloseHandle(info.hProcess);
+        if !ok {
+            return Err("The elevated helper did not finish".into());
+        }
+    }
+    Ok(code)
+}
+
+#[cfg(not(windows))]
+pub fn run_as_admin_wait(_params: &str) -> Result<u32, String> {
+    Err("Not supported on this platform".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote;

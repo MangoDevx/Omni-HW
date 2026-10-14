@@ -12,6 +12,7 @@ pub mod codename;
 pub mod cpuid;
 pub mod diagnostics;
 pub mod gpu;
+pub mod power;
 pub mod recording;
 pub mod report;
 pub mod sensors;

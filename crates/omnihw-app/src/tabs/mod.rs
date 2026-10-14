@@ -9,6 +9,7 @@ pub mod health;
 pub mod mainboard;
 pub mod memory;
 pub mod overview;
+pub mod power;
 pub mod recording;
 pub mod sensors;
 pub mod settings;

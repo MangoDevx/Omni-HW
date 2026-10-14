@@ -469,6 +469,7 @@ mod tests {
             ],
             security: false,
             bios: false,
+            fix: None,
         };
         assert_eq!(
             finding_rows(&f),

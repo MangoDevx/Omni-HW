@@ -29,6 +29,7 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         sensors: &snap.table,
         today: omnihw_core::civil_from_days(days),
         uptime_secs: omnihw_core::win::uptime_secs(),
+        power: snap.power.as_ref(),
     };
     diagnostics::run(&ctx)
 }
@@ -366,6 +367,10 @@ fn finding_body(ui: &mut Ui, f: &Finding, uefi: bool) {
     }
     if !f.steps.is_empty() {
         steps_checklist(ui, f);
+    }
+    if let Some(a) = &f.fix {
+        ui.add_space(4.0);
+        super::power::fix_button(ui, a);
     }
     if f.bios && uefi {
         ui.add_space(6.0);
