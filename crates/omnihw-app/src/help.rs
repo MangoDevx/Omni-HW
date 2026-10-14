@@ -443,7 +443,8 @@ fn health_check(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Dismiss on a card hides it from its category, the summary and the Overview banner. It moves to Dismissed at the bottom, where Restore brings it back.",
+            "Dismiss on a card hides it from its category, the summary and the Overview banner. It moves to Dismissed at the bottom of the page; the Dismissed (n) button at the top jumps there. Open a dismissed card to read it again, and Restore brings it back.",
+            "Expand all opens every category, Expand issues only opens just the categories with something to fix, and Collapse all closes them.",
             "If the same check later finds something more serious (e.g. a suggestion becomes a warning), it shows up again.",
             "By default dismissed issues stay dismissed after restarting Omni-HW. Turn that off in Settings > Health Check to have them come back on each start; Restore dismissed issues there brings them all back.",
         ],

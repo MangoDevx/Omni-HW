@@ -163,14 +163,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
     ));
     ui.add_space(10.0);
 
-    ui.horizontal(|ui| {
-        if ui.small_button("Expand all").clicked() {
-            set_all_open(ui, &findings, true);
-        }
-        if ui.small_button("Collapse all").clicked() {
-            set_all_open(ui, &findings, false);
-        }
-    });
+    let jump_to_dismissed = toolbar(ui, &findings, &dismissed);
     ui.add_space(4.0);
 
     for cat in Category::ALL {
@@ -179,11 +172,59 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
             category_section(ui, cat, &rows, &findings, uefi);
         }
     }
-    dismissed_section(ui, &dismissed);
+    dismissed_section(ui, &dismissed, uefi, jump_to_dismissed);
+}
+
+/// Which sections the expand/collapse buttons open.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Fold {
+    /// Every category, every card and the Dismissed section.
+    All,
+    /// Only categories with findings (and their cards); everything else closes.
+    Findings,
+    /// Everything closed.
+    None,
+}
+
+/// Expand/collapse buttons and the "Dismissed (n)" shortcut. Returns true on the frame the
+/// shortcut is clicked, so the Dismissed section can open and scroll into view.
+fn toolbar(
+    ui: &mut Ui,
+    findings: &[(&'static str, &Finding)],
+    dismissed: &[(&'static str, Finding)],
+) -> bool {
+    let mut jump = false;
+    ui.horizontal_wrapped(|ui| {
+        if ui
+            .small_button("Expand all")
+            .on_hover_text("Open every category and issue")
+            .clicked()
+        {
+            fold(ui, findings, dismissed, Fold::All);
+        }
+        if ui
+            .small_button("Expand issues only")
+            .on_hover_text("Open only the categories with issues or suggestions to fix")
+            .clicked()
+        {
+            fold(ui, findings, dismissed, Fold::Findings);
+        }
+        if ui.small_button("Collapse all").clicked() {
+            fold(ui, findings, dismissed, Fold::None);
+        }
+        ui.separator();
+        let n = dismissed.len();
+        jump = ui
+            .add_enabled(n > 0, egui::Button::new(format!("Dismissed ({n})")).small())
+            .on_hover_text("Show the issues you dismissed so you can restore them")
+            .on_disabled_hover_text("Nothing dismissed. Use Dismiss on an issue to hide it.")
+            .clicked();
+    });
+    jump
 }
 
 /// A collapsible tree section with a larger bold title and a coloured pill
-/// (a count or a short status).
+/// (a count or a short status). Returns the header's response.
 fn section(
     ui: &mut Ui,
     id: egui::Id,
@@ -192,8 +233,8 @@ fn section(
     color: Color32,
     default_open: bool,
     body: impl FnOnce(&mut Ui),
-) {
-    CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
+) -> egui::Response {
+    let (_, header, _) = CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
         .show_header(ui, |ui| {
             ui.label(RichText::new(title).size(16.0).strong());
             pill(ui, pill_text, color, false);
@@ -203,6 +244,7 @@ fn section(
             body(ui)
         });
     ui.add_space(4.0);
+    header.response
 }
 
 /// One category: its findings as cards, then its passed / not-checked checks. Opens by default
@@ -232,7 +274,7 @@ fn category_section(
     };
     section(
         ui,
-        cat_id(cat),
+        cat_id(cat, !findings.is_empty()),
         cat.name(),
         label,
         color,
@@ -243,7 +285,7 @@ fn category_section(
                 ui.add_space(6.0);
             }
             for (name, f) in &findings {
-                finding_card(ui, name, f, uefi);
+                finding_card(ui, name, f, uefi, false);
             }
             let rest: Vec<&CheckResult> = rows
                 .iter()
@@ -270,40 +312,39 @@ fn category_note(cat: Category) -> Option<&'static str> {
     }
 }
 
-/// Dismissed findings, collapsed, each with a Restore button.
-fn dismissed_section(ui: &mut Ui, dismissed: &[(&'static str, Finding)]) {
+/// Dismissed findings as full cards (so they can be read again), each with a Restore button.
+/// `jump` opens the section and scrolls it into view.
+fn dismissed_section(ui: &mut Ui, dismissed: &[(&'static str, Finding)], uefi: bool, jump: bool) {
     if dismissed.is_empty() {
         return;
     }
-    section(
+    let id = egui::Id::new(DISMISSED_ID);
+    if jump {
+        set_open(ui, id, true);
+    }
+    let header = section(
         ui,
-        egui::Id::new(DISMISSED_ID),
+        id,
         "Dismissed",
         dismissed.len().to_string(),
         Color32::GRAY,
         false,
         |ui| {
-            ui.weak("Hidden from the summary and the Overview. Restore one to show it again.");
+            ui.horizontal_wrapped(|ui| {
+                ui.weak("Hidden from the summary and the Overview. Restore one to show it again.");
+                if dismissed.len() > 1 && ui.small_button("Restore all").clicked() {
+                    crate::dismissed::restore_all();
+                }
+            });
             ui.add_space(4.0);
-            egui::Grid::new("health_dismissed_grid")
-                .num_columns(3)
-                .spacing([12.0, 4.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    for (name, f) in dismissed {
-                        pill(ui, f.level.name(), level_color(f.level), true);
-                        ui.label(format!("{} · {}", f.category.name(), f.title));
-                        if ui.small_button("Restore").clicked() {
-                            crate::dismissed::restore(&crate::dismissed::key(name, f));
-                        }
-                        ui.end_row();
-                    }
-                });
-            if dismissed.len() > 1 && ui.small_button("Restore all").clicked() {
-                crate::dismissed::restore_all();
+            for (name, f) in dismissed {
+                finding_card(ui, name, f, uefi, true);
             }
         },
     );
+    if jump {
+        header.scroll_to_me(Some(egui::Align::TOP));
+    }
 }
 
 /// Passed (green OK + detail) and skipped (reason) checks as a compact table.
@@ -340,23 +381,44 @@ fn card_id(f: &Finding) -> egui::Id {
     egui::Id::new(("health_card", &f.title))
 }
 
-fn cat_id(cat: Category) -> egui::Id {
-    egui::Id::new(("health_cat", cat.name()))
+/// Collapse state id for a category. Includes whether it has findings, so a category whose
+/// findings arrive after the first frame (e.g. power data) still opens by default.
+fn cat_id(cat: Category, has_findings: bool) -> egui::Id {
+    egui::Id::new(("health_cat", cat.name(), has_findings))
 }
 
 const DISMISSED_ID: &str = "health_dismissed";
 
-/// Open or close every category section, the Dismissed section and every finding card.
-fn set_all_open(ui: &Ui, findings: &[(&'static str, &Finding)], open: bool) {
-    let ids = Category::ALL
-        .into_iter()
-        .map(cat_id)
-        .chain([egui::Id::new(DISMISSED_ID)])
-        .chain(findings.iter().map(|(_, f)| card_id(f)));
-    for id in ids {
-        let mut st = CollapsingState::load_with_default_open(ui.ctx(), id, open);
-        st.set_open(open);
-        st.store(ui.ctx());
+fn set_open(ui: &Ui, id: egui::Id, open: bool) {
+    let mut st = CollapsingState::load_with_default_open(ui.ctx(), id, open);
+    st.set_open(open);
+    st.store(ui.ctx());
+}
+
+/// Open or close the category sections, the Dismissed section and the finding cards.
+fn fold(
+    ui: &Ui,
+    findings: &[(&'static str, &Finding)],
+    dismissed: &[(&'static str, Finding)],
+    mode: Fold,
+) {
+    let has_findings = |c: Category| findings.iter().any(|(_, f)| f.category == c);
+    let open_cat = |c: Category| match mode {
+        Fold::All => true,
+        Fold::Findings => has_findings(c),
+        Fold::None => false,
+    };
+    let open_cards = mode != Fold::None;
+    let open_dismissed = mode == Fold::All;
+    for cat in Category::ALL {
+        set_open(ui, cat_id(cat, has_findings(cat)), open_cat(cat));
+    }
+    set_open(ui, egui::Id::new(DISMISSED_ID), open_dismissed);
+    for (_, f) in findings {
+        set_open(ui, card_id(f), open_cards);
+    }
+    for (_, f) in dismissed {
+        set_open(ui, card_id(f), open_dismissed);
     }
 }
 
@@ -398,10 +460,19 @@ fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32, small: bool) {
 }
 
 /// A finding: a softly shaded panel with a thin accent edge in the level colour, no border.
-fn finding_card(ui: &mut Ui, check: &str, f: &Finding, uefi: bool) {
+/// Dismissed cards show their category (they're listed outside it) and a Restore button.
+fn finding_card(ui: &mut Ui, check: &str, f: &Finding, uefi: bool, dismissed: bool) {
+    // Scope widget ids to the finding: otherwise, when a card is dismissed, the next card's
+    // buttons inherit its position-based ids and the same click.
+    ui.push_id(("health_finding", check, &f.title), |ui| {
+        finding_card_contents(ui, check, f, uefi, dismissed)
+    });
+}
+
+fn finding_card_contents(ui: &mut Ui, check: &str, f: &Finding, uefi: bool, dismissed: bool) {
     let color = level_color(f.level);
-    // Warnings and critical issues start expanded; suggestions start collapsed.
-    let default_open = f.level != Level::Info;
+    // Warnings and critical issues start expanded; suggestions and dismissed ones collapsed.
+    let default_open = f.level != Level::Info && !dismissed;
     let resp = egui::Frame::new()
         .fill(ui.visuals().faint_bg_color)
         .corner_radius(6)
@@ -420,15 +491,28 @@ fn finding_card(ui: &mut Ui, check: &str, f: &Finding, uefi: bool) {
                     if f.security {
                         pill(ui, "Security setting", ORANGE, true);
                     }
+                    if dismissed {
+                        ui.weak(f.category.name());
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
+                        let key = crate::dismissed::key(check, f);
+                        if dismissed {
+                            if ui
+                                .small_button("Restore")
+                                .on_hover_text("Show this in its category again")
+                                .clicked()
+                            {
+                                crate::dismissed::restore(&key);
+                            }
+                        } else if ui
                             .small_button("Dismiss")
                             .on_hover_text(
-                                "Hide this from the Health Check summary. Restore it from Dismissed at the bottom.",
+                                "Hide this from the Health Check summary and the Overview. \
+                                 See or restore it with the Dismissed button at the top.",
                             )
                             .clicked()
                         {
-                            crate::dismissed::dismiss(crate::dismissed::key(check, f));
+                            crate::dismissed::dismiss(key);
                         }
                     });
                 })
