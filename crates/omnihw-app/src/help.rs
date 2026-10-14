@@ -334,6 +334,47 @@ fn check_description(name: &str) -> &'static str {
         "Pagefile" => {
             "The pagefile is disabled, so programs crash instead of slowing down when RAM runs out."
         }
+        "Memory diagnostic results" => {
+            "Errors reported by a Windows Memory Diagnostic run in the last 90 days."
+        }
+        "Monitor refresh rate" => {
+            "A monitor set below the best refresh rate Windows offers for it (e.g. a 144 Hz monitor left at 60 Hz)."
+        }
+        "Graphics driver installed" => {
+            "A graphics card running on Microsoft's Basic Display driver instead of the NVIDIA/AMD/Intel driver."
+        }
+        "GPU power and thermal slowdown" => {
+            "NVIDIA cards that hit their hardware power brake or thermal slowdown under load (often a loose or daisy-chained power cable)."
+        }
+        "Leftover graphics drivers" => {
+            "Driver packages for a graphics card brand that is no longer installed."
+        }
+        "Drives set up" => {
+            "New drives that were never initialized (they don't show in File Explorer), or large unallocated space."
+        }
+        "Windows drive type" => {
+            "Windows installed on a hard drive, especially when an SSD is present."
+        }
+        "Drive link speed" => {
+            "NVMe drives on fewer PCIe lanes or a lower generation than they support, and SATA drives below 6 Gb/s (needs administrator)."
+        }
+        "Device drivers" => {
+            "Devices with a problem in Device Manager, usually missing chipset, network or audio drivers."
+        }
+        "Hardware errors (WHEA)" => {
+            "CPU, memory and PCIe hardware errors logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock."
+        }
+        "Blue screens and unexpected restarts" => {
+            "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days."
+        }
+        "Ethernet link speed" => {
+            "Wired network connected at 100 Mbps or less, which points to a bad cable or port."
+        }
+        "Secure Boot, TPM and UEFI boot" => {
+            "Legacy (CSM) boot, Secure Boot off or no TPM 2.0: needed for Windows 11 and some games' anti-cheat."
+        }
+        "Windows activation" => "Windows is not activated.",
+        "Startup apps" => "More than 15 apps starting with Windows.",
         _ => "",
     }
 }
@@ -370,6 +411,16 @@ fn health_check(ui: &mut Ui) {
         "Findings about a security setting carry an orange \"Security setting\" badge and a caution note. They explain \
          the trade-off; only change such a setting if you know what you are doing and understand the protection you \
          would give up.",
+    );
+    h(ui, "Fixing what it finds");
+    bullets(
+        ui,
+        &[
+            "Each finding has numbered steps. Tick a step's box as you finish it; the header shows how many are done (ticks reset when Omni-HW closes).",
+            "Search Google opens a search in your browser built from your hardware, e.g. your motherboard model plus \"enable EXPO\". Open Settings opens the right Windows Settings page, and Open website goes to the official download page. Nothing is opened unless you click.",
+            "BIOS steps name the key that opens the setup and the menu path your board maker uses (ASUS, MSI, Gigabyte, ASRock, Dell, HP, Lenovo), read from the motherboard's SMBIOS data.",
+            "On UEFI PCs, BIOS-related findings have a Restart into UEFI / BIOS button: after you confirm, Windows asks for administrator rights and restarts straight into the setup, so there's no key to catch. Save your work first.",
+        ],
     );
     h(ui, "Using it");
     bullets(
@@ -696,14 +747,17 @@ fn privacy(ui: &mut Ui) {
             "Omni-HW makes no network connections on its own: no telemetry, no uploads.",
             "The one exception is the update check, which only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
             "It only reads hardware information and settings; it never changes your system settings. The one exception is the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
+            "Health Check links (Google searches, Settings pages, driver downloads) only open in your browser or Windows when you click them; Omni-HW itself requests nothing.",
+            "It reads the System event log (hardware errors, blue screens) and the Device Manager state locally to explain crashes and missing drivers.",
             "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in AppData.",
         ],
     );
     h(ui, "Administrator rights");
     p(
         ui,
-        "Administrator rights are only used to read SATA drive health (SMART) and, on some systems, the NVMe health log. \
-         Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline.",
+        "Administrator rights are only used to read SATA drive health (SMART) and link speed and, on some systems, the NVMe health log. \
+         Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline. \
+         The Restart into UEFI / BIOS button asks for them separately, only when you click it.",
     );
     h(ui, "Security-related advice");
     p(

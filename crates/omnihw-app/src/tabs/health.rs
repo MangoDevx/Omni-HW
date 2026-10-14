@@ -91,6 +91,8 @@ pub fn gaming_summary(results: &[CheckResult]) -> Option<String> {
 }
 
 pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
+    let uefi = info.checkup.firmware.uefi == Some(true);
+    restart_dialog(ui);
     let results = run(info, snap);
     let (gaming, general): (Vec<CheckResult>, Vec<CheckResult>) =
         results.iter().cloned().partition(is_gaming);
@@ -149,10 +151,10 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
         ui.add_space(4.0);
     }
     for f in &findings {
-        finding_card(ui, f);
+        finding_card(ui, f, uefi);
     }
 
-    gaming_section(ui, &gaming);
+    gaming_section(ui, &gaming, uefi);
 
     egui::CollapsingHeader::new(RichText::new(format!("Passed ({})", passed.len())).strong())
         .default_open(findings.is_empty())
@@ -162,7 +164,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
 }
 
 /// Gaming checks in their own collapsible section; the header shows the suggestion count in blue.
-fn gaming_section(ui: &mut Ui, gaming: &[CheckResult]) {
+fn gaming_section(ui: &mut Ui, gaming: &[CheckResult], uefi: bool) {
     if gaming.is_empty() {
         return;
     }
@@ -185,7 +187,7 @@ fn gaming_section(ui: &mut Ui, gaming: &[CheckResult]) {
             ui.weak("Settings that mainly affect games: frame rates, latency and GPU features.");
             ui.add_space(6.0);
             for f in &findings {
-                finding_card(ui, f);
+                finding_card(ui, f, uefi);
             }
             let rest: Vec<&CheckResult> = gaming
                 .iter()
@@ -258,7 +260,7 @@ fn security_icon(ui: &mut Ui) {
     );
 }
 
-fn finding_card(ui: &mut Ui, f: &Finding) {
+fn finding_card(ui: &mut Ui, f: &Finding, uefi: bool) {
     let color = level_color(f.level);
     // Warnings and critical issues start expanded; suggestions start collapsed.
     let default_open = f.level != Level::Info;
@@ -289,12 +291,12 @@ fn finding_card(ui: &mut Ui, f: &Finding) {
                         );
                     }
                 })
-                .body(|ui| finding_body(ui, f));
+                .body(|ui| finding_body(ui, f, uefi));
         });
     ui.add_space(8.0);
 }
 
-fn finding_body(ui: &mut Ui, f: &Finding) {
+fn finding_body(ui: &mut Ui, f: &Finding, uefi: bool) {
     ui.add(egui::Label::new(&f.detail).wrap());
     if f.security {
         ui.add_space(4.0);
@@ -317,14 +319,115 @@ fn finding_body(ui: &mut Ui, f: &Finding) {
                 });
             });
     }
-    if !f.tips.is_empty() {
-        ui.add_space(4.0);
+    if !f.steps.is_empty() {
+        steps_checklist(ui, f);
+    }
+    if f.bios && uefi {
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .button("Restart into UEFI / BIOS…")
+                .on_hover_text(
+                    "Restarts the PC straight into the firmware setup, no key presses needed. Asks for administrator rights.",
+                )
+                .clicked()
+            {
+                set_confirm_restart(ui.ctx(), true);
+            }
+        });
+    }
+}
+
+/// The steps as a checklist: tick steps off as you go ("2 of 4 done"). Ticks only live in
+/// memory for this session.
+fn steps_checklist(ui: &mut Ui, f: &Finding) {
+    let id = card_id(f).with("steps");
+    let mut done: Vec<bool> = ui
+        .ctx()
+        .data(|d| d.get_temp(id))
+        .unwrap_or_else(|| vec![false; f.steps.len()]);
+    done.resize(f.steps.len(), false);
+    let n_done = done.iter().filter(|&&d| d).count();
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
         ui.label(RichText::new("How to fix").strong());
-        for t in &f.tips {
-            ui.horizontal_wrapped(|ui| {
-                ui.label("•");
-                ui.add(egui::Label::new(t).wrap());
-            });
+        if f.steps.len() > 1 {
+            ui.weak(format!("· {n_done} of {} done", f.steps.len()));
         }
+    });
+    let total = f.steps.len();
+    for (i, s) in f.steps.iter().enumerate() {
+        ui.horizontal_wrapped(|ui| {
+            ui.checkbox(&mut done[i], "")
+                .on_hover_text(format!("Mark step {} of {total} as done", i + 1));
+            let text = RichText::new(format!("{}. {}", i + 1, s.text));
+            ui.add(egui::Label::new(if done[i] { text.weak() } else { text }).wrap());
+            if let Some(link) = &s.link {
+                let url = link.url();
+                if ui.small_button(link.label()).on_hover_text(&url).clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+                }
+            }
+        });
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, done));
+}
+
+fn confirm_id() -> egui::Id {
+    egui::Id::new("health_confirm_uefi_restart")
+}
+
+fn set_confirm_restart(ctx: &egui::Context, open: bool) {
+    ctx.data_mut(|d| d.insert_temp(confirm_id(), open));
+}
+
+/// "Restart into UEFI" confirmation, shown over the Health tab when requested.
+fn restart_dialog(ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    if !ctx.data(|d| d.get_temp::<bool>(confirm_id()).unwrap_or(false)) {
+        return;
+    }
+    let error_id = confirm_id().with("error");
+    let modal = egui::Modal::new(confirm_id()).show(&ctx, |ui| {
+        ui.set_max_width(420.0);
+        ui.label(
+            RichText::new("Restart into UEFI / BIOS?")
+                .size(16.0)
+                .strong(),
+        );
+        ui.add_space(4.0);
+        ui.label(
+            "The PC restarts immediately and opens the firmware setup. Save your work and close \
+             other programs first: anything unsaved will be lost.",
+        );
+        ui.add_space(2.0);
+        ui.weak(
+            "Windows asks for administrator rights to do this. In the setup, save and exit \
+             (usually F10) to boot back into Windows.",
+        );
+        if let Some(err) = ctx.data(|d| d.get_temp::<String>(error_id)) {
+            ui.add_space(4.0);
+            ui.colored_label(crate::heat::ink(ui.visuals(), RED), err);
+        }
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Restart now").clicked() {
+                match crate::elevate::restart_to_firmware() {
+                    Ok(()) => set_confirm_restart(&ctx, false),
+                    Err(e) => ctx.data_mut(|d| {
+                        d.insert_temp(error_id, e);
+                    }),
+                }
+            }
+            if ui.button("Cancel").clicked() {
+                set_confirm_restart(&ctx, false);
+            }
+        });
+    });
+    if modal.should_close() {
+        set_confirm_restart(&ctx, false);
+    }
+    if !ctx.data(|d| d.get_temp::<bool>(confirm_id()).unwrap_or(false)) {
+        ctx.data_mut(|d| d.remove::<String>(error_id));
     }
 }

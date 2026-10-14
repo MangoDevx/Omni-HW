@@ -5,6 +5,7 @@
 
 pub mod alerts;
 pub mod battery;
+pub mod bios_help;
 pub mod bottleneck;
 pub mod checkup;
 pub mod codename;

@@ -2,6 +2,9 @@
 //! problems and suggest fixes. Every check reports a finding, a pass, or why it was skipped,
 //! so the user can see what was examined.
 
+mod setup;
+
+use crate::bios_help::{self, BiosSetting, Board};
 use crate::cpuid::Vendor;
 use crate::gpu::ReBar;
 use crate::sensors::SensorTable;
@@ -50,6 +53,104 @@ impl Category {
     }
 }
 
+/// Something a fix step can open. The app never fetches these itself: they are only handed to
+/// the browser or Windows when the user clicks them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Link {
+    /// A Google search for this query (built from the detected hardware).
+    Search(String),
+    /// A web page.
+    Url(String),
+    /// A Windows Settings page, e.g. `ms-settings:display`.
+    Settings(String),
+}
+
+impl Link {
+    /// The URL or URI to open.
+    pub fn url(&self) -> String {
+        match self {
+            Link::Search(q) => format!("https://www.google.com/search?q={}", query_encode(q)),
+            Link::Url(u) | Link::Settings(u) => u.clone(),
+        }
+    }
+
+    /// Button text for the link.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Link::Search(_) => "Search Google",
+            Link::Url(_) => "Open website",
+            Link::Settings(_) => "Open Settings",
+        }
+    }
+}
+
+/// Encode a search query for a URL: spaces become '+', anything but unreserved ASCII is %-escaped.
+pub fn query_encode(q: &str) -> String {
+    let mut out = String::new();
+    for b in q.split_whitespace().collect::<Vec<_>>().join(" ").bytes() {
+        match b {
+            b' ' => out.push('+'),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// One numbered "how to fix" step, optionally with a link that helps carry it out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Step {
+    pub text: String,
+    pub link: Option<Link>,
+}
+
+impl Step {
+    pub fn new(text: impl Into<String>) -> Step {
+        Step {
+            text: text.into(),
+            link: None,
+        }
+    }
+
+    /// A step with a "Search Google" link for `query`.
+    pub fn search(text: impl Into<String>, query: impl Into<String>) -> Step {
+        Step {
+            text: text.into(),
+            link: Some(Link::Search(query.into())),
+        }
+    }
+
+    /// A step with an "Open Settings" link (`ms-settings:` URI).
+    pub fn settings(text: impl Into<String>, uri: &str) -> Step {
+        Step {
+            text: text.into(),
+            link: Some(Link::Settings(uri.into())),
+        }
+    }
+
+    /// A step with a link to a web page.
+    pub fn url(text: impl Into<String>, url: &str) -> Step {
+        Step {
+            text: text.into(),
+            link: Some(Link::Url(url.into())),
+        }
+    }
+}
+
+impl From<&str> for Step {
+    fn from(s: &str) -> Step {
+        Step::new(s)
+    }
+}
+
+impl From<String> for Step {
+    fn from(s: String) -> Step {
+        Step::new(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Finding {
     pub level: Level,
@@ -57,17 +158,25 @@ pub struct Finding {
     pub title: String,
     /// What was measured.
     pub detail: String,
-    /// How to fix or investigate.
-    pub tips: Vec<String>,
+    /// How to fix or investigate, in order.
+    pub steps: Vec<Step>,
     /// The fix involves a security setting: the UI warns to change it only if the user knows
     /// what they are doing.
     pub security: bool,
+    /// The fix is made in the UEFI/BIOS setup: the UI offers "Restart into UEFI" on UEFI PCs.
+    pub bios: bool,
 }
 
 impl Finding {
     /// Mark this finding as being about a security setting.
     fn security(mut self) -> Finding {
         self.security = true;
+        self
+    }
+
+    /// Mark this finding as fixed in the UEFI/BIOS setup.
+    fn bios(mut self) -> Finding {
+        self.bios = true;
         self
     }
 }
@@ -130,6 +239,11 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("Memory pressure", Category::Memory, memory_pressure),
     ("Installed memory", Category::Memory, memory_capacity),
     (
+        "Memory diagnostic results",
+        Category::Memory,
+        setup::memory_diagnostic,
+    ),
+    (
         "Monitor connected to the graphics card",
         Category::Gpu,
         monitor_connection,
@@ -137,6 +251,26 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("GPU PCIe link", Category::Gpu, gpu_pcie_link),
     ("GPU temperature", Category::Gpu, gpu_temperature),
     ("GPU memory (VRAM) pressure", Category::Gpu, gpu_vram),
+    (
+        "Monitor refresh rate",
+        Category::Gpu,
+        setup::monitor_refresh,
+    ),
+    (
+        "Graphics driver installed",
+        Category::Gpu,
+        setup::gpu_driver_missing,
+    ),
+    (
+        "GPU power and thermal slowdown",
+        Category::Gpu,
+        setup::gpu_hw_slowdown,
+    ),
+    (
+        "Leftover graphics drivers",
+        Category::Gpu,
+        setup::leftover_gpu_drivers,
+    ),
     // ReBAR and Windows settings.
     ("Resizable BAR", Category::Gaming, resizable_bar),
     ("GPU driver age", Category::Gpu, gpu_driver_age),
@@ -144,6 +278,13 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("Drive health (NVMe SMART)", Category::Storage, drive_health),
     ("Drive health (SATA SMART)", Category::Storage, sata_smart),
     ("Drive temperature", Category::Storage, drive_temperature),
+    ("Drives set up", Category::Storage, setup::drive_setup),
+    (
+        "Windows drive type",
+        Category::Storage,
+        setup::system_drive_type,
+    ),
+    ("Drive link speed", Category::Storage, setup::storage_link),
     ("Battery wear", Category::System, battery_wear),
     ("Power plan", Category::System, power_plan),
     ("BIOS age", Category::System, bios_age),
@@ -157,6 +298,29 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ),
     ("Game Mode", Category::Gaming, game_mode),
     ("Pagefile", Category::System, pagefile),
+    ("Device drivers", Category::System, setup::device_problems),
+    (
+        "Hardware errors (WHEA)",
+        Category::System,
+        setup::whea_errors,
+    ),
+    (
+        "Blue screens and unexpected restarts",
+        Category::System,
+        setup::crashes,
+    ),
+    (
+        "Ethernet link speed",
+        Category::System,
+        setup::ethernet_speed,
+    ),
+    (
+        "Secure Boot, TPM and UEFI boot",
+        Category::System,
+        setup::firmware_security,
+    ),
+    ("Windows activation", Category::System, setup::activation),
+    ("Startup apps", Category::System, setup::startup_apps),
 ];
 
 /// Run every check. Findings within a result are ordered most severe first.
@@ -199,6 +363,7 @@ pub fn findings(results: &[CheckResult]) -> Vec<&Finding> {
     all
 }
 
+/// A finding whose steps are plain text.
 fn finding(
     level: Level,
     category: Category,
@@ -206,14 +371,43 @@ fn finding(
     detail: impl Into<String>,
     tips: &[&str],
 ) -> Finding {
+    guided(
+        level,
+        category,
+        title,
+        detail,
+        tips.iter().map(|&t| Step::new(t)).collect(),
+    )
+}
+
+/// A finding with guided steps (links to searches, Settings pages or websites).
+fn guided(
+    level: Level,
+    category: Category,
+    title: impl Into<String>,
+    detail: impl Into<String>,
+    steps: Vec<Step>,
+) -> Finding {
     Finding {
         level,
         category,
         title: title.into(),
         detail: detail.into(),
-        tips: tips.iter().map(|t| t.to_string()).collect(),
+        steps,
         security: false,
+        bios: false,
     }
+}
+
+/// Step with a Google search for this board's BIOS downloads.
+fn bios_update_step(ctx: &Context, text: &str) -> Step {
+    let name = Board::detect(ctx.info).search_name();
+    let query = if name.is_empty() {
+        "motherboard BIOS update download".to_string()
+    } else {
+        format!("{name} BIOS download")
+    };
+    Step::search(text, query)
 }
 
 // ---- CPU ------------------------------------------------------------------------------------
@@ -242,21 +436,31 @@ fn intel_raptor_microcode(ctx: &Context) -> Outcome {
             "Microcode 0x{rev:X} includes Intel's Vmin shift fix"
         ));
     }
-    Outcome::Findings(vec![finding(
-        Level::Critical,
-        Category::Cpu,
-        "CPU microcode predates Intel's instability fix",
-        format!(
-            "{} is running microcode 0x{rev:X}. 13th/14th Gen desktop CPUs can degrade over time \
-             (Vmin shift) without microcode 0x{RAPTOR_FIXED_MICROCODE:X} or newer.",
-            c.brand
-        ),
-        &[
-            "Update the motherboard BIOS to a version with microcode 0x12B or newer (check the board vendor's support page).",
-            "After updating, load the BIOS's \"Intel Default Settings\" profile instead of unlimited power limits.",
-            "If you see crashes or shader-compilation errors in games, contact Intel about the extended warranty.",
-        ],
-    )])
+    Outcome::Findings(vec![
+        guided(
+            Level::Critical,
+            Category::Cpu,
+            "CPU microcode predates Intel's instability fix",
+            format!(
+                "{} is running microcode 0x{rev:X}. 13th/14th Gen desktop CPUs can degrade over time \
+                 (Vmin shift) without microcode 0x{RAPTOR_FIXED_MICROCODE:X} or newer.",
+                c.brand
+            ),
+            vec![
+                bios_update_step(
+                    ctx,
+                    "Update the motherboard BIOS to a version with microcode 0x12B or newer (check the board vendor's support page).",
+                ),
+                Step::new(
+                    "After updating, load the BIOS's \"Intel Default Settings\" profile instead of unlimited power limits.",
+                ),
+                Step::new(
+                    "If you see crashes or shader-compilation errors in games, contact Intel about the extended warranty.",
+                ),
+            ],
+        )
+        .bios(),
+    ])
 }
 
 /// Under sustained load, the average clock should stay at or above base clock.
@@ -353,24 +557,33 @@ fn memory_speed(ctx: &Context) -> Outcome {
     if rated <= configured + 50 {
         return Outcome::Pass(format!("Running at its rated {configured} MT/s"));
     }
-    let profile = match ctx.info.cpu.vendor {
-        Vendor::Amd => "EXPO (or DOCP)",
-        _ => "XMP",
+    let (profile, short) = match ctx.info.cpu.vendor {
+        Vendor::Amd => ("EXPO (or DOCP)", "EXPO"),
+        _ => ("XMP", "XMP"),
     };
-    Outcome::Findings(vec![finding(
-        Level::Warning,
-        Category::Memory,
-        format!("Memory runs at {configured} MT/s but is rated for {rated} MT/s"),
-        format!(
-            "{} ({}) appears to be rated for {rated} MT/s, but it's configured at {configured} MT/s. \
-             The {profile} memory profile is probably not enabled, which costs performance.",
-            d.part_number, d.memory_type
-        ),
-        &[
-            &format!("Enable the {profile} profile in the BIOS memory settings."),
-            "If the system becomes unstable afterwards, update the BIOS or try the next lower profile.",
-        ],
-    )])
+    let mut steps = bios_help::bios_steps(
+        ctx.info,
+        BiosSetting::MemoryProfile,
+        &format!("Enable the {profile} memory profile."),
+        short,
+    );
+    steps.push(Step::new(
+        "If the system becomes unstable afterwards, update the BIOS or try the next lower profile.",
+    ));
+    Outcome::Findings(vec![
+        guided(
+            Level::Warning,
+            Category::Memory,
+            format!("Memory runs at {configured} MT/s but is rated for {rated} MT/s"),
+            format!(
+                "{} ({}) appears to be rated for {rated} MT/s, but it's configured at {configured} MT/s. \
+                 The {profile} memory profile is probably not enabled, which costs performance.",
+                d.part_number, d.memory_type
+            ),
+            steps,
+        )
+        .bios(),
+    ])
 }
 
 /// Memory channel letter from a slot name such as "DIMM_A1", "ChannelB-DIMM0" or "Controller1-DIMMB2".
@@ -622,13 +835,16 @@ fn gpu_pcie_link(ctx: &Context) -> Outcome {
                 let tip = format!(
                     "Check the BIOS PCIe slot setting (set it to Auto or Gen {max_gen}) and any riser cable's rating."
                 );
-                out.push(finding(
-                    Level::Info,
-                    Category::Gpu,
-                    format!("{} is at PCIe {cur_gen}.0 under load", g.name),
-                    format!("The card supports PCIe {max_gen}.0 but is running at {cur_gen}.0 while busy."),
-                    &[&tip],
-                ));
+                out.push(
+                    finding(
+                        Level::Info,
+                        Category::Gpu,
+                        format!("{} is at PCIe {cur_gen}.0 under load", g.name),
+                        format!("The card supports PCIe {max_gen}.0 but is running at {cur_gen}.0 while busy."),
+                        &[&tip],
+                    )
+                    .bios(),
+                );
             }
         }
     }
@@ -732,7 +948,7 @@ fn drive_free_space(ctx: &Context) -> Outcome {
             _ => continue,
         };
         let system = v.mount.eq_ignore_ascii_case("C:");
-        out.push(finding(
+        out.push(guided(
             level,
             Category::Storage,
             format!("{} is almost full", v.mount),
@@ -747,10 +963,13 @@ fn drive_free_space(ctx: &Context) -> Outcome {
                     ""
                 }
             ),
-            &[
-                "Run Disk Cleanup or Settings > System > Storage > Temporary files.",
-                "Uninstall unused games/apps or move them to another drive.",
-                "SSDs also slow down when nearly full; keep 10-20 % free.",
+            vec![
+                Step::settings(
+                    "Run Disk Cleanup or Settings > System > Storage > Temporary files.",
+                    "ms-settings:storagesense",
+                ),
+                Step::new("Uninstall unused games/apps or move them to another drive."),
+                Step::new("SSDs also slow down when nearly full; keep 10-20 % free."),
             ],
         ));
     }
@@ -1052,18 +1271,27 @@ fn bios_age(ctx: &Context) -> Outcome {
     if months < 36 {
         return Outcome::Pass(format!("BIOS {} from {}", b.version, b.release_date));
     }
-    Outcome::Findings(vec![finding(
-        Level::Info,
-        Category::System,
-        format!("BIOS is {} years old", months / 12),
-        format!(
-            "BIOS {} was released {}. Newer versions often fix stability, security and compatibility issues.",
-            b.version, b.release_date
-        ),
-        &[
-            "Check the motherboard or laptop vendor's support page for a newer BIOS, and read its release notes before updating.",
-        ],
-    )])
+    Outcome::Findings(vec![
+        guided(
+            Level::Info,
+            Category::System,
+            format!("BIOS is {} years old", months / 12),
+            format!(
+                "BIOS {} was released {}. Newer versions often fix stability, security and compatibility issues.",
+                b.version, b.release_date
+            ),
+            vec![
+                bios_update_step(
+                    ctx,
+                    "Check the motherboard or laptop vendor's support page for a newer BIOS, and read its release notes before updating.",
+                ),
+                Step::new(
+                    "Follow the vendor's update instructions exactly (many boards update from a USB stick inside the BIOS setup), and don't turn the PC off while it updates.",
+                ),
+            ],
+        )
+        .bios(),
+    ])
 }
 
 fn uptime(ctx: &Context) -> Outcome {
@@ -1104,21 +1332,32 @@ fn resizable_bar(ctx: &Context) -> Outcome {
                     continue;
                 }
                 seen.push(format!("{}: off", g.name));
-                out.push(finding(
-                    Level::Warning,
-                    Category::Gpu,
-                    format!("Resizable BAR is off for {}", g.name),
-                    format!(
-                        "The CPU can only see a {} window of the GPU's {} memory. With Resizable BAR on, many games gain a few percent (some 10 % or more).",
-                        format_bytes(bar_bytes),
-                        format_bytes(g.dedicated_vram)
-                    ),
-                    &[
-                        "In the BIOS, enable \"Above 4G Decoding\" and \"Re-Size BAR Support\" (names vary by vendor).",
-                        "Disable CSM / Legacy boot so the PC boots in UEFI mode (Windows must be on a GPT disk).",
-                        "Update the motherboard BIOS and GPU driver; RTX 30 cards also need a ReBAR-capable VBIOS from the card maker.",
-                    ],
+                let mut steps = bios_help::bios_steps(
+                    ctx.info,
+                    BiosSetting::ResizableBar,
+                    "Enable \"Above 4G Decoding\" and \"Re-Size BAR Support\".",
+                    "",
+                );
+                steps.push(Step::new(
+                    "If the option is missing or greyed out, disable CSM / Legacy boot so the PC boots in UEFI mode (Windows must be on a GPT disk).",
                 ));
+                steps.push(Step::new(
+                    "Update the motherboard BIOS and GPU driver; RTX 30 cards also need a ReBAR-capable VBIOS from the card maker.",
+                ));
+                out.push(
+                    guided(
+                        Level::Warning,
+                        Category::Gpu,
+                        format!("Resizable BAR is off for {}", g.name),
+                        format!(
+                            "The CPU can only see a {} window of the GPU's {} memory. With Resizable BAR on, many games gain a few percent (some 10 % or more).",
+                            format_bytes(bar_bytes),
+                            format_bytes(g.dedicated_vram)
+                        ),
+                        steps,
+                    )
+                    .bios(),
+                );
             }
             ReBar::Unknown => {}
         }
@@ -1143,12 +1382,12 @@ fn gpu_driver_age(ctx: &Context) -> Outcome {
         seen.push(format!("{}: {y}-{m:02}-{d:02}", g.name));
         let months = (ty - y) * 12 + tm as i64 - m as i64;
         if months >= 12 {
-            out.push(finding(
+            out.push(guided(
                 Level::Info,
                 Category::Gpu,
                 format!("{} driver is over a year old", g.name),
                 format!("The installed driver is dated {y}-{m:02}-{d:02}. Newer drivers often bring game fixes and performance improvements."),
-                &["Update from the GPU vendor's app or website (NVIDIA App, AMD Software, Intel Graphics Software)."],
+                vec![setup::driver_step(g.vendor_id, "the latest driver")],
             ));
         }
     }
@@ -1166,7 +1405,7 @@ fn pending_restart(ctx: &Context) -> Outcome {
     if reasons.is_empty() {
         return Outcome::Pass("No restart pending".into());
     }
-    Outcome::Findings(vec![finding(
+    Outcome::Findings(vec![guided(
         Level::Info,
         Category::System,
         "Windows is waiting for a restart",
@@ -1174,7 +1413,10 @@ fn pending_restart(ctx: &Context) -> Outcome {
             "A restart is pending for: {}. Updates aren't fully applied until then.",
             reasons.join(", ")
         ),
-        &["Restart (not Shut down) when convenient."],
+        vec![Step::settings(
+            "Restart (not Shut down) when convenient, or schedule it in Settings > Windows Update.",
+            "ms-settings:windowsupdate",
+        )],
     )])
 }
 
@@ -1190,14 +1432,19 @@ fn memory_integrity(ctx: &Context) -> Outcome {
             }
             .into(),
         ),
-        Some(true) => Outcome::Findings(vec![finding(
+        Some(true) => Outcome::Findings(vec![guided(
             Level::Info,
             Category::System,
             "Memory Integrity (VBS) is on",
             "Core isolation's Memory Integrity protects the kernel against malware, but costs some performance in CPU-heavy games (commonly a few percent, up to about 10 %).",
-            &[
-                "Keep it on unless you need the last few percent of gaming performance; it is an important security feature.",
-                "To change it: Windows Security > Device security > Core isolation > Memory integrity (restart required).",
+            vec![
+                Step::new(
+                    "Keep it on unless you need the last few percent of gaming performance; it is an important security feature.",
+                ),
+                Step::settings(
+                    "To change it: Windows Security > Device security > Core isolation > Memory integrity (restart required).",
+                    "windowsdefender://coreisolation",
+                ),
             ],
         )
         .security()]),
@@ -1208,14 +1455,15 @@ fn gpu_scheduling(ctx: &Context) -> Outcome {
     match ctx.info.windows.hags {
         None => Outcome::Skipped("Not configured; Windows uses the driver's default".into()),
         Some(true) => Outcome::Pass("On".into()),
-        Some(false) => Outcome::Findings(vec![finding(
+        Some(false) => Outcome::Findings(vec![guided(
             Level::Info,
             Category::System,
             "Hardware-accelerated GPU scheduling is off",
             "Hardware GPU scheduling can lower latency slightly and is required for DLSS Frame Generation on NVIDIA GPUs.",
-            &[
+            vec![Step::settings(
                 "Turn it on in Settings > System > Display > Graphics > Change default graphics settings (restart required).",
-            ],
+                "ms-settings:display-advancedgraphics",
+            )],
         )]),
     }
 }
@@ -1224,12 +1472,15 @@ fn game_mode(ctx: &Context) -> Outcome {
     match ctx.info.windows.game_mode {
         None => Outcome::Skipped("Game Mode setting not available".into()),
         Some(true) => Outcome::Pass("On".into()),
-        Some(false) => Outcome::Findings(vec![finding(
+        Some(false) => Outcome::Findings(vec![guided(
             Level::Info,
             Category::System,
             "Game Mode is off",
             "Game Mode stops Windows Update from installing drivers or showing restart prompts during games, and prioritizes the game.",
-            &["Turn it on in Settings > Gaming > Game Mode."],
+            vec![Step::settings(
+                "Turn it on in Settings > Gaming > Game Mode.",
+                "ms-settings:gaming-gamemode",
+            )],
         )]),
     }
 }
@@ -1293,7 +1544,7 @@ mod tests {
         }
     }
 
-    fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context<'a> {
+    pub(super) fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context<'a> {
         Context {
             info,
             sensors,
@@ -1314,7 +1565,7 @@ mod tests {
         }
     }
 
-    fn levels(o: &Outcome) -> Vec<Level> {
+    pub(super) fn levels(o: &Outcome) -> Vec<Level> {
         match o {
             Outcome::Findings(f) => f.iter().map(|f| f.level).collect(),
             _ => Vec::new(),
@@ -1809,5 +2060,19 @@ mod tests {
         let results = run(&ctx(&info, &s));
         assert_eq!(results.len(), CHECKS.len());
         assert!(findings(&results).is_empty());
+    }
+
+    #[test]
+    fn links() {
+        assert_eq!(
+            Link::Search("ASUS ROG STRIX B650E-F  enable EXPO".into()).url(),
+            "https://www.google.com/search?q=ASUS+ROG+STRIX+B650E-F+enable+EXPO"
+        );
+        assert_eq!(query_encode("a&b/c"), "a%26b%2Fc");
+        assert_eq!(
+            Link::Settings("ms-settings:display".into()).url(),
+            "ms-settings:display"
+        );
+        assert_eq!(Step::from("x"), Step::new("x"));
     }
 }

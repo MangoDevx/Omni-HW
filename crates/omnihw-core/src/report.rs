@@ -1,5 +1,6 @@
 //! System report export (plain text and self-contained HTML).
 
+use crate::diagnostics::{Category, Finding};
 use crate::sensors::Tracked;
 use crate::{SystemInfo, format_bytes, format_uptime};
 
@@ -267,6 +268,37 @@ pub fn sections(info: &SystemInfo, uptime_secs: Option<u64>) -> Vec<Section> {
     out
 }
 
+/// Report rows for one Health Check finding: the finding itself, then its numbered fix steps,
+/// with any link as a plain URL.
+pub fn finding_rows(f: &Finding) -> Vec<(String, String)> {
+    let level = if f.category == Category::Gaming {
+        format!("{} (Gaming)", f.level.name())
+    } else {
+        f.level.name().to_string()
+    };
+    let mut rows = vec![(
+        level,
+        format!(
+            "{}{}: {}",
+            f.title,
+            if f.security {
+                " (security setting: change only if you know what you are doing)"
+            } else {
+                ""
+            },
+            f.detail
+        ),
+    )];
+    for (i, s) in f.steps.iter().enumerate() {
+        let text = match &s.link {
+            Some(l) => format!("{} {}", s.text, l.url()),
+            None => s.text.clone(),
+        };
+        rows.push((format!("  Step {}", i + 1), text));
+    }
+    rows
+}
+
 /// Plain-text report.
 pub fn to_text(sections: &[Section], sensors: &[Tracked]) -> String {
     let mut out = format!("Omni-HW report (v{})\n", env!("CARGO_PKG_VERSION"));
@@ -421,6 +453,34 @@ mod tests {
         assert!(h.contains("Test &lt;CPU&gt; &amp; Co"));
         assert!(!h.contains("<CPU>"));
         assert!(h.contains("<tr class=group><td colspan=5>CPU</td></tr>"));
+    }
+
+    #[test]
+    fn finding_steps_are_numbered() {
+        use crate::diagnostics::{Level, Step};
+        let f = Finding {
+            level: Level::Warning,
+            category: Category::Gaming,
+            title: "T".into(),
+            detail: "D".into(),
+            steps: vec![
+                Step::new("First"),
+                Step::settings("Second", "ms-settings:display"),
+            ],
+            security: false,
+            bios: false,
+        };
+        assert_eq!(
+            finding_rows(&f),
+            vec![
+                ("Warning (Gaming)".to_string(), "T: D".to_string()),
+                ("  Step 1".to_string(), "First".to_string()),
+                (
+                    "  Step 2".to_string(),
+                    "Second ms-settings:display".to_string()
+                ),
+            ]
+        );
     }
 
     #[test]
