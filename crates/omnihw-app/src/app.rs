@@ -144,6 +144,7 @@ impl OmniApp {
         settings.launch_at_startup = crate::autostart::is_enabled();
         crate::settings::apply_visuals(&cc.egui_ctx, &settings);
         crate::export::set_data_dir(settings.data_dir.clone());
+        crate::dismissed::load(&settings.dismissed);
         crate::tray::start(cc.egui_ctx.clone());
         crate::tray::set_icon_visible(settings.minimize_to_tray);
         let sampler = Sampler::start(cc.egui_ctx.clone());
@@ -461,6 +462,17 @@ impl eframe::App for OmniApp {
         // outside the snapshot lock.
         if let Some(msg) = tabs::power::dispatch(ui.ctx(), &self.sampler) {
             self.set_status(msg);
+        }
+
+        // Health Check dismissals changed this frame: keep them in the settings (saved to disk
+        // only when "remember dismissed" is on).
+        if let Some(keys) = crate::dismissed::take_changes() {
+            self.settings.dismissed = keys;
+            if self.settings.remember_dismissed
+                && let Err(e) = self.settings.save()
+            {
+                self.status = Some((e, Instant::now()));
+            }
         }
     }
 }

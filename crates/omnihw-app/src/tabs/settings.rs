@@ -201,6 +201,24 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
                     .hint_text("Paste a folder path")
                     .desired_width(360.0),
             );
+            let picker = ui.ctx().data_mut(|d| {
+                d.get_temp_mut_or_default::<crate::folder_picker::FolderPicker>(egui::Id::new(
+                    "data_dir_picker",
+                ))
+                .clone()
+            });
+            if let Some(p) = picker.take() {
+                s.data_dir = Some(p);
+                edit.clear();
+                set_temp_string(ui, "data_dir_err", String::new());
+            }
+            if ui
+                .add_enabled(!picker.is_open(), egui::Button::new("Browse…"))
+                .on_hover_text("Choose a folder")
+                .clicked()
+            {
+                picker.open(ui.ctx(), current.clone());
+            }
             if ui.button("Apply").clicked() {
                 let p = PathBuf::from(edit.trim());
                 if edit.trim().is_empty() {
@@ -239,6 +257,24 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
         let err = temp_string(ui, "data_dir_err");
         if !err.is_empty() {
             ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), err);
+        }
+    });
+
+    group(ui, "Health Check", |ui| {
+        ui.checkbox(
+            &mut s.remember_dismissed,
+            "Keep dismissed issues dismissed after restarting Omni-HW",
+        );
+        ui.weak("When off, dismissed issues come back the next time Omni-HW starts.");
+        let n = crate::dismissed::count();
+        if ui
+            .add_enabled(
+                n > 0,
+                egui::Button::new(format!("Restore dismissed issues ({n})")),
+            )
+            .clicked()
+        {
+            crate::dismissed::restore_all();
         }
     });
 

@@ -38,17 +38,19 @@ fn is_gaming(r: &CheckResult) -> bool {
     r.category == Category::Gaming
 }
 
-/// Counts of general (non-gaming) findings by level: (critical, warning, info).
+/// Counts of general (non-gaming), non-dismissed findings by level: (critical, warning, info).
 pub fn counts(results: &[CheckResult]) -> (usize, usize, usize) {
-    let general: Vec<CheckResult> = results.iter().filter(|r| !is_gaming(r)).cloned().collect();
+    let (visible, _) = crate::dismissed::split(results);
+    let general: Vec<CheckResult> = visible.into_iter().filter(|r| !is_gaming(r)).collect();
     let f = diagnostics::findings(&general);
     let n = |l| f.iter().filter(|x| x.level == l).count();
     (n(Level::Critical), n(Level::Warning), n(Level::Info))
 }
 
-/// Number of findings in the Gaming category.
+/// Number of non-dismissed findings in the Gaming category.
 pub fn gaming_count(results: &[CheckResult]) -> usize {
-    results
+    let (visible, _) = crate::dismissed::split(results);
+    visible
         .iter()
         .filter(|r| is_gaming(r))
         .map(|r| match &r.outcome {
@@ -91,25 +93,43 @@ pub fn gaming_summary(results: &[CheckResult]) -> Option<String> {
     (n > 0).then(|| plural(n, "gaming suggestion"))
 }
 
+/// Findings of these results with the name of the check that produced them, most severe first.
+fn named_findings(results: &[CheckResult]) -> Vec<(&'static str, &Finding)> {
+    let mut out: Vec<(&'static str, &Finding)> = results
+        .iter()
+        .filter_map(|r| match &r.outcome {
+            Outcome::Findings(f) => Some(f.iter().map(move |x| (r.name, x))),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    out.sort_by_key(|(_, f)| std::cmp::Reverse(f.level));
+    out
+}
+
 pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
     let uefi = info.checkup.firmware.uefi == Some(true);
     restart_dialog(ui);
-    let results = run(info, snap);
-    let (gaming, general): (Vec<CheckResult>, Vec<CheckResult>) =
-        results.iter().cloned().partition(is_gaming);
-    let findings = diagnostics::findings(&general);
-    let passed: Vec<_> = general
+    let all = run(info, snap);
+    let (results, dismissed) = crate::dismissed::split(&all);
+    let findings = named_findings(&results);
+    let general: Vec<&CheckResult> = results.iter().filter(|r| !is_gaming(r)).collect();
+    let passed = general
         .iter()
         .filter(|r| matches!(r.outcome, Outcome::Pass(_)))
-        .collect();
-    let skipped: Vec<_> = general
+        .count();
+    let skipped = general
         .iter()
         .filter(|r| matches!(r.outcome, Outcome::Skipped(_)))
-        .collect();
+        .count();
+    let found = general
+        .iter()
+        .filter(|r| matches!(&r.outcome, Outcome::Findings(f) if !f.is_empty()))
+        .count();
 
     ui.label(RichText::new("Health Check").size(20.0).strong());
     ui.horizontal_wrapped(|ui| {
-        match summary(&results) {
+        match summary(&all) {
             Some((text, color)) => ui.label(
                 RichText::new(text)
                     .size(15.0)
@@ -123,7 +143,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
                     .strong(),
             ),
         };
-        if let Some(g) = gaming_summary(&results) {
+        if let Some(g) = gaming_summary(&all) {
             ui.label(
                 RichText::new(format!("·  {g} below"))
                     .size(15.0)
@@ -131,65 +151,49 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
             );
         }
     });
-    let general_found = general.len() - passed.len() - skipped.len();
+    let mut stats = format!(
+        "{} general checks: {found} found something, {passed} passed, {skipped} not applicable",
+        general.len()
+    );
+    if !dismissed.is_empty() {
+        stats.push_str(&format!(", {} dismissed", dismissed.len()));
+    }
     ui.weak(format!(
-        "{} general checks: {general_found} found something, {} passed, {} not applicable. Live checks use the last ~2 minutes of sensor data and update as you use the PC.",
-        general.len(),
-        passed.len(),
-        skipped.len()
+        "{stats}. Live checks use the last ~2 minutes of sensor data and update as you use the PC."
     ));
     ui.add_space(10.0);
 
-    if !findings.is_empty() {
-        ui.horizontal(|ui| {
-            if ui.small_button("Expand all").clicked() {
-                set_all_open(ui, &findings, true);
-            }
-            if ui.small_button("Collapse all").clicked() {
-                set_all_open(ui, &findings, false);
-            }
-        });
-        ui.add_space(4.0);
-    }
-    for f in &findings {
-        finding_card(ui, f, uefi);
-    }
+    ui.horizontal(|ui| {
+        if ui.small_button("Expand all").clicked() {
+            set_all_open(ui, &findings, true);
+        }
+        if ui.small_button("Collapse all").clicked() {
+            set_all_open(ui, &findings, false);
+        }
+    });
+    ui.add_space(4.0);
 
-    gaming_section(ui, &gaming, uefi);
-
-    // Sections hold no suggestions, so they start collapsed.
-    section(
-        ui,
-        "health_passed",
-        "Passed",
-        passed.len().to_string(),
-        GREEN,
-        false,
-        |ui| result_grid(ui, "passed", &passed),
-    );
-    section(
-        ui,
-        "health_skipped",
-        "Not checked",
-        skipped.len().to_string(),
-        Color32::GRAY,
-        false,
-        |ui| result_grid(ui, "skipped", &skipped),
-    );
+    for cat in Category::ALL {
+        let rows: Vec<&CheckResult> = results.iter().filter(|r| r.category == cat).collect();
+        if !rows.is_empty() {
+            category_section(ui, cat, &rows, &findings, uefi);
+        }
+    }
+    dismissed_section(ui, &dismissed);
 }
 
 /// A collapsible tree section with a larger bold title and a coloured pill
 /// (a count or a short status).
 fn section(
     ui: &mut Ui,
-    id: &str,
+    id: egui::Id,
     title: &str,
     pill_text: String,
     color: Color32,
     default_open: bool,
     body: impl FnOnce(&mut Ui),
 ) {
-    CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new(id), default_open)
+    CollapsingState::load_with_default_open(ui.ctx(), id, default_open)
         .show_header(ui, |ui| {
             ui.label(RichText::new(title).size(16.0).strong());
             pill(ui, pill_text, color, false);
@@ -201,42 +205,112 @@ fn section(
     ui.add_space(4.0);
 }
 
-/// Gaming checks in their own collapsible section; the header shows the suggestion count in blue.
-fn gaming_section(ui: &mut Ui, gaming: &[CheckResult], uefi: bool) {
-    if gaming.is_empty() {
-        return;
-    }
-    let findings = diagnostics::findings(gaming);
-    let (label, color) = if findings.is_empty() {
-        ("all good".to_string(), GREEN)
-    } else {
-        (plural(findings.len(), "suggestion"), BLUE)
+/// One category: its findings as cards, then its passed / not-checked checks. Opens by default
+/// only when it has findings; the pill shows the count in the colour of the worst one.
+fn category_section(
+    ui: &mut Ui,
+    cat: Category,
+    rows: &[&CheckResult],
+    all_findings: &[(&'static str, &Finding)],
+    uefi: bool,
+) {
+    let findings: Vec<(&'static str, &Finding)> = all_findings
+        .iter()
+        .copied()
+        .filter(|(_, f)| f.category == cat)
+        .collect();
+    let (label, color) = match findings.iter().map(|(_, f)| f.level).max() {
+        Some(Level::Info) => (plural(findings.len(), "suggestion"), BLUE),
+        Some(l) => (plural(findings.len(), "issue"), level_color(l)),
+        None if rows
+            .iter()
+            .all(|r| matches!(r.outcome, Outcome::Skipped(_))) =>
+        {
+            ("not checked".to_string(), Color32::GRAY)
+        }
+        None => ("all good".to_string(), GREEN),
     };
-    // Open only when there is something to act on.
     section(
         ui,
-        "health_gaming",
-        "Gaming",
+        cat_id(cat),
+        cat.name(),
         label,
         color,
         !findings.is_empty(),
         |ui| {
-            ui.weak("Settings that mainly affect games: frame rates, latency and GPU features.");
-            ui.add_space(6.0);
-            for f in &findings {
-                finding_card(ui, f, uefi);
+            if let Some(note) = category_note(cat) {
+                ui.weak(note);
+                ui.add_space(6.0);
             }
-            let rest: Vec<&CheckResult> = gaming
+            for (name, f) in &findings {
+                finding_card(ui, name, f, uefi);
+            }
+            let rest: Vec<&CheckResult> = rows
                 .iter()
+                .copied()
                 .filter(|r| !matches!(r.outcome, Outcome::Findings(_)))
                 .collect();
-            result_grid(ui, "gaming_rest", &rest);
+            result_grid(ui, ("health_grid", cat.name()), &rest);
+        },
+    );
+}
+
+fn category_note(cat: Category) -> Option<&'static str> {
+    match cat {
+        Category::Gaming => {
+            Some("Settings that mainly affect games: frame rates, latency and GPU features.")
+        }
+        Category::Crashes => Some(
+            "Blue screens, unexpected restarts and hardware errors from the Windows event log (last 30 days).",
+        ),
+        Category::Power => Some(
+            "Power plan, sleep and device power-saving settings that can interrupt what you're doing.",
+        ),
+        _ => None,
+    }
+}
+
+/// Dismissed findings, collapsed, each with a Restore button.
+fn dismissed_section(ui: &mut Ui, dismissed: &[(&'static str, Finding)]) {
+    if dismissed.is_empty() {
+        return;
+    }
+    section(
+        ui,
+        egui::Id::new(DISMISSED_ID),
+        "Dismissed",
+        dismissed.len().to_string(),
+        Color32::GRAY,
+        false,
+        |ui| {
+            ui.weak("Hidden from the summary and the Overview. Restore one to show it again.");
+            ui.add_space(4.0);
+            egui::Grid::new("health_dismissed_grid")
+                .num_columns(3)
+                .spacing([12.0, 4.0])
+                .striped(true)
+                .show(ui, |ui| {
+                    for (name, f) in dismissed {
+                        pill(ui, f.level.name(), level_color(f.level), true);
+                        ui.label(format!("{} · {}", f.category.name(), f.title));
+                        if ui.small_button("Restore").clicked() {
+                            crate::dismissed::restore(&crate::dismissed::key(name, f));
+                        }
+                        ui.end_row();
+                    }
+                });
+            if dismissed.len() > 1 && ui.small_button("Restore all").clicked() {
+                crate::dismissed::restore_all();
+            }
         },
     );
 }
 
 /// Passed (green OK + detail) and skipped (reason) checks as a compact table.
-fn result_grid(ui: &mut Ui, id: &str, rows: &[&CheckResult]) {
+fn result_grid(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, rows: &[&CheckResult]) {
+    if rows.is_empty() {
+        return;
+    }
     egui::Grid::new(id)
         .num_columns(3)
         .spacing([12.0, 4.0])
@@ -246,12 +320,12 @@ fn result_grid(ui: &mut Ui, id: &str, rows: &[&CheckResult]) {
                 match &r.outcome {
                     Outcome::Pass(detail) => {
                         ui.colored_label(crate::heat::ink(ui.visuals(), GREEN), "OK");
-                        ui.label(format!("{} · {}", r.category.name(), r.name));
+                        ui.label(r.name);
                         ui.weak(detail);
                     }
                     Outcome::Skipped(why) => {
                         ui.weak("–");
-                        ui.label(format!("{} · {}", r.category.name(), r.name));
+                        ui.label(r.name);
                         ui.weak(why);
                     }
                     Outcome::Findings(_) => continue,
@@ -266,10 +340,21 @@ fn card_id(f: &Finding) -> egui::Id {
     egui::Id::new(("health_card", &f.title))
 }
 
-/// Open or close every finding card.
-fn set_all_open(ui: &Ui, findings: &[&Finding], open: bool) {
-    for f in findings {
-        let mut st = CollapsingState::load_with_default_open(ui.ctx(), card_id(f), open);
+fn cat_id(cat: Category) -> egui::Id {
+    egui::Id::new(("health_cat", cat.name()))
+}
+
+const DISMISSED_ID: &str = "health_dismissed";
+
+/// Open or close every category section, the Dismissed section and every finding card.
+fn set_all_open(ui: &Ui, findings: &[(&'static str, &Finding)], open: bool) {
+    let ids = Category::ALL
+        .into_iter()
+        .map(cat_id)
+        .chain([egui::Id::new(DISMISSED_ID)])
+        .chain(findings.iter().map(|(_, f)| card_id(f)));
+    for id in ids {
+        let mut st = CollapsingState::load_with_default_open(ui.ctx(), id, open);
         st.set_open(open);
         st.store(ui.ctx());
     }
@@ -313,7 +398,7 @@ fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32, small: bool) {
 }
 
 /// A finding: a softly shaded panel with a thin accent edge in the level colour, no border.
-fn finding_card(ui: &mut Ui, f: &Finding, uefi: bool) {
+fn finding_card(ui: &mut Ui, check: &str, f: &Finding, uefi: bool) {
     let color = level_color(f.level);
     // Warnings and critical issues start expanded; suggestions start collapsed.
     let default_open = f.level != Level::Info;
@@ -332,20 +417,32 @@ fn finding_card(ui: &mut Ui, f: &Finding, uefi: bool) {
                 .show_header(ui, |ui| {
                     ui.label(RichText::new(&f.title).size(15.0).strong());
                     pill(ui, f.level.name(), color, true);
-                    // Inside the Gaming section the category is implied.
-                    if f.category != Category::Gaming {
-                        ui.weak(f.category.name());
-                    }
                     if f.security {
                         pill(ui, "Security setting", ORANGE, true);
                     }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("Dismiss")
+                            .on_hover_text(
+                                "Hide this from the Health Check summary. Restore it from Dismissed at the bottom.",
+                            )
+                            .clicked()
+                        {
+                            crate::dismissed::dismiss(crate::dismissed::key(check, f));
+                        }
+                    });
                 })
                 .body(|ui| finding_body(ui, f, uefi));
         });
     let r = resp.response.rect;
     ui.painter().rect_filled(
         egui::Rect::from_min_size(r.min, vec2(3.0, r.height())),
-        egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 },
+        egui::CornerRadius {
+            nw: 6,
+            sw: 6,
+            ne: 0,
+            se: 0,
+        },
         color,
     );
     ui.add_space(6.0);

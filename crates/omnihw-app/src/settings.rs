@@ -64,6 +64,11 @@ pub struct Settings {
     pub data_dir: Option<PathBuf>,
     /// Check GitHub for a newer release at start (the app's only network request).
     pub check_updates_at_start: bool,
+    /// Keep dismissed Health Check findings dismissed after a restart.
+    pub remember_dismissed: bool,
+    /// Keys of dismissed Health Check findings (see `dismissed::key`). Only saved to disk when
+    /// `remember_dismissed` is on.
+    pub dismissed: Vec<String>,
 }
 
 impl Default for Settings {
@@ -81,6 +86,8 @@ impl Default for Settings {
             alert_notifications: true,
             data_dir: None,
             check_updates_at_start: false,
+            remember_dismissed: true,
+            dismissed: Vec::new(),
         }
     }
 }
@@ -122,6 +129,15 @@ impl Settings {
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
+        // One `dismissed=` line per key, only when they should survive a restart.
+        let dismissed: String = if self.remember_dismissed {
+            self.dismissed
+                .iter()
+                .map(|k| format!("dismissed={}\n", k.replace(['\r', '\n'], " ")))
+                .collect()
+        } else {
+            String::new()
+        };
         format!(
             "# Omni-HW settings\n\
              theme={theme}\n\
@@ -135,7 +151,9 @@ impl Settings {
              ask_admin_at_start={}\n\
              alert_notifications={}\n\
              data_dir={data_dir}\n\
-             check_updates_at_start={}\n",
+             check_updates_at_start={}\n\
+             remember_dismissed={}\n\
+             {dismissed}",
             self.ui_scale,
             self.start_page,
             self.sample_interval_ms,
@@ -145,6 +163,7 @@ impl Settings {
             bool_str(self.ask_admin_at_start),
             bool_str(self.alert_notifications),
             bool_str(self.check_updates_at_start),
+            bool_str(self.remember_dismissed),
         )
     }
 
@@ -208,6 +227,10 @@ impl Settings {
                 "check_updates_at_start" => {
                     s.check_updates_at_start = parse_bool(v).unwrap_or(s.check_updates_at_start)
                 }
+                "remember_dismissed" => {
+                    s.remember_dismissed = parse_bool(v).unwrap_or(s.remember_dismissed)
+                }
+                "dismissed" if !v.is_empty() => s.dismissed.push(v.to_string()),
                 _ => {}
             }
         }
@@ -272,8 +295,20 @@ mod tests {
             alert_notifications: false,
             data_dir: Some(PathBuf::from(r"D:\Omni HW\data")),
             check_updates_at_start: true,
+            remember_dismissed: true,
+            dismissed: vec!["Uptime|Info|Windows has been running for  days".into()],
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);
+        // With remembering off, dismissals are kept for the session only.
+        let session_only = Settings {
+            remember_dismissed: false,
+            ..s.clone()
+        };
+        assert!(
+            Settings::from_ini(&session_only.to_ini())
+                .dismissed
+                .is_empty()
+        );
         assert_eq!(
             Settings::from_ini(&Settings::default().to_ini()),
             Settings::default()

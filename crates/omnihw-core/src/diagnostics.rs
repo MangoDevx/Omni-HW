@@ -42,6 +42,8 @@ pub enum Category {
     Gaming,
     /// Power plan, sleep and device power-saving settings.
     Power,
+    /// Blue screens, unexpected restarts and hardware (WHEA) errors.
+    Crashes,
 }
 
 impl Category {
@@ -53,9 +55,22 @@ impl Category {
             Category::Storage => "Storage",
             Category::System => "System",
             Category::Gaming => "Gaming",
-            Category::Power => "Power",
+            Category::Power => "Power Management",
+            Category::Crashes => "Crashes (BSOD)",
         }
     }
+
+    /// Every category, in the order the Health Check tab lists them.
+    pub const ALL: [Category; 8] = [
+        Category::Crashes,
+        Category::System,
+        Category::Cpu,
+        Category::Memory,
+        Category::Gpu,
+        Category::Storage,
+        Category::Power,
+        Category::Gaming,
+    ];
 }
 
 /// Something a fix step can open. The app never fetches these itself: they are only handed to
@@ -316,12 +331,12 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("Device drivers", Category::System, setup::device_problems),
     (
         "Hardware errors (WHEA)",
-        Category::System,
+        Category::Crashes,
         setup::whea_errors,
     ),
     (
         "Blue screens and unexpected restarts",
-        Category::System,
+        Category::Crashes,
         setup::crashes,
     ),
     (

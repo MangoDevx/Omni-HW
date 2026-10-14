@@ -3,8 +3,10 @@
 
 mod app;
 mod autostart;
+mod dismissed;
 mod elevate;
 mod export;
+mod folder_picker;
 mod heat;
 mod help;
 mod icon;

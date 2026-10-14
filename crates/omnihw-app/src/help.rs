@@ -428,16 +428,25 @@ fn health_check(ui: &mut Ui) {
             "Critical (red): fix soon, e.g. a failing drive or outdated CPU microcode with a known stability problem.",
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
             "Suggestion (blue, shown as INFO on cards): optional improvements.",
-            "Passed: checks that found nothing wrong, with what was measured.",
-            "Not checked: checks that don't apply to this PC, with the reason (e.g. no battery).",
+            "Results are grouped by category: Crashes (BSOD), System, CPU, Memory, GPU, Storage, Power Management and Gaming. A category opens by default only when it has something to fix; its pill shows the count in the colour of the most serious one.",
+            "Inside each category, OK rows are checks that found nothing wrong (with what was measured) and dash rows are checks that don't apply to this PC (with the reason, e.g. no battery).",
         ],
     );
     h(ui, "Gaming section");
     p(
         ui,
         "Settings that mainly matter for games (Resizable BAR, Memory Integrity, hardware GPU scheduling, Game Mode) are \
-         grouped in their own Gaming section, closed by default. Its header shows how many suggestions it has in blue, \
-         so gamers know to open it, while the main summary only counts general findings.",
+         grouped in the Gaming category. Its findings are counted separately at the top (\"gaming suggestions below\") \
+         rather than in the main summary.",
+    );
+    h(ui, "Dismissing issues");
+    bullets(
+        ui,
+        &[
+            "Dismiss on a card hides it from its category, the summary and the Overview banner. It moves to Dismissed at the bottom, where Restore brings it back.",
+            "If the same check later finds something more serious (e.g. a suggestion becomes a warning), it shows up again.",
+            "By default dismissed issues stay dismissed after restarting Omni-HW. Turn that off in Settings > Health Check to have them come back on each start; Restore dismissed issues there brings them all back.",
+        ],
     );
     h(ui, "Security settings");
     p(
@@ -469,16 +478,7 @@ fn health_check(ui: &mut Ui) {
         ],
     );
     h(ui, "All checks");
-    let categories = [
-        Category::Cpu,
-        Category::Memory,
-        Category::Gpu,
-        Category::Storage,
-        Category::System,
-        Category::Power,
-        Category::Gaming,
-    ];
-    for cat in categories {
+    for cat in Category::ALL {
         let rows: Vec<String> = all_checks()
             .iter()
             .filter(|(_, c)| *c == cat)

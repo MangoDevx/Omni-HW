@@ -13,7 +13,12 @@ fn main() {
 
     let out = env::var("OUT_DIR").expect("OUT_DIR");
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let num = |k: &str| env::var(k).ok().and_then(|v| v.parse::<u16>().ok()).unwrap_or(0);
+    let num = |k: &str| {
+        env::var(k)
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(0)
+    };
     let (major, minor, patch) = (
         num("CARGO_PKG_VERSION_MAJOR"),
         num("CARGO_PKG_VERSION_MINOR"),
