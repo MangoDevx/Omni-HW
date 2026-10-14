@@ -2,10 +2,11 @@
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_ROUTINE_FLAGS, RRF_RT_REG_DWORD,
-    RRF_RT_REG_MULTI_SZ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW, RegOpenKeyExW,
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, REG_ROUTINE_FLAGS, RRF_RT_REG_BINARY,
+    RRF_RT_REG_DWORD, RRF_RT_REG_MULTI_SZ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW,
+    RegEnumValueW, RegGetValueW, RegOpenKeyExW,
 };
-use windows::core::HSTRING;
+use windows::core::{HSTRING, PWSTR};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hive {
@@ -78,6 +79,100 @@ pub(crate) fn multi_string(hive: Hive, subkey: &str, value: &str) -> Option<Vec<
             .map(String::from_utf16_lossy)
             .collect(),
     )
+}
+
+pub(crate) fn binary(hive: Hive, subkey: &str, value: &str) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; 256];
+    let len = get(hive, subkey, value, RRF_RT_REG_BINARY, &mut buf)?;
+    buf.truncate(len);
+    Some(buf)
+}
+
+/// Open key, closed on drop.
+struct Key(HKEY);
+
+impl Key {
+    fn open(hive: Hive, subkey: &str) -> Option<Key> {
+        let mut h = HKEY::default();
+        // SAFETY: valid out pointer; closed in Drop.
+        let st = unsafe {
+            RegOpenKeyExW(
+                hive.handle(),
+                &HSTRING::from(subkey),
+                None,
+                KEY_READ,
+                &mut h,
+            )
+        };
+        (st == ERROR_SUCCESS).then_some(Key(h))
+    }
+}
+
+impl Drop for Key {
+    fn drop(&mut self) {
+        // SAFETY: opened in Key::open.
+        let _ = unsafe { RegCloseKey(self.0) };
+    }
+}
+
+/// Names of the direct subkeys of a key.
+pub(crate) fn subkeys(hive: Hive, subkey: &str) -> Vec<String> {
+    let Some(key) = Key::open(hive, subkey) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut name = [0u16; 256];
+    for i in 0.. {
+        let mut len = name.len() as u32;
+        // SAFETY: buffer length passed in characters.
+        let st = unsafe {
+            RegEnumKeyExW(
+                key.0,
+                i,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if st != ERROR_SUCCESS {
+            break;
+        }
+        out.push(String::from_utf16_lossy(&name[..len as usize]));
+    }
+    out
+}
+
+/// Names of the values in a key.
+pub(crate) fn value_names(hive: Hive, subkey: &str) -> Vec<String> {
+    let Some(key) = Key::open(hive, subkey) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut name = [0u16; 512];
+    for i in 0.. {
+        let mut len = name.len() as u32;
+        // SAFETY: name buffer length passed in characters; no data requested.
+        let st = unsafe {
+            RegEnumValueW(
+                key.0,
+                i,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if st != ERROR_SUCCESS {
+            break;
+        }
+        out.push(String::from_utf16_lossy(&name[..len as usize]));
+    }
+    out
 }
 
 pub(crate) fn key_exists(hive: Hive, subkey: &str) -> bool {

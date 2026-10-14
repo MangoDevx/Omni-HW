@@ -431,6 +431,8 @@ pub use imp::{battery, microcode_revision, os_info, power_plan, uptime_secs};
 
 #[cfg(windows)]
 mod battery_wear;
+/// Data collectors for the setup checks of the Health Check.
+pub mod checkup;
 /// Battery design vs full-charge capacity (None on desktops).
 #[cfg(windows)]
 pub use battery_wear::battery_health;

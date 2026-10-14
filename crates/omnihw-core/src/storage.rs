@@ -19,6 +19,82 @@ pub struct Drive {
     pub nvme_health: Option<NvmeHealth>,
     /// ATA SMART attributes for SATA drives, if readable (usually requires administrator rights).
     pub ata_smart: Option<crate::smart::AtaSmart>,
+    /// Partition table summary, if readable.
+    pub layout: Option<DiskLayout>,
+    /// SATA link speed from IDENTIFY DEVICE (administrator rights).
+    pub sata_link: Option<SataLink>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PartitionStyle {
+    Mbr,
+    Gpt,
+    /// Not initialized: no partition table at all.
+    Raw,
+}
+
+impl PartitionStyle {
+    pub fn from_raw(v: u32) -> Option<PartitionStyle> {
+        Some(match v {
+            0 => PartitionStyle::Mbr,
+            1 => PartitionStyle::Gpt,
+            2 => PartitionStyle::Raw,
+            _ => return None,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskLayout {
+    pub style: PartitionStyle,
+    /// Partitions with a non-zero size.
+    pub partitions: u32,
+    /// Largest stretch of space not covered by any partition.
+    pub unallocated_bytes: u64,
+}
+
+/// Largest gap in `[0, disk_size)` not covered by the `(offset, length)` partitions.
+pub fn largest_gap(disk_size: u64, partitions: &[(u64, u64)]) -> u64 {
+    let mut parts: Vec<(u64, u64)> = partitions.iter().copied().filter(|p| p.1 > 0).collect();
+    parts.sort_unstable();
+    let (mut pos, mut best) = (0u64, 0u64);
+    for (off, len) in parts {
+        best = best.max(off.saturating_sub(pos));
+        pos = pos.max(off.saturating_add(len));
+    }
+    best.max(disk_size.saturating_sub(pos))
+}
+
+/// SATA link generation: 1 = 1.5 Gb/s, 2 = 3 Gb/s, 3 = 6 Gb/s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SataLink {
+    pub current_gen: u8,
+    pub max_gen: u8,
+}
+
+pub fn sata_gen_speed(generation: u8) -> &'static str {
+    match generation {
+        1 => "1.5 Gb/s",
+        2 => "3 Gb/s",
+        3 => "6 Gb/s",
+        _ => "unknown speed",
+    }
+}
+
+/// SATA link speeds from an ATA IDENTIFY DEVICE block: word 76 lists supported generations,
+/// word 77 bits 1-3 the negotiated one.
+pub fn parse_sata_link(identify: &[u8]) -> Option<SataLink> {
+    let caps = u16_at(identify, 76 * 2)?;
+    let cur = u16_at(identify, 77 * 2)?;
+    if caps == 0 || caps == 0xFFFF {
+        return None;
+    }
+    let max_gen = (1..=3u8).rev().find(|g| caps >> g & 1 == 1)?;
+    let current_gen = ((cur >> 1) & 0b111) as u8;
+    (1..=3).contains(&current_gen).then_some(SataLink {
+        current_gen,
+        max_gen,
+    })
 }
 
 impl Drive {
@@ -379,6 +455,29 @@ mod tests {
         let t = parse_temperature_descriptor(&b).unwrap();
         assert_eq!((t.critical, t.warning), (84, 75));
         assert_eq!(t.sensors, vec![38, 45]);
+    }
+
+    #[test]
+    fn gaps_and_links() {
+        const G: u64 = 1 << 30;
+        assert_eq!(largest_gap(100 * G, &[]), 100 * G);
+        assert_eq!(largest_gap(100 * G, &[(G, 50 * G)]), 49 * G);
+        assert_eq!(
+            largest_gap(100 * G, &[(0, 10 * G), (5 * G, 90 * G), (0, 0)]),
+            5 * G
+        );
+        let mut id = vec![0u8; 512];
+        id[152..154].copy_from_slice(&0b1110u16.to_le_bytes());
+        id[154..156].copy_from_slice(&(2u16 << 1).to_le_bytes());
+        assert_eq!(
+            parse_sata_link(&id),
+            Some(SataLink {
+                current_gen: 2,
+                max_gen: 3
+            })
+        );
+        id[152..154].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(parse_sata_link(&id), None);
     }
 
     #[test]

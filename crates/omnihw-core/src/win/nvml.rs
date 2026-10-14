@@ -22,6 +22,11 @@ const CLOCK_GRAPHICS: u32 = 0;
 const CLOCK_MEM: u32 = 2;
 const CLOCK_VIDEO: u32 = 3;
 
+/// `nvmlClocksEventReasons` bits that point at hardware problems.
+const EVENT_HW_SLOWDOWN: u64 = 0x8;
+const EVENT_HW_THERMAL: u64 = 0x40;
+const EVENT_HW_POWER_BRAKE: u64 = 0x80;
+
 #[repr(C)]
 #[derive(Default)]
 struct Utilization {
@@ -58,6 +63,7 @@ type FnDevArgU32 = unsafe extern "C" fn(Device, u32, *mut u32) -> Ret;
 type FnUtil = unsafe extern "C" fn(Device, *mut Utilization) -> Ret;
 type FnMem = unsafe extern "C" fn(Device, *mut Memory) -> Ret;
 type FnPci = unsafe extern "C" fn(Device, *mut PciInfo) -> Ret;
+type FnDevU64 = unsafe extern "C" fn(Device, *mut u64) -> Ret;
 
 struct Fns {
     shutdown: FnVoid,
@@ -82,6 +88,8 @@ struct Fns {
     pstate: Option<FnDevU32>,
     /// `nvmlDeviceGetBAR1MemoryInfo`; `nvmlBAR1Memory_t` has the same layout as `Memory`.
     bar1: Option<FnMem>,
+    /// `nvmlDeviceGetCurrentClocksEventReasons` (formerly `...ThrottleReasons`).
+    clock_events: Option<FnDevU64>,
 }
 
 pub struct Nvml {
@@ -158,6 +166,8 @@ impl Nvml {
             bus_width: opt!("nvmlDeviceGetMemoryBusWidth", FnDevU32),
             pstate: opt!("nvmlDeviceGetPerformanceState", FnDevU32),
             bar1: opt!("nvmlDeviceGetBAR1MemoryInfo", FnMem),
+            clock_events: opt!("nvmlDeviceGetCurrentClocksEventReasons", FnDevU64)
+                .or(opt!("nvmlDeviceGetCurrentClocksThrottleReasons", FnDevU64)),
         };
         let mut n = 0;
         // SAFETY: valid out pointer.
@@ -264,6 +274,12 @@ impl Nvml {
         let mut m = Memory::default();
         // SAFETY: valid out pointer; same layout as nvmlBAR1Memory_t.
         (unsafe { self.f.bar1?(self.devices[i], &mut m) } == SUCCESS).then_some(m.total)
+    }
+
+    fn clock_events(&self, i: usize) -> Option<u64> {
+        let mut v = 0u64;
+        // SAFETY: valid out pointer.
+        (unsafe { self.f.clock_events?(self.devices[i], &mut v) } == SUCCESS).then_some(v)
     }
 
     fn utilization(&self, i: usize) -> Option<Utilization> {
@@ -415,6 +431,28 @@ impl SensorBackend for NvmlBackend {
                 Unit::None,
                 n.u32_of(n.f.pstate, i).map(f64::from),
             );
+            // Hardware clock limiters as 0/1, read by the Health Check's throttling rule.
+            if let Some(r) = n.clock_events(i) {
+                let flag = |bit: u64| Some(if r & bit != 0 { 1.0 } else { 0.0 });
+                push(
+                    "nv/throttle/hw_slowdown",
+                    "HW Slowdown (1 = active)",
+                    Unit::None,
+                    flag(EVENT_HW_SLOWDOWN),
+                );
+                push(
+                    "nv/throttle/hw_thermal",
+                    "HW Thermal Slowdown (1 = active)",
+                    Unit::None,
+                    flag(EVENT_HW_THERMAL),
+                );
+                push(
+                    "nv/throttle/power_brake",
+                    "HW Power Brake (1 = active)",
+                    Unit::None,
+                    flag(EVENT_HW_POWER_BRAKE),
+                );
+            }
         }
         Ok(())
     }
