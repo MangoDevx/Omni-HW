@@ -252,6 +252,14 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
             {
                 updates.start(ui.ctx());
             }
+            // Opens the latest release notes in the browser; the app itself sends nothing.
+            if ui
+                .button("What's new")
+                .on_hover_text("Open the latest release notes on GitHub in your browser")
+                .clicked()
+            {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(RELEASES_URL));
+            }
             let version = env!("CARGO_PKG_VERSION");
             match status {
                 Status::Idle => {
