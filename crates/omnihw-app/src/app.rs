@@ -14,6 +14,7 @@ pub enum Tab {
     Memory,
     Gpu,
     Storage,
+    Power,
     Sensors,
     Recording,
     Alerts,
@@ -22,7 +23,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 12] = [
+    pub const ALL: [Tab; 13] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -31,6 +32,7 @@ impl Tab {
         Tab::Memory,
         Tab::Gpu,
         Tab::Storage,
+        Tab::Power,
         Tab::Sensors,
         Tab::Recording,
         Tab::Alerts,
@@ -47,6 +49,7 @@ impl Tab {
             Tab::Memory => "Memory",
             Tab::Gpu => "GPU",
             Tab::Storage => "Storage",
+            Tab::Power => "Power",
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
             Tab::Alerts => "Alerts",
@@ -66,6 +69,7 @@ impl Tab {
             Tab::Memory => "memory",
             Tab::Gpu => "gpu",
             Tab::Storage => "storage",
+            Tab::Power => "power",
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
             Tab::Alerts => "alerts",
@@ -93,6 +97,7 @@ const GROUPS: [(&str, &[Tab]); 2] = [
             Tab::Memory,
             Tab::Gpu,
             Tab::Storage,
+            Tab::Power,
         ],
     ),
     ("Monitoring", &[Tab::Sensors, Tab::Recording, Tab::Alerts]),
@@ -112,6 +117,8 @@ const STATUS_DURATION: Duration = Duration::from_secs(6);
 
 pub struct OmniApp {
     tab: Tab,
+    /// Page shown last frame, to notice when the Power page is opened.
+    last_tab: Option<Tab>,
     /// Persisted user settings (theme, navigation style, start page, ...).
     settings: Settings,
     /// Selected adapter on the GPU tab.
@@ -148,6 +155,7 @@ impl OmniApp {
         }
         OmniApp {
             tab: Tab::from_key(&settings.start_page).unwrap_or(Tab::Overview),
+            last_tab: None,
             settings,
             gpu_index: 0,
             sampler,
@@ -380,6 +388,12 @@ impl eframe::App for OmniApp {
 
         crate::help::show(ui.ctx(), &mut self.help);
 
+        // Re-read power devices and wake history whenever the Power page is opened.
+        if self.tab == Tab::Power && self.last_tab != Some(Tab::Power) {
+            self.sampler.refresh_power();
+        }
+        self.last_tab = Some(self.tab);
+
         egui::CentralPanel::default_margins().show(ui, |ui| {
             let Some(info) = self.sampler.info() else {
                 ui.centered_and_justified(|ui| {
@@ -434,6 +448,7 @@ impl eframe::App for OmniApp {
                         Tab::Memory => tabs::memory::show(ui, info, &snap),
                         Tab::Gpu => tabs::gpu::show(ui, info, &snap, &mut self.gpu_index),
                         Tab::Storage => tabs::storage::show(ui, info, &snap),
+                        Tab::Power => tabs::power::show(ui, &snap),
                         Tab::About => tabs::about::show(ui, info, &snap),
                         Tab::Sensors | Tab::Recording | Tab::Alerts | Tab::Settings => {
                             unreachable!()
@@ -441,6 +456,12 @@ impl eframe::App for OmniApp {
                     }
                 });
         });
+
+        // Power changes requested this frame (Power page or a Health Check "Fix"), applied
+        // outside the snapshot lock.
+        if let Some(msg) = tabs::power::dispatch(ui.ctx(), &self.sampler) {
+            self.set_status(msg);
+        }
     }
 }
 
@@ -453,7 +474,8 @@ mod tests {
         assert_eq!(arrow_neighbor(Tab::Cpu, 1), Some(Tab::Caches));
         assert_eq!(arrow_neighbor(Tab::Caches, -1), Some(Tab::Cpu));
         assert_eq!(arrow_neighbor(Tab::Cpu, -1), None, "stops at the top");
-        assert_eq!(arrow_neighbor(Tab::Storage, 1), None, "stops at the bottom");
+        assert_eq!(arrow_neighbor(Tab::Storage, 1), Some(Tab::Power));
+        assert_eq!(arrow_neighbor(Tab::Power, 1), None, "stops at the bottom");
         assert_eq!(arrow_neighbor(Tab::Sensors, 1), Some(Tab::Recording));
         assert_eq!(arrow_neighbor(Tab::Overview, 1), Some(Tab::Health));
         assert_eq!(arrow_neighbor(Tab::Settings, 1), None);

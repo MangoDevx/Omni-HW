@@ -9,6 +9,7 @@ mod heat;
 mod help;
 mod icon;
 mod notify;
+mod power_ops;
 mod sampler;
 mod settings;
 mod tabs;
@@ -16,6 +17,10 @@ mod tray;
 mod update;
 
 fn main() -> eframe::Result {
+    // Elevated helper for a power change: do it and exit without a window.
+    if let Some(code) = power_ops::run_helper() {
+        std::process::exit(code);
+    }
     if elevate::relaunch_elevated_if_useful() {
         return Ok(());
     }

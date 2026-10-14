@@ -9,6 +9,8 @@ use crate::storage::BusType;
 use crate::win::PlanKind;
 use crate::{SystemInfo, format_bytes};
 
+mod power;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
     Info,
@@ -35,6 +37,8 @@ pub enum Category {
     System,
     /// Settings that mainly matter for games; shown in their own section.
     Gaming,
+    /// Power plan, sleep and device power-saving settings.
+    Power,
 }
 
 impl Category {
@@ -46,6 +50,7 @@ impl Category {
             Category::Storage => "Storage",
             Category::System => "System",
             Category::Gaming => "Gaming",
+            Category::Power => "Power",
         }
     }
 }
@@ -62,12 +67,20 @@ pub struct Finding {
     /// The fix involves a security setting: the UI warns to change it only if the user knows
     /// what they are doing.
     pub security: bool,
+    /// A change the app can apply itself (offered as a one-click "Fix").
+    pub fix: Option<crate::power::Action>,
 }
 
 impl Finding {
     /// Mark this finding as being about a security setting.
     fn security(mut self) -> Finding {
         self.security = true;
+        self
+    }
+
+    /// Offer a one-click fix.
+    fn with_fix(mut self, fix: crate::power::Action) -> Finding {
+        self.fix = Some(fix);
         self
     }
 }
@@ -93,6 +106,8 @@ pub struct Context<'a> {
     /// Today's date (year, month, day).
     pub today: (i64, u32, u32),
     pub uptime_secs: Option<u64>,
+    /// Power settings, once gathered.
+    pub power: Option<&'a crate::power::PowerInfo>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).
@@ -145,7 +160,7 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("Drive health (SATA SMART)", Category::Storage, sata_smart),
     ("Drive temperature", Category::Storage, drive_temperature),
     ("Battery wear", Category::System, battery_wear),
-    ("Power plan", Category::System, power_plan),
+    ("Power plan", Category::Power, power_plan),
     ("BIOS age", Category::System, bios_age),
     ("Uptime", Category::System, uptime),
     ("Pending restart", Category::System, pending_restart),
@@ -163,6 +178,7 @@ const CHECKS: &[(&str, Category, Check)] = &[
 pub fn run(ctx: &Context) -> Vec<CheckResult> {
     CHECKS
         .iter()
+        .chain(power::CHECKS)
         .map(|&(name, category, check)| {
             let outcome = match check(ctx) {
                 Outcome::Findings(mut f) if !f.is_empty() => {
@@ -213,6 +229,7 @@ fn finding(
         detail: detail.into(),
         tips: tips.iter().map(|t| t.to_string()).collect(),
         security: false,
+        fix: None,
     }
 }
 
@@ -1007,15 +1024,21 @@ fn battery_wear(ctx: &Context) -> Outcome {
 }
 
 fn power_plan(ctx: &Context) -> Outcome {
-    let Some(p) = &ctx.info.power_plan else {
+    // Prefer the live power info: the user may have switched plans since startup.
+    let live = ctx
+        .power
+        .and_then(|p| p.active_scheme())
+        .map(|s| (s.name.as_str(), s.kind));
+    let Some((name, kind)) = live.or(ctx
+        .info
+        .power_plan
+        .as_ref()
+        .map(|p| (p.name.as_str(), p.kind)))
+    else {
         return Outcome::Skipped("Power plan not available".into());
     };
-    let name = if p.name.is_empty() {
-        "Custom plan"
-    } else {
-        p.name.as_str()
-    };
-    if p.kind != PlanKind::PowerSaver {
+    let name = if name.is_empty() { "Custom plan" } else { name };
+    if kind != PlanKind::PowerSaver {
         return Outcome::Pass(format!("Active plan: {name}"));
     }
     let laptop = ctx.info.battery.is_some();
@@ -1025,7 +1048,8 @@ fn power_plan(ctx: &Context) -> Outcome {
         "Power saver plan is active",
         "Windows is limiting CPU performance to save power.",
         &["Switch to Balanced (or High performance on desktops) in Control Panel > Power Options."],
-    )])
+    )
+    .with_fix(crate::power::Action::SetScheme(crate::power::BALANCED.into()))])
 }
 
 /// Parse SMBIOS BIOS dates ("MM/DD/YYYY", sometimes "MM/DD/YY").
@@ -1299,6 +1323,7 @@ mod tests {
             sensors,
             today: (2026, 10, 12),
             uptime_secs: Some(3600),
+            power: None,
         }
     }
 
@@ -1807,7 +1832,7 @@ mod tests {
         let info = SystemInfo::default();
         let s = SensorTable::default();
         let results = run(&ctx(&info, &s));
-        assert_eq!(results.len(), CHECKS.len());
+        assert_eq!(results.len(), CHECKS.len() + power::CHECKS.len());
         assert!(findings(&results).is_empty());
     }
 }

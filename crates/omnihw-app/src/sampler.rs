@@ -4,6 +4,7 @@
 use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
+use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
 use std::fs::File;
@@ -17,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 /// Fired alerts kept for the log.
 const ALERT_LOG_LEN: usize = 200;
+/// How often power plan settings are re-read (devices and wake history only on request).
+const POWER_SETTINGS_EVERY: Duration = Duration::from_secs(30);
 
 /// Latest sensor state, shared with the UI.
 #[derive(Default)]
@@ -33,6 +36,12 @@ pub struct Snapshot {
     pub alerts: Alerts,
     /// Fired alerts, newest last.
     pub alert_log: Vec<AlertEvent>,
+    /// Power settings, devices and wake history (None until first read).
+    pub power: Option<PowerInfo>,
+    /// A power change or elevated query is in progress.
+    pub power_busy: bool,
+    /// Result of the last power change, for the status bar.
+    pub power_msg: Option<String>,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -65,6 +74,8 @@ struct Shared {
     test_notification: AtomicBool,
     /// Windows notifications for fired alerts (they always show in-app).
     alert_notifications: AtomicBool,
+    /// Re-read all power info (devices, wake history) on the next sample.
+    power_refresh: AtomicBool,
 }
 
 /// Where alert rules are saved: `%APPDATA%/OmniHW/alerts.tsv`.
@@ -85,6 +96,7 @@ fn load_alert_rules() -> Vec<AlertRule> {
 
 pub struct Sampler {
     shared: Arc<Shared>,
+    ctx: egui::Context,
     /// Dropping this wakes and stops the thread.
     _stop: mpsc::Sender<()>,
 }
@@ -102,17 +114,84 @@ impl Sampler {
             hwnd: AtomicIsize::new(0),
             test_notification: AtomicBool::new(false),
             alert_notifications: AtomicBool::new(true),
+            power_refresh: AtomicBool::new(false),
         });
         let (stop, stop_rx) = mpsc::channel::<()>();
         let s = shared.clone();
+        let c = ctx.clone();
         std::thread::Builder::new()
             .name("omnihw-sampler".into())
-            .spawn(move || run(s, ctx, stop_rx))
+            .spawn(move || run(s, c, stop_rx))
             .expect("spawn sampler thread");
         Sampler {
             shared,
+            ctx,
             _stop: stop,
         }
+    }
+
+    /// Re-read power settings, devices and wake history on the next sample.
+    pub fn refresh_power(&self) {
+        self.shared.power_refresh.store(true, Ordering::Relaxed);
+    }
+
+    /// Run blocking power work (which may wait on a UAC prompt) on a short-lived worker thread,
+    /// then report `msg(result)` and refresh the power info.
+    fn power_job<T: Send + 'static>(
+        &self,
+        work: impl FnOnce() -> T + Send + 'static,
+        done: impl FnOnce(T, &mut Snapshot) + Send + 'static,
+    ) {
+        {
+            let mut snap = self.snapshot();
+            if snap.power_busy {
+                return;
+            }
+            snap.power_busy = true;
+        }
+        let (shared, ctx) = (self.shared.clone(), self.ctx.clone());
+        let spawned = std::thread::Builder::new()
+            .name("omnihw-power".into())
+            .spawn(move || {
+                let r = work();
+                {
+                    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                    snap.power_busy = false;
+                    done(r, &mut snap);
+                }
+                shared.power_refresh.store(true, Ordering::Relaxed);
+                ctx.request_repaint();
+            });
+        if spawned.is_err() {
+            self.snapshot().power_busy = false;
+        }
+    }
+
+    /// Apply a power change (asking for administrator rights if needed).
+    pub fn power_action(&self, action: Action) {
+        let a = action.clone();
+        self.power_job(
+            move || crate::power_ops::apply(&a),
+            move |r, snap| {
+                snap.power_msg = Some(match r {
+                    Ok(()) => format!("Done: {}", action.label()),
+                    Err(e) => format!("{} failed: {e}", action.label()),
+                });
+            },
+        );
+    }
+
+    /// Read power requests and wake timers (asks for administrator rights if needed).
+    pub fn power_query_admin(&self) {
+        self.power_job(crate::power_ops::query_admin, |r, snap| match r {
+            Ok((requests, timers)) => {
+                if let Some(p) = &mut snap.power {
+                    p.requests = Some(requests);
+                    p.wake_timers = Some(timers);
+                }
+            }
+            Err(e) => snap.power_msg = Some(format!("Couldn't read power requests: {e}")),
+        });
     }
 
     /// Static info, once gathered.
@@ -256,6 +335,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
     let mut readings = Vec::new();
     let started = Instant::now();
     let mut notifier: Option<Notifier> = None;
+    let mut power_read: Option<Instant> = None;
     loop {
         let interval = Duration::from_millis(shared.interval_ms.load(Ordering::Relaxed));
         match stop.recv_timeout(interval) {
@@ -312,7 +392,38 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
                 );
             }
         }
+        update_power(&shared, &mut power_read);
         ctx.request_repaint();
+    }
+}
+
+/// Read power info outside the snapshot lock: everything at startup and on request, plan
+/// settings every `POWER_SETTINGS_EVERY`.
+fn update_power(shared: &Shared, last: &mut Option<Instant>) {
+    let full = shared.power_refresh.swap(false, Ordering::Relaxed) || last.is_none();
+    if !full && last.is_some_and(|t| t.elapsed() < POWER_SETTINGS_EVERY) {
+        return;
+    }
+    let fresh = if full {
+        PowerInfo::gather()
+    } else {
+        PowerInfo::gather_settings()
+    };
+    *last = Some(Instant::now());
+    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    match (&mut snap.power, full) {
+        (Some(old), false) => old.merge_settings(fresh),
+        (old, _) => {
+            let mut fresh = fresh;
+            // Power requests read with a one-off elevation stay until the next elevated read.
+            if fresh.requests.is_none()
+                && let Some(o) = old
+            {
+                fresh.requests = o.requests.take();
+                fresh.wake_timers = o.wake_timers.take();
+            }
+            *old = Some(fresh);
+        }
     }
 }
 

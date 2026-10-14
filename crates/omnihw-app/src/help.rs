@@ -18,6 +18,7 @@ pub enum HelpTab {
     Overview,
     HealthCheck,
     Hardware,
+    Power,
     Sensors,
     Recording,
     Alerts,
@@ -27,11 +28,12 @@ pub enum HelpTab {
     Troubleshooting,
 }
 
-const TABS: [(HelpTab, &str); 11] = [
+const TABS: [(HelpTab, &str); 12] = [
     (HelpTab::GettingStarted, "Getting Started"),
     (HelpTab::Overview, "Overview"),
     (HelpTab::HealthCheck, "Health Check"),
     (HelpTab::Hardware, "Hardware Tabs"),
+    (HelpTab::Power, "Power"),
     (HelpTab::Sensors, "Sensors"),
     (HelpTab::Recording, "Recording"),
     (HelpTab::Alerts, "Alerts"),
@@ -71,6 +73,7 @@ pub fn show(ctx: &Context, state: &mut HelpState) {
                     HelpTab::Overview => overview(ui),
                     HelpTab::HealthCheck => health_check(ui),
                     HelpTab::Hardware => hardware(ui),
+                    HelpTab::Power => power(ui),
                     HelpTab::Sensors => sensors(ui),
                     HelpTab::Recording => recording(ui),
                     HelpTab::Alerts => alerts(ui),
@@ -140,7 +143,7 @@ fn getting_started(ui: &mut Ui) {
         &[
             "Overview: a one-page dashboard of CPU, GPU, memory, storage and system, with live numbers and graphs.",
             "Health Check: automatic checks that flag common problems and explain how to fix them.",
-            "Hardware menu: CPU, Caches, Mainboard, Memory, GPU, Storage - detailed hardware information, like CPU-Z and GPU-Z. The button shows the open page, e.g. \"Hardware: GPU\".",
+            "Hardware menu: CPU, Caches, Mainboard, Memory, GPU, Storage, Power - detailed hardware information, like CPU-Z and GPU-Z. The button shows the open page, e.g. \"Hardware: GPU\".",
             "Monitoring menu: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis) and Alerts (Windows notifications when a sensor crosses a limit).",
             "On the right: Record (start/stop a recording from any tab), Report (save an HTML report or copy a text one), Info (this guide and About) and Settings.",
             "Prefer every page as its own tab? Settings > Navigation bar > Classic.",
@@ -264,6 +267,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             sensors: &sensors,
             today: (2026, 1, 1),
             uptime_secs: None,
+            power: None,
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -319,6 +323,36 @@ fn check_description(name: &str) -> &'static str {
             "Laptop battery capacity lost compared with new (warning from 30 %, critical from 50 %)."
         }
         "Power plan" => "Windows Power saver plan active, which limits performance.",
+        "USB selective suspend" => {
+            "On while USB audio interfaces, capture cards, VR headsets or game controllers are connected (drop-outs, crackling)."
+        }
+        "Network adapter power saving" => {
+            "Windows allowed to turn off a network adapter, Energy-Efficient Ethernet on, or high Wi-Fi power saving while plugged in."
+        }
+        "Bluetooth power saving" => {
+            "Windows allowed to turn off the Bluetooth adapter, a common cause of controller and headset disconnects."
+        }
+        "PCI Express power saving" => {
+            "Link State Power Management at maximum savings on a desktop (GPU/NVMe stutter, wake problems)."
+        }
+        "Sleep timer" => {
+            "Sleep after less than 10 minutes when plugged in, or sleep set sooner than the display timeout."
+        }
+        "Waking from sleep" => {
+            "The PC woke by itself (wake timers or a network adapter) in the last 2 weeks; shows the wake source."
+        }
+        "Fast Startup" => {
+            "Fast Startup on with Windows running for a week or more: shutdowns don't start Windows fresh."
+        }
+        "Hard disk turn-off timer" => {
+            "Hard disks set to turn off after less than 10 minutes while plugged in (spin-up freezes)."
+        }
+        "Processor state limits" => {
+            "Maximum processor state below 100 % when plugged in, or minimum at 100 % on battery."
+        }
+        "Apps keeping the PC awake" => {
+            "Apps or drivers with active power requests that stop sleep (needs administrator; use Check now on the Power page)."
+        }
         "BIOS age" => {
             "BIOS three or more years old; newer versions often fix stability and security issues."
         }
@@ -344,7 +378,7 @@ fn health_check(ui: &mut Ui) {
         ui,
         "The Health Check runs a set of rules over your hardware information and recent sensor readings, and reports \
          anything that looks wrong or could be better, in plain language with steps to fix it. Nothing is changed \
-         automatically: Omni-HW only reads, you decide what to do.",
+         automatically: you decide what to do, and only a Fix button you click changes a setting.",
     );
     h(ui, "Reading the results");
     bullets(
@@ -380,6 +414,7 @@ fn health_check(ui: &mut Ui) {
             "Live checks (memory pressure, temperatures, throttling) use roughly the last two minutes of readings and need at least a few seconds of data first.",
             "The throttling check needs some time with the CPU under heavy load (a game, a render) before it gives a verdict.",
             "Results also appear at the top of saved and copied reports.",
+            "Some power findings have a Fix button that changes the setting for you. Changes that affect networking or shutdown ask first, and ones that need administrator rights show the Windows permission prompt.",
         ],
     );
     h(ui, "All checks");
@@ -389,6 +424,7 @@ fn health_check(ui: &mut Ui) {
         Category::Gpu,
         Category::Storage,
         Category::System,
+        Category::Power,
         Category::Gaming,
     ];
     for cat in categories {
@@ -476,6 +512,45 @@ fn hardware(ui: &mut Ui) {
             "NVMe health: health %, spare capacity, temperature, data written and read, power-on hours, power cycles, unsafe shutdowns, media errors and warnings.",
             "SATA health (SMART): reallocated, pending and uncorrectable sectors, SSD life left, temperature and the full attribute table. Needs administrator rights.",
             "Live sensors: temperature, activity and read/write speed.",
+        ],
+    );
+}
+
+fn power(ui: &mut Ui) {
+    p(
+        ui,
+        "The Power page (Hardware > Power) shows and changes Windows power settings in one place. Changes apply to the \
+         active power plan right away.",
+    );
+    h(ui, "What it shows");
+    bullets(
+        ui,
+        &[
+            "Power plan: every plan on the PC (Balanced, High performance, Ultimate Performance, vendor plans). Click one to switch.",
+            "Sleep and display: when the screen turns off, the PC sleeps or hibernates and hard disks turn off, plugged in and (on laptops) on battery.",
+            "Power buttons and lid, minimum and maximum processor state, USB selective suspend, PCI Express power saving, wake timers, Wi-Fi power saving and the battery saver level.",
+            "Startup and standby: Fast Startup, hibernation and whether the PC uses Modern Standby.",
+            "Network and Bluetooth adapters: whether Windows may turn them off to save power, and Energy-Efficient Ethernet.",
+            "Waking: the last wake source, the wake history of the last 2 weeks, devices allowed to wake the PC (with Disarm) and active wake timers.",
+            "What's keeping the PC awake: apps and drivers with active power requests (like powercfg /requests).",
+        ],
+    );
+    h(ui, "Changing settings");
+    bullets(
+        ui,
+        &[
+            "Pick a new value from a drop-down or click a button; the page refreshes when the change is done and the status bar says whether it worked.",
+            "Power plan values and plan switching don't need administrator rights. Fast Startup, adapter power saving, Energy-Efficient Ethernet and wake devices do: Windows shows its permission prompt.",
+            "Changes that briefly disconnect a network adapter or change how Windows shuts down ask for confirmation first.",
+            "Power requests and wake timers need administrator rights to read: click Check now.",
+        ],
+    );
+    details(
+        ui,
+        "power",
+        &[
+            "Settings are read with Windows' power APIs when Omni-HW starts, when you open the page or click Refresh, and plan settings every 30 seconds in the background.",
+            "Wake history comes from the System event log (Power-Troubleshooter). Adapter power saving is Device Manager's \"Allow the computer to turn off this device\" setting. Power requests and wake timers come from powercfg.",
         ],
     );
 }
@@ -695,15 +770,20 @@ fn privacy(ui: &mut Ui) {
         &[
             "Omni-HW makes no network connections on its own: no telemetry, no uploads.",
             "The one exception is the update check, which only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
-            "It only reads hardware information and settings; it never changes your system settings. The one exception is the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
+            "It only reads hardware information and settings and never changes system settings on its own. It changes a setting only when you ask: power settings on the Power page or a Health Check Fix button, and the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
             "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in AppData.",
         ],
     );
     h(ui, "Administrator rights");
     p(
         ui,
-        "Administrator rights are only used to read SATA drive health (SMART) and, on some systems, the NVMe health log. \
+        "Administrator rights are used to read SATA drive health (SMART) and, on some systems, the NVMe health log. \
          Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline.",
+    );
+    p(
+        ui,
+        "Some power changes (Fast Startup, adapter power saving, wake devices) and reading power requests also need them. \
+         Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
     );
     h(ui, "Security-related advice");
     p(
