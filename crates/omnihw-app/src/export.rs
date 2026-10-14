@@ -11,25 +11,7 @@ fn sections(info: &SystemInfo, snap: &Snapshot) -> Vec<report::Section> {
     let results = crate::tabs::health::run(info, snap);
     let mut rows: Vec<(String, String)> = omnihw_core::diagnostics::findings(&results)
         .iter()
-        .map(|f| {
-            (
-                if f.category == omnihw_core::diagnostics::Category::Gaming {
-                    format!("{} (Gaming)", f.level.name())
-                } else {
-                    f.level.name().to_string()
-                },
-                format!(
-                    "{}{}: {}",
-                    f.title,
-                    if f.security {
-                        " (security setting: change only if you know what you are doing)"
-                    } else {
-                        ""
-                    },
-                    f.detail
-                ),
-            )
-        })
+        .flat_map(|f| report::finding_rows(f))
         .collect();
     if rows.is_empty() {
         rows.push(("Result".into(), "No problems found".into()));

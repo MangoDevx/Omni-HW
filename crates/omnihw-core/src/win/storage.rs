@@ -14,9 +14,11 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::Storage::Nvme::NVME_LOG_PAGE_HEALTH_INFO;
 use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
-    DISK_GEOMETRY_EX, IDEREGS, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_GET_DEVICE_NUMBER,
-    IOCTL_STORAGE_QUERY_PROPERTY, NVMeDataTypeLogPage, PropertyStandardQuery, ProtocolTypeNvme,
-    READ_ATTRIBUTES, SENDCMDINPARAMS, SENDCMDOUTPARAMS, SMART_CMD, SMART_CYL_HI, SMART_CYL_LOW,
+    DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX, ID_CMD, IDEREGS,
+    IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
+    IOCTL_STORAGE_GET_DEVICE_NUMBER, IOCTL_STORAGE_QUERY_PROPERTY, NVMeDataTypeLogPage,
+    PARTITION_INFORMATION_EX, PropertyStandardQuery, ProtocolTypeNvme, READ_ATTRIBUTES,
+    SENDCMDINPARAMS, SENDCMDOUTPARAMS, SMART_CMD, SMART_CYL_HI, SMART_CYL_LOW,
     SMART_RCV_DRIVE_DATA, STORAGE_DEVICE_NUMBER, STORAGE_PROPERTY_ID, STORAGE_PROPERTY_QUERY,
     STORAGE_PROTOCOL_DATA_DESCRIPTOR, STORAGE_PROTOCOL_SPECIFIC_DATA, StorageDeviceProperty,
     StorageDeviceProtocolSpecificProperty, StorageDeviceSeekPenaltyProperty,
@@ -135,16 +137,27 @@ fn nvme_health(h: &Handle) -> Option<NvmeHealth> {
 /// ATA SMART READ DATA through the legacy SMART IOCTL. Needs a read/write handle, which
 /// Windows only grants to administrators for physical drives.
 fn ata_smart(h: &Handle, drive: u32) -> Option<AtaSmart> {
+    parse_ata_smart(&ata_read(h, drive, SMART_CMD as u8, READ_ATTRIBUTES as u8)?)
+}
+
+/// ATA IDENTIFY DEVICE through the same IOCTL, for the SATA link speed.
+fn sata_link(h: &Handle, drive: u32) -> Option<SataLink> {
+    parse_sata_link(&ata_read(h, drive, ID_CMD as u8, 0)?)
+}
+
+/// One 512-byte ATA data-in command through `SMART_RCV_DRIVE_DATA`.
+fn ata_read(h: &Handle, drive: u32, command: u8, features: u8) -> Option<Vec<u8>> {
+    let smart = command == SMART_CMD as u8;
     let input = SENDCMDINPARAMS {
         cBufferSize: 512,
         irDriveRegs: IDEREGS {
-            bFeaturesReg: READ_ATTRIBUTES as u8,
+            bFeaturesReg: features,
             bSectorCountReg: 1,
             bSectorNumberReg: 1,
-            bCylLowReg: SMART_CYL_LOW as u8,
-            bCylHighReg: SMART_CYL_HI as u8,
+            bCylLowReg: if smart { SMART_CYL_LOW as u8 } else { 0 },
+            bCylHighReg: if smart { SMART_CYL_HI as u8 } else { 0 },
             bDriveHeadReg: 0xA0 | (((drive & 1) as u8) << 4),
-            bCommandReg: SMART_CMD as u8,
+            bCommandReg: command,
             bReserved: 0,
         },
         bDriveNumber: drive as u8,
@@ -161,7 +174,37 @@ fn ata_smart(h: &Handle, drive: u32) -> Option<AtaSmart> {
     const HEADER: usize = offset_of!(SENDCMDOUTPARAMS, bBuffer);
     let mut out = [0u8; HEADER + 512];
     let n = ioctl(h, SMART_RCV_DRIVE_DATA, input, &mut out)?;
-    parse_ata_smart(out.get(HEADER..n)?)
+    out.get(HEADER..n).map(<[u8]>::to_vec)
+}
+
+/// Partition table summary (`IOCTL_DISK_GET_DRIVE_LAYOUT_EX`, no administrator rights needed).
+fn layout(h: &Handle, size: u64) -> Option<DiskLayout> {
+    const HEADER: usize = offset_of!(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry);
+    const ENTRY: usize = size_of::<PARTITION_INFORMATION_EX>();
+    let mut out = vec![0u8; HEADER + 128 * ENTRY];
+    let n = ioctl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, &[0u8; 0], &mut out)?;
+    let out = &out[..n];
+    let style = PartitionStyle::from_raw(u32::from_le_bytes(out.get(0..4)?.try_into().ok()?))?;
+    let count = u32::from_le_bytes(out.get(4..8)?.try_into().ok()?) as usize;
+    let parts: Vec<(u64, u64)> = (0..count.min(128))
+        .filter_map(|i| read_struct::<PARTITION_INFORMATION_EX>(out.get(HEADER + i * ENTRY..)?))
+        .map(|p| {
+            (
+                p.StartingOffset.max(0) as u64,
+                p.PartitionLength.max(0) as u64,
+            )
+        })
+        .filter(|p| p.1 > 0)
+        .collect();
+    Some(DiskLayout {
+        style,
+        partitions: parts.len() as u32,
+        unallocated_bytes: if style == PartitionStyle::Raw {
+            size
+        } else {
+            largest_gap(size, &parts)
+        },
+    })
 }
 
 fn disk_size(h: &Handle) -> Option<u64> {
@@ -251,11 +294,14 @@ pub fn drives() -> Vec<Drive> {
         } else {
             None
         };
-        let ata_smart = if desc.bus.smart_capable() {
-            open(&path, (GENERIC_READ | GENERIC_WRITE).0).and_then(|rw| ata_smart(&rw, index))
+        let rw = if desc.bus.smart_capable() {
+            open(&path, (GENERIC_READ | GENERIC_WRITE).0)
         } else {
             None
         };
+        let ata_smart = rw.as_ref().and_then(|rw| ata_smart(rw, index));
+        let sata_link = rw.as_ref().and_then(|rw| sata_link(rw, index));
+        let size_bytes = disk_size(&h).unwrap_or(0);
         out.push(Drive {
             index,
             model: desc.product,
@@ -263,7 +309,8 @@ pub fn drives() -> Vec<Drive> {
             firmware: desc.revision,
             serial: desc.serial,
             bus: desc.bus,
-            size_bytes: disk_size(&h).unwrap_or(0),
+            size_bytes,
+            layout: layout(&h, size_bytes),
             ssd,
             removable: desc.removable,
             volumes: vols
@@ -273,6 +320,7 @@ pub fn drives() -> Vec<Drive> {
                 .collect(),
             nvme_health,
             ata_smart,
+            sata_link,
         });
     }
     out

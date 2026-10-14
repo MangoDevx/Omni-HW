@@ -5,7 +5,9 @@
 
 pub mod alerts;
 pub mod battery;
+pub mod bios_help;
 pub mod bottleneck;
+pub mod checkup;
 pub mod codename;
 pub mod cpuid;
 pub mod diagnostics;
@@ -48,12 +50,25 @@ pub struct SystemInfo {
     pub power_plan: Option<PowerPlan>,
     /// Windows settings that affect performance and stability.
     pub windows: win::settings::WindowsSettings,
+    /// Firmware, device, event-log and setup data for the Health Check.
+    pub checkup: checkup::Checkup,
     /// Non-fatal problems encountered while gathering.
     pub warnings: Vec<String>,
 }
 
 impl SystemInfo {
     pub fn gather() -> SystemInfo {
+        // The Health Check data (event log, device tree, display modes) is the slowest part;
+        // collect it alongside everything else.
+        std::thread::scope(|s| {
+            let checkup = s.spawn(win::checkup::gather);
+            let mut info = SystemInfo::gather_hardware();
+            info.checkup = checkup.join().unwrap_or_default();
+            info
+        })
+    }
+
+    fn gather_hardware() -> SystemInfo {
         let mut warnings = Vec::new();
         let cpu = cpuid::decode(&cpuid::NativeCpuid);
         let codename = codename::lookup(cpu.vendor, cpu.family, cpu.model);
@@ -97,6 +112,7 @@ impl SystemInfo {
             microcode: win::microcode_revision(),
             power_plan: win::power_plan(),
             windows: win::settings::windows_settings(),
+            checkup: checkup::Checkup::default(),
             warnings,
         }
     }

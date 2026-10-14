@@ -64,6 +64,41 @@ fn run_as_admin(_params: &str) -> bool {
     false
 }
 
+/// Restart straight into the UEFI firmware setup (`shutdown /r /fw /t 0`). Needs administrator
+/// rights, so it goes through UAC; only offered on UEFI systems. Only ever runs on a click
+/// after the user confirmed.
+#[cfg(windows)]
+pub fn restart_to_firmware() -> Result<(), String> {
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    use windows::core::{HSTRING, PCWSTR, w};
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
+    let exe = std::path::Path::new(&root).join(r"System32\shutdown.exe");
+    let file = HSTRING::from(&*exe.to_string_lossy());
+    // SAFETY: NUL-terminated strings that outlive the call. Shows the UAC prompt unless already
+    // elevated; returns a value <= 32 if it failed or the user declined.
+    let r = unsafe {
+        ShellExecuteW(
+            None,
+            w!("runas"),
+            &file,
+            w!("/r /fw /t 0"),
+            PCWSTR::null(),
+            SW_HIDE,
+        )
+    };
+    if r.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err("Couldn't restart: administrator rights were declined, or this PC doesn't support restarting into the firmware setup.".into())
+    }
+}
+
+#[cfg(not(windows))]
+pub fn restart_to_firmware() -> Result<(), String> {
+    Err("Only supported on Windows".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::quote;
