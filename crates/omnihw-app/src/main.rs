@@ -12,6 +12,7 @@ mod help;
 mod icon;
 mod notify;
 mod power_ops;
+mod retro;
 mod sampler;
 mod settings;
 mod tabs;
