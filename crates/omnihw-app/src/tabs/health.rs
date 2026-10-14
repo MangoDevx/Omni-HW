@@ -154,11 +154,48 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
 
     gaming_section(ui, &gaming);
 
-    egui::CollapsingHeader::new(RichText::new(format!("Passed ({})", passed.len())).strong())
-        .default_open(findings.is_empty())
-        .show(ui, |ui| result_grid(ui, "passed", &passed));
-    egui::CollapsingHeader::new(RichText::new(format!("Not checked ({})", skipped.len())).strong())
-        .show(ui, |ui| result_grid(ui, "skipped", &skipped));
+    // Sections hold no suggestions, so they start collapsed.
+    section(
+        ui,
+        "health_passed",
+        "Passed",
+        passed.len().to_string(),
+        GREEN,
+        false,
+        |ui| result_grid(ui, "passed", &passed),
+    );
+    section(
+        ui,
+        "health_skipped",
+        "Not checked",
+        skipped.len().to_string(),
+        Color32::GRAY,
+        false,
+        |ui| result_grid(ui, "skipped", &skipped),
+    );
+}
+
+/// A collapsible tree section with a larger bold title and a coloured pill
+/// (a count or a short status).
+fn section(
+    ui: &mut Ui,
+    id: &str,
+    title: &str,
+    pill_text: String,
+    color: Color32,
+    default_open: bool,
+    body: impl FnOnce(&mut Ui),
+) {
+    CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new(id), default_open)
+        .show_header(ui, |ui| {
+            ui.label(RichText::new(title).size(16.0).strong());
+            pill(ui, pill_text, color, false);
+        })
+        .body(|ui| {
+            ui.add_space(4.0);
+            body(ui)
+        });
+    ui.add_space(4.0);
 }
 
 /// Gaming checks in their own collapsible section; the header shows the suggestion count in blue.
@@ -167,21 +204,20 @@ fn gaming_section(ui: &mut Ui, gaming: &[CheckResult]) {
         return;
     }
     let findings = diagnostics::findings(gaming);
-    // A plain expandable header like "Passed"; the finding cards appear inside when opened.
-    CollapsingState::load_with_default_open(ui.ctx(), egui::Id::new("health_gaming"), false)
-        .show_header(ui, |ui| {
-            ui.label(RichText::new("Gaming").strong());
-            if findings.is_empty() {
-                ui.label(RichText::new("– all good").color(crate::heat::ink(ui.visuals(), GREEN)));
-            } else {
-                ui.label(
-                    RichText::new(format!("– {}", plural(findings.len(), "suggestion")))
-                        .color(crate::heat::ink(ui.visuals(), BLUE))
-                        .strong(),
-                );
-            }
-        })
-        .body(|ui| {
+    let (label, color) = if findings.is_empty() {
+        ("all good".to_string(), GREEN)
+    } else {
+        (plural(findings.len(), "suggestion"), BLUE)
+    };
+    // Open only when there is something to act on.
+    section(
+        ui,
+        "health_gaming",
+        "Gaming",
+        label,
+        color,
+        !findings.is_empty(),
+        |ui| {
             ui.weak("Settings that mainly affect games: frame rates, latency and GPU features.");
             ui.add_space(6.0);
             for f in &findings {
@@ -192,7 +228,8 @@ fn gaming_section(ui: &mut Ui, gaming: &[CheckResult]) {
                 .filter(|r| !matches!(r.outcome, Outcome::Findings(_)))
                 .collect();
             result_grid(ui, "gaming_rest", &rest);
-        });
+        },
+    );
 }
 
 /// Passed (green OK + detail) and skipped (reason) checks as a compact table.
@@ -258,71 +295,79 @@ fn security_icon(ui: &mut Ui) {
     );
 }
 
+/// Small rounded tag with tinted fill, used for counts, levels and the security marker.
+fn pill(ui: &mut Ui, text: impl Into<String>, color: Color32, small: bool) {
+    let ink = crate::heat::ink(ui.visuals(), color);
+    let mut t = RichText::new(text.into()).strong().color(ink);
+    if small {
+        t = t.small();
+    }
+    egui::Frame::new()
+        .fill(color.gamma_multiply(0.16))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(7, 1))
+        .show(ui, |ui| ui.label(t));
+}
+
+/// A finding: a softly shaded panel with a thin accent edge in the level colour, no border.
 fn finding_card(ui: &mut Ui, f: &Finding) {
     let color = level_color(f.level);
     // Warnings and critical issues start expanded; suggestions start collapsed.
     let default_open = f.level != Level::Info;
-    egui::Frame::group(ui.style())
-        .inner_margin(12)
-        .corner_radius(8)
+    let resp = egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .corner_radius(6)
+        .inner_margin(egui::Margin {
+            left: 14,
+            right: 10,
+            top: 8,
+            bottom: 8,
+        })
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             CollapsingState::load_with_default_open(ui.ctx(), card_id(f), default_open)
                 .show_header(ui, |ui| {
-                    let (r, _) = ui.allocate_exact_size(vec2(4.0, 20.0), Sense::hover());
-                    ui.painter().rect_filled(r, 2, color);
-                    ui.label(
-                        RichText::new(f.level.name().to_uppercase())
-                            .small()
-                            .strong()
-                            .color(crate::heat::ink(ui.visuals(), color)),
-                    );
-                    ui.weak(f.category.name());
-                    ui.label(RichText::new(&f.title).size(16.0).strong());
+                    ui.label(RichText::new(&f.title).size(15.0).strong());
+                    pill(ui, f.level.name(), color, true);
+                    // Inside the Gaming section the category is implied.
+                    if f.category != Category::Gaming {
+                        ui.weak(f.category.name());
+                    }
                     if f.security {
-                        security_icon(ui);
-                        ui.label(
-                            RichText::new("Security setting")
-                                .small()
-                                .strong()
-                                .color(crate::heat::ink(ui.visuals(), ORANGE)),
-                        );
+                        pill(ui, "Security setting", ORANGE, true);
                     }
                 })
                 .body(|ui| finding_body(ui, f));
         });
-    ui.add_space(8.0);
+    let r = resp.response.rect;
+    ui.painter().rect_filled(
+        egui::Rect::from_min_size(r.min, vec2(3.0, r.height())),
+        egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 },
+        color,
+    );
+    ui.add_space(6.0);
 }
 
 fn finding_body(ui: &mut Ui, f: &Finding) {
     ui.add(egui::Label::new(&f.detail).wrap());
     if f.security {
-        ui.add_space(4.0);
-        egui::Frame::new()
-            .fill(ORANGE.gamma_multiply(0.15))
-            .stroke(egui::Stroke::new(1.0, ORANGE))
-            .corner_radius(6)
-            .inner_margin(8)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    security_icon(ui);
-                    ui.label(
-                        RichText::new(
-                            "This is a security setting. Only change it if you know what you are doing \
-                             and understand the protection you would be giving up.",
-                        )
-                        .color(crate::heat::ink(ui.visuals(), ORANGE)),
-                    );
-                });
-            });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            security_icon(ui);
+            ui.label(
+                RichText::new(
+                    "Security setting: only change it if you understand the protection you would be giving up.",
+                )
+                .color(crate::heat::ink(ui.visuals(), ORANGE)),
+            );
+        });
     }
     if !f.tips.is_empty() {
-        ui.add_space(4.0);
-        ui.label(RichText::new("How to fix").strong());
-        for t in &f.tips {
+        ui.add_space(8.0);
+        ui.label(RichText::new("HOW TO FIX").small().strong().weak());
+        for (n, t) in f.tips.iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
-                ui.label("•");
+                ui.weak(format!("{}.", n + 1));
                 ui.add(egui::Label::new(t).wrap());
             });
         }
