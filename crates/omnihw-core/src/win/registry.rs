@@ -1,4 +1,5 @@
-//! Read-only registry helpers for HKLM / HKCU values (no administrator rights needed).
+//! Registry helpers for HKLM / HKCU values. Reads need no administrator rights; the writers
+//! (used only by power settings changes) usually do for HKLM.
 
 use windows::Win32::Foundation::ERROR_SUCCESS;
 use windows::Win32::System::Registry::{
@@ -99,4 +100,95 @@ pub(crate) fn key_exists(hive: Hive, subkey: &str) -> bool {
     } else {
         false
     }
+}
+
+/// Names of the direct subkeys of a key (empty if it can't be opened).
+pub(crate) fn subkeys(hive: Hive, subkey: &str) -> Vec<String> {
+    use windows::Win32::System::Registry::RegEnumKeyExW;
+    use windows::core::PWSTR;
+    let mut h = HKEY::default();
+    // SAFETY: valid out pointer; key closed below.
+    let st = unsafe {
+        RegOpenKeyExW(
+            hive.handle(),
+            &HSTRING::from(subkey),
+            None,
+            KEY_READ,
+            &mut h,
+        )
+    };
+    if st != ERROR_SUCCESS {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for i in 0.. {
+        let mut name = [0u16; 256];
+        let mut len = name.len() as u32;
+        // SAFETY: buffer length in characters passed in `len`.
+        let st = unsafe {
+            RegEnumKeyExW(
+                h,
+                i,
+                Some(PWSTR(name.as_mut_ptr())),
+                &mut len,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        if st != ERROR_SUCCESS {
+            break;
+        }
+        out.push(String::from_utf16_lossy(&name[..len as usize]));
+    }
+    // SAFETY: handle opened above.
+    let _ = unsafe { RegCloseKey(h) };
+    out
+}
+
+/// Write a REG_DWORD (creating the key if needed). Usually needs administrator rights for HKLM.
+pub(crate) fn set_dword(
+    hive: Hive,
+    subkey: &str,
+    value: &str,
+    data: u32,
+) -> Result<(), windows::Win32::Foundation::WIN32_ERROR> {
+    use windows::Win32::System::Registry::{REG_DWORD, RegSetKeyValueW};
+    let bytes = data.to_le_bytes();
+    // SAFETY: data pointer and size describe `bytes`.
+    let st = unsafe {
+        RegSetKeyValueW(
+            hive.handle(),
+            &HSTRING::from(subkey),
+            &HSTRING::from(value),
+            REG_DWORD.0,
+            Some(bytes.as_ptr().cast()),
+            bytes.len() as u32,
+        )
+    };
+    if st == ERROR_SUCCESS { Ok(()) } else { Err(st) }
+}
+
+/// Write a REG_SZ value. Usually needs administrator rights for HKLM.
+pub(crate) fn set_string(
+    hive: Hive,
+    subkey: &str,
+    value: &str,
+    data: &str,
+) -> Result<(), windows::Win32::Foundation::WIN32_ERROR> {
+    use windows::Win32::System::Registry::{REG_SZ, RegSetKeyValueW};
+    let wide: Vec<u16> = data.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: data pointer and size (bytes, including the NUL) describe `wide`.
+    let st = unsafe {
+        RegSetKeyValueW(
+            hive.handle(),
+            &HSTRING::from(subkey),
+            &HSTRING::from(value),
+            REG_SZ.0,
+            Some(wide.as_ptr().cast()),
+            (wide.len() * 2) as u32,
+        )
+    };
+    if st == ERROR_SUCCESS { Ok(()) } else { Err(st) }
 }

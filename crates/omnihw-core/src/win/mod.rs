@@ -8,11 +8,14 @@ pub mod nvml;
 #[cfg(windows)]
 mod pdh;
 pub mod perf;
+pub mod power;
 #[cfg(windows)]
 pub(crate) mod registry;
 pub mod settings;
 #[cfg(windows)]
 pub mod storage;
+#[cfg(windows)]
+mod wmi;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OsInfo {
