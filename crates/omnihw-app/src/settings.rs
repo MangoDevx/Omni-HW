@@ -11,6 +11,8 @@ pub enum Theme {
     System,
     Dark,
     Light,
+    /// Early-2000s desktop look: beveled controls on beige surfaces (a light theme).
+    Retro,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +121,7 @@ impl Settings {
             Theme::System => "system",
             Theme::Dark => "dark",
             Theme::Light => "light",
+            Theme::Retro => "retro",
         };
         let nav = match self.nav_style {
             NavStyle::Grouped => "grouped",
@@ -184,6 +187,7 @@ impl Settings {
                     "system" => s.theme = Theme::System,
                     "dark" => s.theme = Theme::Dark,
                     "light" => s.theme = Theme::Light,
+                    "retro" => s.theme = Theme::Retro,
                     _ => {}
                 },
                 "ui_scale" => {
@@ -265,10 +269,12 @@ impl Settings {
 
 /// Apply theme and UI scale.
 pub fn apply_visuals(ctx: &egui::Context, s: &Settings) {
+    // Retro replaces the light style while selected; any other choice restores egui's own.
+    crate::retro::set_enabled(ctx, s.theme == Theme::Retro);
     ctx.set_theme(match s.theme {
         Theme::System => egui::ThemePreference::System,
         Theme::Dark => egui::ThemePreference::Dark,
-        Theme::Light => egui::ThemePreference::Light,
+        Theme::Light | Theme::Retro => egui::ThemePreference::Light,
     });
     ctx.set_zoom_factor(
         s.ui_scale
@@ -299,6 +305,10 @@ mod tests {
             dismissed: vec!["Uptime|Info|Windows has been running for  days".into()],
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);
+        for theme in [Theme::System, Theme::Dark, Theme::Light, Theme::Retro] {
+            let t = Settings { theme, ..s.clone() };
+            assert_eq!(Settings::from_ini(&t.to_ini()).theme, theme);
+        }
         // With remembering off, dismissals are kept for the session only.
         let session_only = Settings {
             remember_dismissed: false,

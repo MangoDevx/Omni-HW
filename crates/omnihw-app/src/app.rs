@@ -142,6 +142,7 @@ impl OmniApp {
         let mut settings = Settings::load();
         // The Run entry is the source of truth (it may have been removed outside Omni-HW).
         settings.launch_at_startup = crate::autostart::is_enabled();
+        crate::retro::install(&cc.egui_ctx);
         crate::settings::apply_visuals(&cc.egui_ctx, &settings);
         crate::export::set_data_dir(settings.data_dir.clone());
         crate::dismissed::load(&settings.dismissed);

@@ -773,7 +773,7 @@ fn settings(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Theme: Match Windows (follows your light/dark mode), Dark or Light.",
+            "Theme: Match Windows (follows your light/dark mode), Dark, Light or Retro (2000s), a classic beveled desktop look with square buttons and sunken fields.",
             "UI scale: makes everything larger or smaller (75 % to 200 %). Reset returns to 100 %.",
             "Navigation bar: Grouped sorts pages into categories with dropdown menus so the bar fits on one line; Classic shows every page as its own tab (it may wrap onto two lines in small windows).",
         ],

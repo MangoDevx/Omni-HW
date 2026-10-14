@@ -55,11 +55,13 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
                         Theme::System => "Match Windows",
                         Theme::Dark => "Dark",
                         Theme::Light => "Light",
+                        Theme::Retro => "Retro (2000s)",
                     })
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut s.theme, Theme::System, "Match Windows");
                         ui.selectable_value(&mut s.theme, Theme::Dark, "Dark");
                         ui.selectable_value(&mut s.theme, Theme::Light, "Light");
+                        ui.selectable_value(&mut s.theme, Theme::Retro, "Retro (2000s)");
                     });
                 ui.end_row();
 
