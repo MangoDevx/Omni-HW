@@ -187,7 +187,7 @@ pub(super) fn health_check(ui: &mut Ui) {
         ui,
         "Settings that mainly matter for games (Resizable BAR, Memory Integrity, hardware GPU scheduling, Game Mode) are \
          grouped in the Gaming category. Its findings are counted separately at the top (\"gaming suggestions below\") \
-         rather than in the main summary.",
+         rather than in the main summary. Turn off Show gaming suggestions in Settings > Health Check to hide the \n         Gaming category and its count everywhere.",
     );
     h(ui, "Dismissing issues");
     bullets(

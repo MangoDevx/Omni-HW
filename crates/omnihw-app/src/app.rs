@@ -434,13 +434,17 @@ impl eframe::App for OmniApp {
                     let snap = self.sampler.snapshot();
                     match self.tab {
                         Tab::Overview => {
-                            let health = self.health.get(info, &snap);
+                            let health = self.health.get(info, &snap, self.settings.show_gaming);
                             if tabs::overview::show(ui, info, &snap, health) {
                                 self.tab = Tab::Health;
                             }
                         }
                         Tab::Health => {
-                            tabs::health::show(ui, info, self.health.get(info, &snap));
+                            tabs::health::show(
+                                ui,
+                                info,
+                                self.health.get(info, &snap, self.settings.show_gaming),
+                            );
                         }
                         Tab::Cpu => tabs::cpu::show(ui, info, &snap),
                         Tab::Caches => tabs::caches::show(ui, info),

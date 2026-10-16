@@ -272,6 +272,9 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
     });
 
     group(ui, "Health Check", |ui| {
+        ui.checkbox(&mut s.show_gaming, "Show gaming suggestions");
+        ui.weak("When off, the Gaming category and its suggestions are hidden in Health Check and on Overview.");
+        ui.add_space(4.0);
         ui.checkbox(
             &mut s.remember_dismissed,
             "Keep dismissed issues dismissed after restarting Omni-HW",

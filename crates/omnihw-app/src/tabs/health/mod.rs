@@ -41,16 +41,27 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
 /// than on every frame (hovering alone repaints at the display rate).
 #[derive(Default)]
 pub struct HealthCache {
-    /// (sample count, power revision, dismissed revision) the report was built for.
-    key: Option<(u64, u64, u64)>,
+    /// (sample count, power revision, dismissed revision, show gaming) the report was built for.
+    key: Option<(u64, u64, u64, bool)>,
     report: Report,
 }
 
 impl HealthCache {
-    pub fn get(&mut self, info: &SystemInfo, snap: &Snapshot) -> &Report {
-        let key = (snap.samples, snap.power_rev, crate::dismissed::revision());
+    /// With `show_gaming` off, the Gaming category is left out entirely (findings, passed
+    /// checks and dismissed gaming findings).
+    pub fn get(&mut self, info: &SystemInfo, snap: &Snapshot, show_gaming: bool) -> &Report {
+        let key = (
+            snap.samples,
+            snap.power_rev,
+            crate::dismissed::revision(),
+            show_gaming,
+        );
         if self.key != Some(key) {
-            self.report = Report::new(run(info, snap));
+            let mut all = run(info, snap);
+            if !show_gaming {
+                all.retain(|r| !is_gaming(r));
+            }
+            self.report = Report::new(all);
             self.key = Some(key);
         }
         &self.report

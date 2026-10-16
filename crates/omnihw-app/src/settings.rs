@@ -66,6 +66,8 @@ pub struct Settings {
     pub check_updates_at_start: bool,
     /// Keep dismissed Health Check findings dismissed after a restart.
     pub remember_dismissed: bool,
+    /// Show the Gaming category and gaming suggestions in Health Check and on Overview.
+    pub show_gaming: bool,
     /// Keys of dismissed Health Check findings (see `dismissed::key`). Only saved to disk when
     /// `remember_dismissed` is on.
     pub dismissed: Vec<String>,
@@ -87,6 +89,7 @@ impl Default for Settings {
             data_dir: None,
             check_updates_at_start: false,
             remember_dismissed: true,
+            show_gaming: true,
             dismissed: Vec::new(),
         }
     }
@@ -154,6 +157,7 @@ impl Settings {
              data_dir={data_dir}\n\
              check_updates_at_start={}\n\
              remember_dismissed={}\n\
+             show_gaming={}\n\
              {dismissed}",
             self.ui_scale,
             self.start_page,
@@ -165,6 +169,7 @@ impl Settings {
             bool_str(self.alert_notifications),
             bool_str(self.check_updates_at_start),
             bool_str(self.remember_dismissed),
+            bool_str(self.show_gaming),
         )
     }
 
@@ -232,6 +237,7 @@ impl Settings {
                 "remember_dismissed" => {
                     s.remember_dismissed = parse_bool(v).unwrap_or(s.remember_dismissed)
                 }
+                "show_gaming" => s.show_gaming = parse_bool(v).unwrap_or(s.show_gaming),
                 "dismissed" if !v.is_empty() => s.dismissed.push(v.to_string()),
                 _ => {}
             }
@@ -300,6 +306,7 @@ mod tests {
             data_dir: Some(PathBuf::from(r"D:\Omni HW\data")),
             check_updates_at_start: true,
             remember_dismissed: true,
+            show_gaming: false,
             dismissed: vec!["Uptime|Info|Windows has been running for  days".into()],
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);
