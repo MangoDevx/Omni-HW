@@ -18,7 +18,6 @@ raw-window-handle = "0.6"
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = [
-    "Win32_Graphics_Gdi",
     "Win32_Networking_WinHttp",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",

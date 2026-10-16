@@ -20,6 +20,13 @@ impl Column {
         format!("{} / {}", self.group, self.label)
     }
 
+    /// Whether `key` equals [`Column::key`], without allocating.
+    pub fn has_key(&self, key: &str) -> bool {
+        key.strip_prefix(self.group.as_str())
+            .and_then(|rest| rest.strip_prefix(" / "))
+            == Some(self.label.as_str())
+    }
+
     /// CSV header text, e.g. "CPU Usage / Total CPU Usage [%]".
     pub fn header(&self) -> String {
         let unit = self.unit.symbol();
@@ -103,7 +110,7 @@ impl Recording {
 
     /// Column with the given [`Column::key`] ("group / label").
     pub fn column_by_key(&self, key: &str) -> Option<usize> {
-        self.columns.iter().position(|c| c.key() == key)
+        self.columns.iter().position(|c| c.has_key(key))
     }
 
     /// Parse a recording written by [`Recording::csv_header`] / [`Recording::csv_row`].
@@ -336,6 +343,18 @@ mod tests {
             unit,
             value: v,
         }
+    }
+
+    #[test]
+    fn key_match_agrees_with_key() {
+        let mut t = SensorTable::default();
+        t.update([r("a", Unit::Percent, 1.0)]);
+        let rec = Recording::new(0.0, &t);
+        let c = &rec.columns[0];
+        assert!(c.has_key(&c.key()));
+        assert!(!c.has_key("G, 1 / b label"));
+        assert!(!c.has_key("G, 1"));
+        assert_eq!(rec.column_by_key(&c.key()), Some(0));
     }
 
     #[test]

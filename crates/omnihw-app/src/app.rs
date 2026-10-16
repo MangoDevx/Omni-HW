@@ -111,6 +111,11 @@ pub struct OmniApp {
     /// In-app documentation window.
     help: crate::help::HelpState,
     updates: crate::update::UpdateChecker,
+    /// Health Check results, shared by the Health tab and the Overview banner.
+    health: tabs::health::HealthCache,
+    /// Settings changed but not written to disk yet: they're saved once no mouse button is
+    /// held, so dragging the UI scale slider doesn't rewrite the file on every frame.
+    settings_unsaved: bool,
 }
 
 impl OmniApp {
@@ -145,6 +150,8 @@ impl OmniApp {
             minimize_on_start: crate::autostart::launch_flags().1,
             help: Default::default(),
             updates,
+            health: Default::default(),
+            settings_unsaved: false,
         }
     }
 
@@ -216,7 +223,12 @@ impl OmniApp {
         let Some(info) = self.sampler.info() else {
             return;
         };
-        let firing = tabs::alerts::firing_count(&self.sampler.snapshot());
+        // One short lock for what the bar shows.
+        let (firing, elapsed) = {
+            let snap = self.sampler.snapshot();
+            let elapsed = snap.recording.as_ref().map(|r| r.rec.duration_secs());
+            (tabs::alerts::firing_count(&snap), elapsed)
+        };
         if firing > 0 {
             let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
             let b = Button::new(RichText::new(text).strong().color(egui::Color32::WHITE))
@@ -225,12 +237,6 @@ impl OmniApp {
                 self.tab = Tab::Alerts;
             }
         }
-        let elapsed = self
-            .sampler
-            .snapshot()
-            .recording
-            .as_ref()
-            .map(|r| r.rec.duration_secs());
         let rec_button = match elapsed {
             Some(t) => Button::new(
                 RichText::new(format!(
@@ -337,6 +343,9 @@ impl Drop for OmniApp {
     fn drop(&mut self) {
         // Remove the tray icon before the process exits.
         crate::tray::shutdown();
+        if self.settings_unsaved {
+            let _ = self.settings.save();
+        }
     }
 }
 
@@ -418,20 +427,21 @@ impl eframe::App for OmniApp {
                             &self.updates,
                         ) {
                             crate::settings::apply_visuals(ui.ctx(), &self.settings);
-                            if let Err(e) = self.settings.save() {
-                                self.status = Some((e, Instant::now()));
-                            }
+                            self.settings_unsaved = true;
                         }
                         return;
                     }
                     let snap = self.sampler.snapshot();
                     match self.tab {
                         Tab::Overview => {
-                            if tabs::overview::show(ui, info, &snap) {
+                            let health = self.health.get(info, &snap);
+                            if tabs::overview::show(ui, info, &snap, health) {
                                 self.tab = Tab::Health;
                             }
                         }
-                        Tab::Health => tabs::health::show(ui, info, &snap),
+                        Tab::Health => {
+                            tabs::health::show(ui, info, self.health.get(info, &snap));
+                        }
                         Tab::Cpu => tabs::cpu::show(ui, info, &snap),
                         Tab::Caches => tabs::caches::show(ui, info),
                         Tab::Mainboard => tabs::mainboard::show(ui, info),
@@ -457,10 +467,12 @@ impl eframe::App for OmniApp {
         // only when "remember dismissed" is on).
         if let Some(keys) = crate::dismissed::take_changes() {
             self.settings.dismissed = keys;
-            if self.settings.remember_dismissed
-                && let Err(e) = self.settings.save()
-            {
-                self.status = Some((e, Instant::now()));
+            self.settings_unsaved |= self.settings.remember_dismissed;
+        }
+        if self.settings_unsaved && !ui.ctx().input(|i| i.pointer.any_down()) {
+            self.settings_unsaved = false;
+            if let Err(e) = self.settings.save() {
+                self.set_status(e);
             }
         }
     }

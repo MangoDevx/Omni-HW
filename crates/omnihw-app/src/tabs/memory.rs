@@ -57,19 +57,19 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         .num_columns(8)
         .spacing([12.0, 4.0])
         .show(ui, |ui| {
-            for h in [
-                "Slot",
-                "Size",
-                "Type",
-                "Rated",
-                "Configured",
-                "Ranks",
-                "Manufacturer",
-                "Part Number",
-            ] {
-                ui.label(egui::RichText::new(h).underline());
-            }
-            ui.end_row();
+            super::header_row(
+                ui,
+                &[
+                    "Slot",
+                    "Size",
+                    "Type",
+                    "Rated",
+                    "Configured",
+                    "Ranks",
+                    "Manufacturer",
+                    "Part Number",
+                ],
+            );
             for d in &dimms {
                 ui.label(&d.locator);
                 ui.label(format!("{} GB", d.size_mb / 1024));

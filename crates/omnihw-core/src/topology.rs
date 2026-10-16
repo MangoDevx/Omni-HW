@@ -5,6 +5,7 @@
 //! 64-bit Windows (`KAFFINITY` is 8 bytes, `GROUP_AFFINITY` is 16 bytes).
 
 use crate::cpuid::CacheKind;
+use crate::le::{u8_at, u16_at, u32_at, u64_at};
 
 const REL_PROCESSOR_CORE: u32 = 0;
 const REL_NUMA_NODE: u32 = 1;
@@ -92,19 +93,6 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
-
-fn u8_at(b: &[u8], o: usize) -> Option<u8> {
-    b.get(o).copied()
-}
-fn u16_at(b: &[u8], o: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?))
-}
-fn u32_at(b: &[u8], o: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?))
-}
-fn u64_at(b: &[u8], o: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(b.get(o..o + 8)?.try_into().ok()?))
-}
 
 /// Expand `count` GROUP_AFFINITY structs starting at `off` into logical ids.
 fn group_masks(rec: &[u8], off: usize, count: usize) -> Option<Vec<LogicalId>> {

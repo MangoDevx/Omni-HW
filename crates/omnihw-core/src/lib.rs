@@ -12,6 +12,7 @@ pub mod codename;
 pub mod cpuid;
 pub mod diagnostics;
 pub mod gpu;
+mod le;
 pub mod power;
 pub mod recording;
 pub mod report;
@@ -156,10 +157,7 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
 /// The `Update Revision` registry value: 4 bytes on current Windows, 8 bytes (revision in
 /// the high DWORD) on older builds.
 pub fn parse_microcode(b: &[u8]) -> Option<u32> {
-    let dw = |o: usize| {
-        b.get(o..o + 4)
-            .map(|x| u32::from_le_bytes(x.try_into().unwrap()))
-    };
+    let dw = |o: usize| le::u32_at(b, o);
     match b.len() {
         8 => dw(4).filter(|&v| v != 0).or_else(|| dw(0)),
         4 => dw(0),

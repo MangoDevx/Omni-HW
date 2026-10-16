@@ -75,7 +75,7 @@ fn quote(p: &Path) -> String {
 
 /// Apply a change, asking for administrator rights only when needed. Blocks.
 pub fn apply(action: &Action) -> Result<(), String> {
-    let elevated = omnihw_core::win::is_elevated();
+    let elevated = crate::elevate::elevated();
     if !action.needs_admin() || elevated {
         match power::apply(action) {
             Ok(()) => return Ok(()),
@@ -100,7 +100,7 @@ pub fn apply(action: &Action) -> Result<(), String> {
 
 /// Read active power requests and wake timers, elevating if needed. Blocks.
 pub fn query_admin() -> Result<(Vec<PowerRequest>, Vec<String>), String> {
-    let raw = if omnihw_core::win::is_elevated() {
+    let raw = if crate::elevate::elevated() {
         power::query_admin_raw().ok_or("powercfg failed")?
     } else {
         let out = temp_file("query");

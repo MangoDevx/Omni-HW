@@ -8,10 +8,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
             .num_columns(5)
             .spacing([16.0, 4.0])
             .show(ui, |ui| {
-                for h in ["Cache", "Count", "Size", "Associativity", "Line"] {
-                    ui.label(egui::RichText::new(h).underline());
-                }
-                ui.end_row();
+                super::header_row(ui, &["Cache", "Count", "Size", "Associativity", "Line"]);
                 for s in t.cache_summary() {
                     ui.label(s.name());
                     ui.label(s.count.to_string());
@@ -34,10 +31,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
         .num_columns(6)
         .spacing([16.0, 4.0])
         .show(ui, |ui| {
-            for h in ["Cache", "Size", "Ways", "Sets", "Line", "Shared by"] {
-                ui.label(egui::RichText::new(h).underline());
-            }
-            ui.end_row();
+            super::header_row(ui, &["Cache", "Size", "Ways", "Sets", "Line", "Shared by"]);
             for d in &info.cpu.caches {
                 ui.label(d.name());
                 ui.label(format_bytes(d.size_bytes));

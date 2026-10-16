@@ -2,8 +2,6 @@ use crate::sampler::Sampler;
 use egui::RichText;
 use omnihw_core::sensors::Tracked;
 
-const INTERVALS: [u64; 4] = [250, 500, 1000, 2000];
-
 pub fn show(ui: &mut egui::Ui, sampler: &Sampler) {
     ui.horizontal(|ui| {
         if ui.button("Reset min/max").clicked() {
@@ -13,7 +11,7 @@ pub fn show(ui: &mut egui::Ui, sampler: &Sampler) {
         egui::ComboBox::from_label("Interval")
             .selected_text(format!("{ms} ms"))
             .show_ui(ui, |ui| {
-                for v in INTERVALS {
+                for v in crate::settings::INTERVALS_MS {
                     ui.selectable_value(&mut ms, v, format!("{v} ms"));
                 }
             });
@@ -54,10 +52,7 @@ pub fn sensor_grid<'a>(ui: &mut egui::Ui, id_salt: &str, rows: impl Iterator<Ite
         .spacing([16.0, 2.0])
         .min_col_width(70.0)
         .show(ui, |ui| {
-            for h in ["Sensor", "Current", "Min", "Max", "Average"] {
-                ui.label(RichText::new(h).underline());
-            }
-            ui.end_row();
+            super::header_row(ui, &["Sensor", "Current", "Min", "Max", "Average"]);
             for t in rows {
                 let u = t.reading.unit;
                 ui.label(&t.reading.label);

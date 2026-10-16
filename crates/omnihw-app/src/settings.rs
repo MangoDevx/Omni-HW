@@ -1,8 +1,6 @@
 //! User settings, saved as `key=value` lines in `%APPDATA%/OmniHW/settings.ini`.
 //! Unknown keys and malformed values are ignored, so older/newer files stay readable.
 
-// Wired into app.rs/main.rs after merge; remove this allow then.
-
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

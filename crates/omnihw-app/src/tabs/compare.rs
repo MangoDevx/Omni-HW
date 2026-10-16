@@ -49,9 +49,39 @@ pub struct CompareState {
     selected: BTreeSet<String>,
     filter: String,
     initialized: bool,
+    /// "Refresh list" was clicked: rescan on the next frame.
+    rescan: bool,
 }
 
 impl CompareState {
+    /// Do this view's file work: list saved recordings (first time and after "Refresh list") and
+    /// parse the CSVs picked as A, B or the single recording. Call it before taking the snapshot
+    /// lock, so reading files never holds up the sampler.
+    pub fn load_files(&mut self) {
+        if !self.scanned || std::mem::take(&mut self.rescan) {
+            self.scan();
+        }
+        let picked = [&self.a, &self.b, &self.single];
+        let paths: Vec<PathBuf> = picked
+            .into_iter()
+            .filter_map(|s| match s {
+                Some(Source::File(p)) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+        for p in paths {
+            self.load(&p);
+        }
+    }
+
+    /// A file picked this frame is parsed by [`Self::load_files`] on the next one.
+    fn is_loaded(&self, src: &Option<Source>) -> bool {
+        match src {
+            Some(Source::File(p)) => self.cache.contains_key(p),
+            _ => true,
+        }
+    }
+
     /// List saved recordings in the report folder, newest first.
     fn scan(&mut self) {
         let mut files: Vec<FileEntry> = std::fs::read_dir(export::report_dir())
@@ -180,9 +210,6 @@ pub(super) fn pick_single<'a>(
     snap: &'a Snapshot,
     st: &'a mut CompareState,
 ) -> Result<Option<(&'a Recording, String)>, String> {
-    if !st.scanned {
-        st.scan();
-    }
     if st.single.is_none() {
         st.single = if snap.viewed_recording().is_some() {
             Some(Source::Memory)
@@ -190,20 +217,13 @@ pub(super) fn pick_single<'a>(
             st.files.first().map(|f| Source::File(f.path.clone()))
         };
     }
-    let mut refresh = false;
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("Recording").strong());
         source_picker(ui, "single_src", &mut st.single, snap, &st.files, &st.cache);
-        refresh = ui
-            .button("Refresh list")
-            .on_hover_text("Rescan Documents for saved recordings")
-            .clicked();
+        refresh_button(ui, st);
     });
-    if refresh {
-        st.scan();
-    }
-    if let Some(Source::File(p)) = st.single.clone() {
-        st.load(&p);
+    if !st.is_loaded(&st.single) {
+        ui.ctx().request_repaint();
     }
     let st: &'a CompareState = st;
     let Some(src) = &st.single else {
@@ -220,28 +240,37 @@ pub(super) fn pick_single<'a>(
     Ok(rec.map(|r| (r, source_label(src, snap, &st.cache))))
 }
 
-pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
-    if !st.scanned {
-        st.scan();
+/// "Refresh list": rescans on the next frame, outside the snapshot lock.
+fn refresh_button(ui: &mut Ui, st: &mut CompareState) {
+    if ui
+        .button("Refresh list")
+        .on_hover_text("Rescan Documents for saved recordings")
+        .clicked()
+    {
+        st.rescan = true;
+        ui.ctx().request_repaint();
     }
-    let mut refresh = false;
+}
+
+/// First column index of every sensor key ("group / label") in a recording.
+fn key_index(rec: &Recording) -> HashMap<String, usize> {
+    let mut map = HashMap::with_capacity(rec.columns.len());
+    for (i, c) in rec.columns.iter().enumerate() {
+        map.entry(c.key()).or_insert(i);
+    }
+    map
+}
+
+pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
     ui.horizontal_wrapped(|ui| {
         ui.label(RichText::new("A").strong());
         source_picker(ui, "cmp_a", &mut st.a, snap, &st.files, &st.cache);
         ui.label(RichText::new("B").strong());
         source_picker(ui, "cmp_b", &mut st.b, snap, &st.files, &st.cache);
-        refresh = ui
-            .button("Refresh list")
-            .on_hover_text("Rescan Documents for saved recordings")
-            .clicked();
+        refresh_button(ui, st);
     });
-    if refresh {
-        st.scan();
-    }
-    for src in [st.a.clone(), st.b.clone()].into_iter().flatten() {
-        if let Source::File(p) = src {
-            st.load(&p);
-        }
+    if !st.is_loaded(&st.a) || !st.is_loaded(&st.b) {
+        ui.ctx().request_repaint();
     }
 
     let CompareState {
@@ -282,11 +311,20 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
     };
     let ((rec_a, name_a), (rec_b, name_b)) = (ra, rb);
 
-    // Sensors present in both, in A's order.
-    let common: Vec<&Column> = rec_a
+    // Sensors present in both, in A's order, with their key and (A, B) columns.
+    let (keys_a, keys_b) = (key_index(rec_a), key_index(rec_b));
+    let common: Vec<Common> = rec_a
         .columns
         .iter()
-        .filter(|c| rec_b.column_by_key(&c.key()).is_some())
+        .filter_map(|c| {
+            let key = c.key();
+            let pair = (*keys_a.get(&key)?, *keys_b.get(&key)?);
+            Some(Common {
+                column: c,
+                key,
+                pair,
+            })
+        })
         .collect();
     if common.is_empty() {
         ui.colored_label(
@@ -297,15 +335,15 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
     }
     if !*initialized {
         for c in &common {
-            let k = c.key();
+            let k = &c.key;
             if DEFAULT_KEYS.iter().any(|d| {
                 if d.starts_with('/') {
                     k.ends_with(d)
                 } else {
-                    k == *d
+                    k == d
                 }
             }) {
-                selected.insert(k);
+                selected.insert(k.clone());
             }
         }
         *initialized = true;
@@ -323,7 +361,8 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
         let down = egui::Layout::top_down(egui::Align::Min);
         ui.allocate_ui_with_layout(vec2(260.0, h), down, |ui| {
             ui.set_width(260.0);
-            sensor_picker(ui, "cmp_picker", &common, |c| c.key(), selected, filter);
+            let columns: Vec<&Column> = common.iter().map(|c| c.column).collect();
+            sensor_picker(ui, "cmp_picker", &columns, |c| c.key(), selected, filter);
         });
         ui.separator();
         ui.allocate_ui_with_layout(vec2(ui.available_width(), h), down, |ui| {
@@ -332,25 +371,27 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState) {
     });
 }
 
-/// (column in A, column in B) for each selected key, in A's order.
+/// (column in A, column in B) for one sensor.
 type Pair = (usize, usize);
+
+/// A sensor present in both recordings.
+struct Common<'a> {
+    column: &'a Column,
+    key: String,
+    pair: Pair,
+}
 
 fn charts(
     ui: &mut Ui,
     a: &Recording,
     b: &Recording,
-    common: &[&Column],
+    common: &[Common],
     selected: &BTreeSet<String>,
 ) {
     let pairs: Vec<(Pair, Unit)> = common
         .iter()
-        .filter(|c| selected.contains(&c.key()))
-        .filter_map(|c| {
-            Some((
-                (a.column_by_key(&c.key())?, b.column_by_key(&c.key())?),
-                c.unit,
-            ))
-        })
+        .filter(|c| selected.contains(&c.key))
+        .map(|c| (c.pair, c.column.unit))
         .collect();
     if pairs.is_empty() {
         ui.weak("Select sensors on the left to compare them.");
@@ -492,12 +533,12 @@ fn stats_table(ui: &mut Ui, a: &Recording, b: &Recording, group: &[(usize, Pair)
         .num_columns(7)
         .spacing([14.0, 2.0])
         .show(ui, |ui| {
-            for h in [
-                "Sensor", "Avg A", "Avg B", "Δ Avg", "Max A", "Max B", "Δ Max",
-            ] {
-                ui.label(RichText::new(h).underline());
-            }
-            ui.end_row();
+            super::header_row(
+                ui,
+                &[
+                    "Sensor", "Avg A", "Avg B", "Δ Avg", "Max A", "Max B", "Δ Max",
+                ],
+            );
             for &(i, (ca, cb)) in group {
                 let (Some(sa), Some(sb)) = (a.stats(ca), b.stats(cb)) else {
                     continue;

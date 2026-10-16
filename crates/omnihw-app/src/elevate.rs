@@ -4,7 +4,15 @@
 //! Launches at Windows sign-in (`--autostart`) and the "Ask for administrator at start" setting
 //! being off also skip it.
 
+use std::sync::OnceLock;
+
 const NO_ELEVATE: &str = "--no-elevate";
+
+/// Whether this process runs as administrator (asked once; it can't change while running).
+pub fn elevated() -> bool {
+    static ELEVATED: OnceLock<bool> = OnceLock::new();
+    *ELEVATED.get_or_init(omnihw_core::win::is_elevated)
+}
 
 /// Returns true if an elevated copy was launched and this process should exit.
 pub fn relaunch_elevated_if_useful() -> bool {
@@ -13,7 +21,7 @@ pub fn relaunch_elevated_if_useful() -> bool {
         .iter()
         .any(|a| a == NO_ELEVATE || a == crate::autostart::AUTOSTART_FLAG)
         || !crate::settings::Settings::load().ask_admin_at_start
-        || omnihw_core::win::is_elevated()
+        || elevated()
         || !omnihw_core::win::has_smart_capable_drive()
     {
         return false;
@@ -131,15 +139,23 @@ pub fn run_as_admin_wait(params: &str) -> Result<u32, String> {
     if info.hProcess.is_invalid() {
         return Err("Could not start the elevated helper".into());
     }
-    let mut code = 1u32;
-    // SAFETY: process handle from ShellExecuteExW, closed below.
-    unsafe {
-        let ok = WaitForSingleObject(info.hProcess, INFINITE) == WAIT_OBJECT_0
-            && GetExitCodeProcess(info.hProcess, &mut code).is_ok();
-        let _ = CloseHandle(info.hProcess);
-        if !ok {
-            return Err("The elevated helper did not finish".into());
+    /// Closes the helper's process handle on drop.
+    struct Process(windows::Win32::Foundation::HANDLE);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            // SAFETY: a valid process handle from ShellExecuteExW, closed exactly once.
+            let _ = unsafe { CloseHandle(self.0) };
         }
+    }
+    let process = Process(info.hProcess);
+    let mut code = 1u32;
+    // SAFETY: `process` holds a valid handle for the duration of both calls.
+    let ok = unsafe {
+        WaitForSingleObject(process.0, INFINITE) == WAIT_OBJECT_0
+            && GetExitCodeProcess(process.0, &mut code).is_ok()
+    };
+    if !ok {
+        return Err("The elevated helper did not finish".into());
     }
     Ok(code)
 }

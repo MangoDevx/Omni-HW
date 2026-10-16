@@ -11,7 +11,7 @@ use omnihw_core::recording::{Recording, format_elapsed};
 use omnihw_core::sensors::Unit;
 
 const GPU_COLOR: Color32 = Color32::from_rgb(38, 166, 154);
-const CPU_COLOR: Color32 = Color32::from_rgb(66, 133, 244);
+const CPU_COLOR: Color32 = crate::heat::BLUE;
 const NONE_COLOR: Color32 = Color32::from_rgb(140, 140, 140);
 const IDLE_COLOR: Color32 = Color32::from_rgb(70, 70, 70);
 
@@ -33,7 +33,48 @@ fn verdict_color(v: Verdict) -> Color32 {
     }
 }
 
-pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState, gpus: &[GpuAdapter]) {
+/// The analysis of the recording last shown, so it's redone only when the recording changes
+/// (another pick, or a new sample in the live one) instead of on every frame.
+#[derive(Default)]
+pub struct AnalysisCache {
+    /// (recording name, start time bits, sample count) the result is for.
+    key: Option<(String, u64, usize)>,
+    result: Option<Result<Analysis, String>>,
+}
+
+impl AnalysisCache {
+    fn get(
+        &mut self,
+        rec: &Recording,
+        name: &str,
+        gpus: &[GpuAdapter],
+    ) -> &Result<Analysis, String> {
+        let key = (name.to_string(), rec.started_unix.to_bits(), rec.len());
+        if self.key.as_ref() != Some(&key) {
+            self.key = Some(key);
+            self.result = None;
+        }
+        self.result.get_or_insert_with(|| {
+            // VRAM size for the "VRAM full" factor, matched by GPU name (CSV recordings don't
+            // store LUIDs).
+            let vram_total_mb = |gpu_name: &str| {
+                gpus.iter()
+                    .find(|g| g.name == gpu_name)
+                    .map(|g| g.dedicated_vram as f64 / 1_048_576.0)
+            };
+            bottleneck::find_columns(rec)
+                .and_then(|c| bottleneck::analyze(rec, vram_total_mb(&c.gpu_name)))
+        })
+    }
+}
+
+pub fn show(
+    ui: &mut Ui,
+    snap: &Snapshot,
+    st: &mut CompareState,
+    cache: &mut AnalysisCache,
+    gpus: &[GpuAdapter],
+) {
     let picked = pick_single(ui, snap, st);
     ui.add_space(4.0);
     let (rec, name) = match picked {
@@ -50,15 +91,7 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState, gpus: &[GpuAdap
             return;
         }
     };
-    // VRAM size for the "VRAM full" factor, matched by GPU name (CSV recordings don't store LUIDs).
-    let vram_total_mb = |gpu_name: &str| {
-        gpus.iter()
-            .find(|g| g.name == gpu_name)
-            .map(|g| g.dedicated_vram as f64 / 1_048_576.0)
-    };
-    let analysis = bottleneck::find_columns(rec)
-        .and_then(|c| bottleneck::analyze(rec, vram_total_mb(&c.gpu_name)));
-    let a = match analysis {
+    let a = match cache.get(rec, &name, gpus) {
         Ok(a) => a,
         Err(e) => {
             ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), e);
@@ -69,7 +102,7 @@ pub fn show(ui: &mut Ui, snap: &Snapshot, st: &mut CompareState, gpus: &[GpuAdap
     egui::ScrollArea::vertical()
         .id_salt("bottleneck")
         .auto_shrink(false)
-        .show(ui, |ui| body(ui, rec, &name, &a));
+        .show(ui, |ui| body(ui, rec, &name, a));
 }
 
 fn body(ui: &mut Ui, rec: &Recording, name: &str, a: &Analysis) {

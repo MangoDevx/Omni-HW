@@ -370,7 +370,7 @@ mod imp {
                 "mem/used",
                 "Physical Memory Used",
                 Unit::Megabytes,
-                mb(m.total_bytes - m.available_bytes),
+                mb(m.total_bytes.saturating_sub(m.available_bytes)),
             );
             push(
                 "mem/avail",

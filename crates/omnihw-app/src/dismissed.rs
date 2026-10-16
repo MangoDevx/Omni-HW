@@ -9,11 +9,14 @@ struct Store {
     keys: BTreeSet<String>,
     /// Changed since the app last copied the keys into its settings.
     dirty: bool,
+    /// Bumped on every change, so cached Health Check results know to re-split.
+    revision: u64,
 }
 
 static STORE: Mutex<Store> = Mutex::new(Store {
     keys: BTreeSet::new(),
     dirty: false,
+    revision: 0,
 });
 
 fn with<R>(f: impl FnOnce(&mut Store) -> R) -> R {
@@ -28,24 +31,48 @@ pub fn key(check: &str, f: &Finding) -> String {
     format!("{check}|{}|{title}", f.level.name())
 }
 
+impl Store {
+    fn changed(&mut self, changed: bool) {
+        if changed {
+            self.dirty = true;
+            self.revision += 1;
+        }
+    }
+}
+
 /// Seed the store at startup (from saved settings).
 pub fn load(keys: &[String]) {
-    with(|s| s.keys = keys.iter().cloned().collect());
+    with(|s| {
+        s.keys = keys.iter().cloned().collect();
+        s.revision += 1;
+    });
 }
 
 pub fn dismiss(key: String) {
-    with(|s| s.dirty |= s.keys.insert(key));
+    with(|s| {
+        let changed = s.keys.insert(key);
+        s.changed(changed);
+    });
 }
 
 pub fn restore(key: &str) {
-    with(|s| s.dirty |= s.keys.remove(key));
+    with(|s| {
+        let changed = s.keys.remove(key);
+        s.changed(changed);
+    });
 }
 
 pub fn restore_all() {
     with(|s| {
-        s.dirty |= !s.keys.is_empty();
+        let changed = !s.keys.is_empty();
         s.keys.clear();
+        s.changed(changed);
     });
+}
+
+/// Changes whenever the set of dismissed findings does.
+pub fn revision() -> u64 {
+    with(|s| s.revision)
 }
 
 pub fn count() -> usize {
@@ -57,36 +84,32 @@ pub fn take_changes() -> Option<Vec<String>> {
     with(|s| std::mem::take(&mut s.dirty).then(|| s.keys.iter().cloned().collect()))
 }
 
-/// Split results into what to show and what was dismissed. Dismissed findings are removed from
+/// Split results into what to show and what was dismissed. Dismissed findings are moved out of
 /// their check (which keeps an empty `Findings` outcome, so it isn't counted as passed).
-pub fn split(results: &[CheckResult]) -> (Vec<CheckResult>, Vec<(&'static str, Finding)>) {
+pub fn split(mut results: Vec<CheckResult>) -> (Vec<CheckResult>, Vec<(&'static str, Finding)>) {
     let mut hidden = Vec::new();
-    let visible = with(|s| {
-        results
-            .iter()
-            .map(|r| {
-                let mut r = r.clone();
-                let name = r.name;
-                if let Outcome::Findings(f) = &mut r.outcome {
-                    f.retain(|x| {
-                        let gone = s.keys.contains(&key(name, x));
-                        if gone {
-                            hidden.push((name, x.clone()));
-                        }
-                        !gone
-                    });
-                }
-                r
-            })
-            .collect()
+    with(|s| {
+        if s.keys.is_empty() {
+            return;
+        }
+        for r in &mut results {
+            let name = r.name;
+            if let Outcome::Findings(f) = &mut r.outcome {
+                let (gone, kept): (Vec<Finding>, Vec<Finding>) = std::mem::take(f)
+                    .into_iter()
+                    .partition(|x| s.keys.contains(&key(name, x)));
+                *f = kept;
+                hidden.extend(gone.into_iter().map(|x| (name, x)));
+            }
+        }
     });
-    (visible, hidden)
+    (results, hidden)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::key;
-    use omnihw_core::diagnostics::{Category, Finding, Level};
+    use super::*;
+    use omnihw_core::diagnostics::{Category, Level};
 
     fn finding(level: Level, title: &str) -> Finding {
         Finding {
@@ -117,5 +140,32 @@ mod tests {
         );
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn split_moves_dismissed_findings_out() {
+        let results = vec![CheckResult {
+            name: "Uptime",
+            category: Category::System,
+            outcome: Outcome::Findings(vec![
+                finding(Level::Warning, "Windows has been running for 40 days"),
+                finding(Level::Info, "Something else"),
+            ]),
+        }];
+        let before = revision();
+        load(&[key(
+            "Uptime",
+            &finding(Level::Warning, "Windows has been running for 9 days"),
+        )]);
+        assert_ne!(revision(), before);
+        let (visible, hidden) = split(results);
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].0, "Uptime");
+        assert!(
+            matches!(&visible[0].outcome, Outcome::Findings(f) if f.len() == 1 && f[0].title == "Something else")
+        );
+        restore_all();
+        assert_eq!(count(), 0);
+        assert_eq!(take_changes(), Some(Vec::new()));
     }
 }

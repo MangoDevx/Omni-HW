@@ -13,7 +13,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
             ("Samples taken", snap.samples.to_string()),
             (
                 "Administrator",
-                if omnihw_core::win::is_elevated() {
+                if crate::elevate::elevated() {
                     "Yes".into()
                 } else {
                     "No (SATA drive health needs it; Omni-HW asks via UAC at start when SATA drives are present)".into()

@@ -3,112 +3,22 @@
 //! by `dispatch` (outside the snapshot lock) on a worker thread; the page itself only reads the
 //! snapshot.
 
+mod actions;
+
+use super::{group_box, header_row, page_title};
+use crate::elevate::elevated;
 use crate::heat::{GREEN, ORANGE};
-use crate::sampler::{Sampler, Snapshot};
-use egui::{Id, RichText, Ui};
+use crate::sampler::Snapshot;
+use actions::{QUERY, REFRESH, admin_hint, flag};
+pub use actions::{dispatch, fix_button, request};
+use egui::{RichText, Ui};
 use omnihw_core::power::{
     Action, AdapterKind, Kind, PERCENT_PRESETS, PowerInfo, Setting, Source, TIMEOUT_PRESETS,
 };
-use std::sync::OnceLock;
-
-const PENDING: &str = "power_pending";
-const CONFIRM: &str = "power_confirm";
-const REFRESH: &str = "power_refresh";
-const QUERY: &str = "power_query";
-
-fn elevated() -> bool {
-    static E: OnceLock<bool> = OnceLock::new();
-    *E.get_or_init(omnihw_core::win::is_elevated)
-}
-
-/// Ask for `action` to be applied (after a confirmation if it's disruptive).
-pub fn request(ctx: &egui::Context, action: Action) {
-    ctx.data_mut(|d| d.insert_temp(Id::new(PENDING), Some(action)));
-}
-
-fn flag(ctx: &egui::Context, key: &str) {
-    ctx.data_mut(|d| d.insert_temp(Id::new(key), true));
-}
-
-fn take_flag(ctx: &egui::Context, key: &str) -> bool {
-    ctx.data_mut(|d| d.remove_temp::<bool>(Id::new(key)))
-        .unwrap_or(false)
-}
-
-fn take_action(ctx: &egui::Context, key: &str) -> Option<Action> {
-    ctx.data_mut(|d| d.remove_temp::<Option<Action>>(Id::new(key)))
-        .flatten()
-}
-
-fn admin_hint(a: &Action) -> &'static str {
-    if a.needs_admin() && !elevated() {
-        "Asks for administrator permission"
-    } else {
-        "Applies the change now"
-    }
-}
-
-/// A "Fix" button for a Health Check finding.
-pub fn fix_button(ui: &mut Ui, action: &Action) {
-    if ui
-        .button(RichText::new(format!("Fix: {}", action.label())).strong())
-        .on_hover_text(admin_hint(action))
-        .clicked()
-    {
-        request(ui.ctx(), action.clone());
-    }
-}
-
-/// Run requested changes and show the confirmation dialog. Call once per frame, outside the
-/// snapshot lock. Returns a status message when a change finished.
-pub fn dispatch(ctx: &egui::Context, sampler: &Sampler) -> Option<String> {
-    if take_flag(ctx, REFRESH) {
-        sampler.refresh_power();
-    }
-    if take_flag(ctx, QUERY) {
-        sampler.power_query_admin();
-    }
-    if let Some(a) = take_action(ctx, PENDING) {
-        if a.confirm_text().is_some() {
-            ctx.data_mut(|d| d.insert_temp(Id::new(CONFIRM), Some(a)));
-        } else {
-            sampler.power_action(a);
-        }
-    }
-    if let Some(a) = ctx.data(|d| d.get_temp::<Option<Action>>(Id::new(CONFIRM)).flatten()) {
-        let mut close = None;
-        egui::Modal::new(Id::new("power_confirm_modal")).show(ctx, |ui| {
-            ui.set_max_width(420.0);
-            ui.label(RichText::new(a.label()).size(16.0).strong());
-            ui.add_space(6.0);
-            ui.add(egui::Label::new(a.confirm_text().unwrap_or_default()).wrap());
-            if a.needs_admin() && !elevated() {
-                ui.add_space(4.0);
-                ui.weak("Windows will ask for administrator permission.");
-            }
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button(RichText::new("Apply").strong()).clicked() {
-                    close = Some(true);
-                }
-                if ui.button("Cancel").clicked() {
-                    close = Some(false);
-                }
-            });
-        });
-        if let Some(apply) = close {
-            take_action(ctx, CONFIRM);
-            if apply {
-                sampler.power_action(a);
-            }
-        }
-    }
-    sampler.snapshot().power_msg.take()
-}
 
 pub fn show(ui: &mut Ui, snap: &Snapshot) {
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Power").size(20.0).strong());
+        page_title(ui, "Power");
         if snap.power_busy {
             ui.spinner();
             ui.weak("Working...");
@@ -193,13 +103,7 @@ pub fn show(ui: &mut Ui, snap: &Snapshot) {
 }
 
 fn group(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(title).strong());
-        ui.add_space(2.0);
-        body(ui);
-    });
-    ui.add_space(6.0);
+    group_box(ui, RichText::new(title).strong(), 2.0, 6.0, body);
 }
 
 fn plans(ui: &mut Ui, p: &PowerInfo) {
@@ -387,10 +291,14 @@ fn adapters(ui: &mut Ui, p: &PowerInfo) {
             .spacing([16.0, 4.0])
             .striped(true)
             .show(ui, |ui| {
-                ui.label(RichText::new("Adapter").underline());
-                ui.label(RichText::new("Windows may turn it off").underline());
-                ui.label(RichText::new("Energy-Efficient Ethernet").underline());
-                ui.end_row();
+                header_row(
+                    ui,
+                    &[
+                        "Adapter",
+                        "Windows may turn it off",
+                        "Energy-Efficient Ethernet",
+                    ],
+                );
                 for a in &p.adapters {
                     ui.label(format!("{} ({})", a.name, a.kind.name()));
                     ui.horizontal(|ui| match a.allow_turn_off {
@@ -481,9 +389,8 @@ fn waking(ui: &mut Ui, p: &PowerInfo) {
             }
             None => check_now(ui),
         }
-        let history: Vec<_> = p.wakes.iter().collect();
-        if !history.is_empty() {
-            egui::CollapsingHeader::new(format!("Wake history, last 2 weeks ({})", history.len()))
+        if !p.wakes.is_empty() {
+            egui::CollapsingHeader::new(format!("Wake history, last 2 weeks ({})", p.wakes.len()))
                 .id_salt("power_wake_history")
                 .show(ui, |ui| {
                     egui::Grid::new("power_wake_hist")
@@ -491,7 +398,7 @@ fn waking(ui: &mut Ui, p: &PowerInfo) {
                         .spacing([16.0, 2.0])
                         .striped(true)
                         .show(ui, |ui| {
-                            for w in history {
+                            for w in &p.wakes {
                                 ui.label(format!("{} UTC", w.time));
                                 ui.label(if w.fast_startup {
                                     "Start-up from Fast Startup shutdown".to_string()
@@ -538,10 +445,7 @@ fn requests(ui: &mut Ui, p: &PowerInfo) {
                 .spacing([16.0, 2.0])
                 .striped(true)
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Keeps awake").underline());
-                    ui.label(RichText::new("Requested by").underline());
-                    ui.label(RichText::new("Reason").underline());
-                    ui.end_row();
+                    header_row(ui, &["Keeps awake", "Requested by", "Reason"]);
                     for x in r {
                         ui.label(match x.kind.as_str() {
                             "DISPLAY" => "Display",

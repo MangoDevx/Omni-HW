@@ -97,9 +97,11 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, sampler: &Sampler, state: &mut ViewS
     let original = rules.clone();
     let active: Vec<bool> = (0..rules.len()).map(|i| snap.alerts.is_active(i)).collect();
     let mut sensors: Vec<&Tracked> = snap.table.entries().iter().collect();
-    sensors.sort_by_key(|t| (t.reading.group.clone(), t.reading.label.clone()));
+    sensors.sort_by(|a, b| {
+        (&a.reading.group, &a.reading.label).cmp(&(&b.reading.group, &b.reading.label))
+    });
 
-    ui.label(RichText::new("Alerts").size(20.0).strong());
+    super::page_title(ui, "Alerts");
     ui.weak("Get a Windows notification when a sensor stays above or below a limit. Alerts are checked on every sample while Omni-HW is running, on any tab.");
     ui.add_space(6.0);
     let mut test = false;
@@ -136,10 +138,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, sampler: &Sampler, state: &mut ViewS
             .spacing([10.0, 6.0])
             .striped(true)
             .show(ui, |ui| {
-                for h in ["On", "Status", "Sensor", "When", "Limit", "For", ""] {
-                    ui.label(RichText::new(h).underline());
-                }
-                ui.end_row();
+                super::header_row(ui, &["On", "Status", "Sensor", "When", "Limit", "For", ""]);
                 for (i, r) in rules.iter_mut().enumerate() {
                     ui.checkbox(&mut r.enabled, "");
                     if !r.enabled {

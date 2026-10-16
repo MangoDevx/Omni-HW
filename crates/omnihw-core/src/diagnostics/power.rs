@@ -1,8 +1,9 @@
 //! Power checks: settings that disrupt audio, networking, downloads or sleep. They read the
-//! [`PowerInfo`] gathered on the sampler thread; most offer a one-click fix.
+//! [`PowerInfo`](crate::power::PowerInfo) gathered on the sampler thread; most offer a one-click fix.
 
-use super::{Category, Check, Context, Finding, Level, Outcome, finding};
-use crate::power::{Action, AdapterKind, PowerInfo, Setting, Source, WakeSource};
+use super::helpers::{finding, plural};
+use super::{Category, Check, Context, Finding, Level, Outcome};
+use crate::power::{Action, AdapterKind, Setting, Source, WakeSource, format_timeout};
 
 pub(super) const CHECKS: &[(&str, Category, Check)] = &[
     (
@@ -29,23 +30,17 @@ pub(super) const CHECKS: &[(&str, Category, Check)] = &[
     ("Apps keeping the PC awake", Category::Power, sleep_blockers),
 ];
 
-/// Power info, or the outcome to report while it's unavailable.
-fn info<'a>(ctx: &Context<'a>) -> Result<&'a PowerInfo, Outcome> {
-    ctx.power
-        .ok_or_else(|| Outcome::Skipped("Power settings are still being read".into()))
+/// The outcome of every power check until the power settings have been read.
+fn not_read() -> Outcome {
+    Outcome::Skipped("Power settings are still being read".into())
 }
 
 const ADVANCED: &str =
     "Control Panel > Power Options > Change plan settings > Change advanced power settings";
 
-fn plural(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
 fn usb_selective_suspend(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let v = p.get(Setting::UsbSelectiveSuspend);
     let Some(ac) = v.ac else {
@@ -97,9 +92,8 @@ fn usb_selective_suspend(ctx: &Context) -> Outcome {
 }
 
 fn network_power_saving(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let nics: Vec<_> = p
         .adapters
@@ -159,12 +153,7 @@ fn network_power_saving(ctx: &Context) -> Outcome {
         }
     }
     let has_wifi = nics.iter().any(|a| a.kind == AdapterKind::WiFi);
-    if has_wifi
-        && p.get(Setting::WirelessPowerSaving)
-            .ac
-            .is_some_and(|v| v >= 2)
-    {
-        let v = p.get(Setting::WirelessPowerSaving).ac.unwrap_or(0);
+    if has_wifi && let Some(v) = p.get(Setting::WirelessPowerSaving).ac.filter(|&v| v >= 2) {
         out.push(
             finding(
                 Level::Info,
@@ -199,9 +188,8 @@ fn network_power_saving(ctx: &Context) -> Outcome {
 }
 
 fn bluetooth_power_saving(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let bt: Vec<_> = p
         .adapters
@@ -244,9 +232,8 @@ fn bluetooth_power_saving(ctx: &Context) -> Outcome {
 }
 
 fn pcie_aspm(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     if p.is_portable() {
         return Outcome::Skipped(
@@ -285,9 +272,8 @@ fn pcie_aspm(ctx: &Context) -> Outcome {
 const SHORT_SLEEP: u32 = 600;
 
 fn sleep_timer(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let Some(sleep) = p.get(Setting::Sleep).ac else {
         return Outcome::Skipped("Sleep timer not available".into());
@@ -302,10 +288,7 @@ fn sleep_timer(ctx: &Context) -> Outcome {
             finding(
                 Level::Warning,
                 Category::Power,
-                format!(
-                    "PC goes to sleep after only {}",
-                    crate::power::format_timeout(sleep)
-                ),
+                format!("PC goes to sleep after only {}", format_timeout(sleep)),
                 "When plugged in, the PC sleeps after a short idle time. Downloads, renders, \
                  backups and game updates stop when it does.",
                 &[
@@ -327,8 +310,8 @@ fn sleep_timer(ctx: &Context) -> Outcome {
             format!(
                 "Sleep ({}) comes before the display timeout ({}), so the screen never gets to turn \
                  off first and the PC sleeps sooner than you may expect.",
-                crate::power::format_timeout(sleep),
-                crate::power::format_timeout(display)
+                format_timeout(sleep),
+                format_timeout(display)
             ),
             &["Set the display timeout shorter than the sleep timeout on the Power page or in Settings > System > Power."],
         ));
@@ -336,16 +319,15 @@ fn sleep_timer(ctx: &Context) -> Outcome {
     if out.is_empty() {
         return Outcome::Pass(format!(
             "Sleeps after {} when plugged in",
-            crate::power::format_timeout(sleep)
+            format_timeout(sleep)
         ));
     }
     Outcome::Findings(out)
 }
 
 fn unexpected_wakes(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let wakes: Vec<_> = p.wakes.iter().filter(|w| !w.fast_startup).collect();
     let unattended: Vec<_> = wakes.iter().filter(|w| w.source.is_unattended()).collect();
@@ -369,10 +351,10 @@ fn unexpected_wakes(ctx: &Context) -> Outcome {
         listed.join("; ")
     );
     if !p.wake_armed.is_empty() {
-        detail.push_str(&format!(
+        detail += &format!(
             " Devices allowed to wake the PC: {}.",
             p.wake_armed.join(", ")
-        ));
+        );
     }
     let fix = if timers && timers_allowed {
         Some(Action::SetValue {
@@ -415,9 +397,8 @@ fn unexpected_wakes(ctx: &Context) -> Outcome {
 }
 
 fn fast_startup(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     match p.fast_startup_effective() {
         None => Outcome::Skipped("Fast Startup setting not readable".into()),
@@ -459,9 +440,8 @@ fn fast_startup(ctx: &Context) -> Outcome {
 const SHORT_DISK: u32 = 600;
 
 fn disk_timer(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let hdds = ctx
         .info
@@ -476,19 +456,13 @@ fn disk_timer(ctx: &Context) -> Outcome {
         return Outcome::Skipped("Hard disk timer not available".into());
     };
     if v == 0 || v >= SHORT_DISK {
-        return Outcome::Pass(format!(
-            "Turns off after: {}",
-            crate::power::format_timeout(v)
-        ));
+        return Outcome::Pass(format!("Turns off after: {}", format_timeout(v)));
     }
     Outcome::Findings(vec![
         finding(
             Level::Info,
             Category::Power,
-            format!(
-                "Hard disks turn off after only {}",
-                crate::power::format_timeout(v)
-            ),
+            format!("Hard disks turn off after only {}", format_timeout(v)),
             format!(
                 "{} spin down after a short idle time. Opening a file on them then freezes \
                  programs for several seconds while they spin up, and frequent spin-ups add wear.",
@@ -512,9 +486,8 @@ fn disk_timer(ctx: &Context) -> Outcome {
 }
 
 fn processor_state(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let (min, max) = (p.get(Setting::ProcessorMin), p.get(Setting::ProcessorMax));
     let Some(max_ac) = max.ac else {
@@ -578,9 +551,8 @@ fn processor_state(ctx: &Context) -> Outcome {
 }
 
 fn sleep_blockers(ctx: &Context) -> Outcome {
-    let p = match info(ctx) {
-        Ok(p) => p,
-        Err(o) => return o,
+    let Some(p) = ctx.power else {
+        return not_read();
     };
     let Some(r) = &p.requests else {
         return Outcome::Skipped(
@@ -624,7 +596,7 @@ fn sleep_blockers(ctx: &Context) -> Outcome {
 mod tests {
     use super::*;
     use crate::SystemInfo;
-    use crate::power::{AcDc, AdapterPower, PowerRequest, UsbSensitive, WakeEvent};
+    use crate::power::{AcDc, AdapterPower, PowerInfo, PowerRequest, UsbSensitive, WakeEvent};
     use crate::sensors::SensorTable;
 
     fn ctx<'a>(info: &'a SystemInfo, s: &'a SensorTable, p: &'a PowerInfo) -> Context<'a> {

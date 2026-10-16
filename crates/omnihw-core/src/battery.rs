@@ -48,10 +48,7 @@ impl BatteryHealth {
 /// Chemistry[4], DesignedCapacity u32 @12, FullChargedCapacity u32 @16, DefaultAlert1,
 /// DefaultAlert2, CriticalBias, CycleCount u32 @32.
 pub fn parse_battery_information(b: &[u8]) -> Option<BatteryHealth> {
-    let u32_at = |o: usize| {
-        b.get(o..o + 4)
-            .map(|x| u32::from_le_bytes(x.try_into().unwrap()))
-    };
+    let u32_at = |o: usize| crate::le::u32_at(b, o);
     let caps = u32_at(0)?;
     let design = u32_at(12)?;
     let full = u32_at(16)?;

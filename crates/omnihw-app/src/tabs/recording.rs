@@ -6,10 +6,9 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, pos
 use omnihw_core::recording::{Column, Recording, format_elapsed};
 use omnihw_core::sensors::Unit;
 use std::collections::BTreeSet;
-use std::path::Path;
 
 pub(super) const PALETTE: [Color32; 8] = [
-    Color32::from_rgb(66, 133, 244),
+    heat::BLUE,
     Color32::from_rgb(38, 166, 154),
     Color32::from_rgb(245, 156, 26),
     Color32::from_rgb(171, 71, 188),
@@ -45,6 +44,7 @@ pub struct ViewState {
     initialized: bool,
     mode: Mode,
     compare: super::compare::CompareState,
+    analysis: super::bottleneck::AnalysisCache,
 }
 
 /// Start or stop recording; returns a status message for the tab bar.
@@ -62,23 +62,11 @@ pub fn toggle(sampler: &Sampler) -> String {
     }
 }
 
-fn open_in_explorer(path: &Path, select: bool) {
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("explorer.exe");
-        if select {
-            cmd.arg(format!("/select,{}", path.display()));
-        } else {
-            cmd.arg(path);
-        }
-        let _ = cmd.spawn();
-    }
-    #[cfg(not(windows))]
-    let _ = (path, select);
-}
-
 /// Returns true if the start/stop button was clicked (the caller toggles once the snapshot lock is released).
 pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) -> bool {
+    if state.mode != Mode::Session {
+        state.compare.load_files();
+    }
     let snap = sampler.snapshot();
     let active = snap.recording.is_some();
 
@@ -105,10 +93,10 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) -> bool {
                     rec.columns.len()
                 ));
                 if ui.button("Show CSV").on_hover_text(path.display().to_string()).clicked() {
-                    open_in_explorer(path, true);
+                    export::open_in_explorer(path, true);
                 }
                 if !live && ui.button("Open CSV").clicked() {
-                    open_in_explorer(path, false);
+                    export::open_in_explorer(path, false);
                 }
             }
             None => {
@@ -129,7 +117,7 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) -> bool {
         Mode::Bottleneck => {
             ui.separator();
             let gpus = sampler.info().map_or(&[][..], |i| &i.gpus[..]);
-            super::bottleneck::show(ui, &snap, &mut state.compare, gpus);
+            super::bottleneck::show(ui, &snap, &mut state.compare, &mut state.analysis, gpus);
             return clicked;
         }
         Mode::Session => {}
@@ -485,10 +473,10 @@ fn stats_table(ui: &mut Ui, rec: &Recording, cols: &[usize], selected: &[usize],
         .num_columns(7)
         .spacing([14.0, 2.0])
         .show(ui, |ui| {
-            for h in ["Sensor", "First", "Last", "Change", "Min", "Avg", "Max"] {
-                ui.label(RichText::new(h).underline());
-            }
-            ui.end_row();
+            super::header_row(
+                ui,
+                &["Sensor", "First", "Last", "Change", "Min", "Avg", "Max"],
+            );
             for &c in cols {
                 let Some(s) = rec.stats(c) else { continue };
                 ui.colored_label(

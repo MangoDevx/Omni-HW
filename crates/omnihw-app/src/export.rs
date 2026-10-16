@@ -82,11 +82,25 @@ pub fn save_html(info: &SystemInfo, snap: &Snapshot) -> Result<PathBuf, String> 
     let html = report::to_html(&sections(info, snap), snap.table.entries());
     let path = report_dir().join(format!("OmniHW-Report-{}.html", timestamp()));
     std::fs::write(&path, html).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
-    #[cfg(windows)]
-    let _ = std::process::Command::new("explorer.exe")
-        .arg(&path)
-        .spawn();
+    open_in_explorer(&path, false);
     Ok(path)
+}
+
+/// Open `path` with Explorer (a folder, or a file in its default app), or with `select` show
+/// it selected in its folder. Doesn't wait for Explorer.
+pub fn open_in_explorer(path: &std::path::Path, select: bool) {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("explorer.exe");
+        if select {
+            cmd.arg(format!("/select,{}", path.display()));
+        } else {
+            cmd.arg(path);
+        }
+        let _ = cmd.spawn();
+    }
+    #[cfg(not(windows))]
+    let _ = (path, select);
 }
 
 #[cfg(test)]

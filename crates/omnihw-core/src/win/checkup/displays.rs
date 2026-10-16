@@ -1,8 +1,8 @@
 //! Active monitors: connection type, current refresh rate and the best one Windows offers at
 //! the current resolution (QueryDisplayConfig + EnumDisplaySettings).
 
-use super::utf16_z;
 use crate::checkup::{Connection, Monitor};
+use crate::win::wide::{from_wide, nul_terminated};
 use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
     DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME,
@@ -18,7 +18,7 @@ use windows::core::PCWSTR;
 fn paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
     for _ in 0..3 {
         let (mut np, mut nm) = (0u32, 0u32);
-        // SAFETY: valid out pointers.
+        // SAFETY: valid out pointers to locals.
         if unsafe { GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut np, &mut nm) }
             != ERROR_SUCCESS
         {
@@ -46,12 +46,14 @@ fn paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
     None
 }
 
+/// A display mode of the GDI device `name`, which must be NUL-terminated.
 fn devmode(name: &[u16], mode: ENUM_DISPLAY_SETTINGS_MODE) -> Option<DEVMODEW> {
+    debug_assert_eq!(name.last(), Some(&0));
     let mut dm = DEVMODEW {
         dmSize: size_of::<DEVMODEW>() as u16,
         ..Default::default()
     };
-    // SAFETY: NUL-terminated device name; dmSize set.
+    // SAFETY: `name` is NUL-terminated and outlives the call; dmSize is set as required.
     unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), mode, &mut dm) }
         .as_bool()
         .then_some(dm)
@@ -68,7 +70,7 @@ pub fn monitors() -> Vec<Monitor> {
         src.header.size = size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
         src.header.adapterId = p.sourceInfo.adapterId;
         src.header.id = p.sourceInfo.id;
-        // SAFETY: header describes the full struct.
+        // SAFETY: the header's type and size describe the full struct it heads.
         if unsafe { DisplayConfigGetDeviceInfo(&mut src.header) } != 0 {
             continue;
         }
@@ -77,10 +79,11 @@ pub fn monitors() -> Vec<Monitor> {
         tgt.header.size = size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32;
         tgt.header.adapterId = p.targetInfo.adapterId;
         tgt.header.id = p.targetInfo.id;
-        // SAFETY: as above.
+        // SAFETY: the header's type and size describe the full struct it heads.
         let named = unsafe { DisplayConfigGetDeviceInfo(&mut tgt.header) } == 0;
 
-        let gdi = src.viewGdiDeviceName;
+        // The fixed-size name array is not guaranteed to hold a NUL; pass a terminated copy.
+        let gdi = nul_terminated(&src.viewGdiDeviceName);
         let Some(cur) = devmode(&gdi, ENUM_CURRENT_SETTINGS) else {
             continue;
         };
@@ -102,11 +105,11 @@ pub fn monitors() -> Vec<Monitor> {
         };
         out.push(Monitor {
             name: if named {
-                utf16_z(&tgt.monitorFriendlyDeviceName)
+                from_wide(&tgt.monitorFriendlyDeviceName)
             } else {
                 String::new()
             },
-            source: utf16_z(&gdi),
+            source: from_wide(&gdi),
             connection: Connection::from_output_technology(p.targetInfo.outputTechnology.0),
             width: w,
             height: h,

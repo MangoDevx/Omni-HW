@@ -1,6 +1,8 @@
 //! Storage data model and parsers for `IOCTL_STORAGE_QUERY_PROPERTY` results
 //! (device descriptor, NVMe SMART / health log, temperature descriptor).
 
+use crate::le::{u16_at, u32_at, u128_at};
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Drive {
     /// `\\.\PhysicalDriveN` number.
@@ -215,14 +217,6 @@ impl BusType {
     }
 }
 
-fn u32_at(b: &[u8], o: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(b.get(o..o + 4)?.try_into().ok()?))
-}
-
-fn u16_at(b: &[u8], o: usize) -> Option<u16> {
-    Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?))
-}
-
 /// NUL-terminated ASCII string at `offset` (0 = absent).
 fn str_at(b: &[u8], offset: u32) -> String {
     let o = offset as usize;
@@ -324,10 +318,6 @@ impl NvmeHealth {
             .map(|(_, f)| *f)
             .collect()
     }
-}
-
-fn u128_at(b: &[u8], o: usize) -> Option<u128> {
-    Some(u128::from_le_bytes(b.get(o..o + 16)?.try_into().ok()?))
 }
 
 fn kelvin(k: u16) -> i32 {

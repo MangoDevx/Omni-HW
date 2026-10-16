@@ -1,4 +1,4 @@
-use super::{or_dash, section};
+use super::section;
 use omnihw_core::SystemInfo;
 
 pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
@@ -11,9 +11,9 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
             ui,
             "Motherboard",
             &[
-                ("Manufacturer", or_dash(&b.manufacturer)),
-                ("Model", or_dash(&b.product)),
-                ("Version", or_dash(&b.version)),
+                ("Manufacturer", b.manufacturer.clone()),
+                ("Model", b.product.clone()),
+                ("Version", b.version.clone()),
             ],
         );
     }
@@ -22,10 +22,10 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
             ui,
             "System",
             &[
-                ("Manufacturer", or_dash(&sys.manufacturer)),
-                ("Product", or_dash(&sys.product)),
-                ("Version", or_dash(&sys.version)),
-                ("Family", or_dash(&sys.family)),
+                ("Manufacturer", sys.manufacturer.clone()),
+                ("Product", sys.product.clone()),
+                ("Version", sys.version.clone()),
+                ("Family", sys.family.clone()),
             ],
         );
     }
@@ -34,15 +34,15 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
             ui,
             "BIOS",
             &[
-                ("Brand", or_dash(&b.vendor)),
-                ("Version", or_dash(&b.version)),
-                ("Date", or_dash(&b.release_date)),
+                ("Brand", b.vendor.clone()),
+                ("Version", b.version.clone()),
+                ("Date", b.release_date.clone()),
             ],
         );
     }
     let mut misc = vec![("SMBIOS Version", format!("{}.{}", s.version.0, s.version.1))];
     if let Some(p) = s.processors.first() {
-        misc.push(("CPU Socket", or_dash(&p.socket)));
+        misc.push(("CPU Socket", p.socket.clone()));
     }
     section(ui, "Firmware", &misc);
 }

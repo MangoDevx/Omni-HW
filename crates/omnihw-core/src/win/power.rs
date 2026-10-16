@@ -24,22 +24,17 @@ mod imp {
     };
     use crate::win::PlanKind;
     use crate::win::registry::{self, Hive};
+    use crate::win::wide::{from_wide, from_wide_bytes, guid_text};
     use std::ptr;
     use windows::Win32::Devices::DeviceAndDriverInstallation::{
         DICS_FLAG_CONFIGSPECIFIC, DICS_PROPCHANGE, DIF_PROPERTYCHANGE, DIGCF_ALLCLASSES,
         DIGCF_PRESENT, HDEVINFO, SETUP_DI_REGISTRY_PROPERTY, SP_CLASSINSTALL_HEADER,
         SP_DEVINFO_DATA, SP_PROPCHANGE_PARAMS, SPDRP_CLASS, SPDRP_DEVICEDESC, SPDRP_FRIENDLYNAME,
-        SetupDiCallClassInstaller, SetupDiCreateDeviceInfoList, SetupDiDestroyDeviceInfoList,
-        SetupDiEnumDeviceInfo, SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW,
-        SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDeviceInfoW, SetupDiSetClassInstallParamsW,
+        SetupDiCallClassInstaller, SetupDiCreateDeviceInfoList, SetupDiEnumDeviceInfo,
+        SetupDiGetClassDevsW, SetupDiGetDeviceInstanceIdW, SetupDiGetDeviceRegistryPropertyW,
+        SetupDiOpenDeviceInfoW, SetupDiSetClassInstallParamsW,
     };
-    use windows::Win32::Foundation::{
-        ERROR_ACCESS_DENIED, ERROR_SUCCESS, HLOCAL, LocalFree, WIN32_ERROR,
-    };
-    use windows::Win32::System::EventLog::{
-        EVT_HANDLE, EvtClose, EvtNext, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection,
-        EvtRender, EvtRenderEventXml,
-    };
+    use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SUCCESS, HLOCAL, WIN32_ERROR};
     use windows::Win32::System::Power::{
         ACCESS_SCHEME, DEVICEPOWER_CLEAR_WAKEENABLED, DEVICEPOWER_FILTER_DEVICES_PRESENT,
         DEVICEPOWER_FILTER_WAKEENABLED, DevicePowerClose, DevicePowerEnumDevices, DevicePowerOpen,
@@ -47,7 +42,7 @@ mod imp {
         PowerReadACValueIndex, PowerReadDCValueIndex, PowerReadFriendlyName, PowerSetActiveScheme,
         PowerWriteACValueIndex, PowerWriteDCValueIndex, SYSTEM_POWER_CAPABILITIES,
     };
-    use windows::core::{GUID, HSTRING, PCWSTR, w};
+    use windows::core::{GUID, HSTRING, Owned, PCWSTR};
 
     const NET_CLASS: &str =
         r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
@@ -57,10 +52,6 @@ mod imp {
     /// Wake history kept: 14 days.
     const WAKE_HISTORY_MS: u64 = 14 * 86_400_000;
 
-    fn guid_text(g: &GUID) -> String {
-        format!("{g:?}").to_ascii_lowercase()
-    }
-
     fn denied(e: WIN32_ERROR) -> ApplyError {
         if e == ERROR_ACCESS_DENIED {
             ApplyError::AccessDenied
@@ -69,10 +60,11 @@ mod imp {
         }
     }
 
-    fn friendly_name(g: &GUID) -> String {
+    /// Friendly name of a power scheme ("Balanced"); empty if it can't be read.
+    pub(crate) fn scheme_name(g: &GUID) -> String {
         let mut name = [0u16; 256];
         let mut len = (name.len() * 2) as u32;
-        // SAFETY: buffer size in bytes passed in `len`.
+        // SAFETY: valid GUID pointer; the buffer size in bytes is passed in `len`.
         let ok = unsafe {
             PowerReadFriendlyName(
                 None,
@@ -83,24 +75,20 @@ mod imp {
                 &mut len,
             )
         } == ERROR_SUCCESS;
-        if !ok {
-            return String::new();
-        }
-        let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
-        String::from_utf16_lossy(&name[..end])
+        if ok { from_wide(&name) } else { String::new() }
     }
 
-    fn active_scheme() -> Option<GUID> {
+    /// GUID of the active power scheme.
+    pub(crate) fn active_scheme() -> Option<GUID> {
         let mut g: *mut GUID = ptr::null_mut();
-        // SAFETY: out pointer; the GUID is freed with LocalFree below.
+        // SAFETY: valid out pointer to a local.
         if unsafe { PowerGetActiveScheme(None, &mut g) } != ERROR_SUCCESS || g.is_null() {
             return None;
         }
-        // SAFETY: g points to a GUID allocated by PowerGetActiveScheme.
-        let out = unsafe { *g };
-        // SAFETY: allocated by PowerGetActiveScheme.
-        unsafe { LocalFree(Some(HLOCAL(g.cast()))) };
-        Some(out)
+        // SAFETY: on success the GUID was LocalAlloc'd for us; freed with LocalFree on drop.
+        let _alloc = unsafe { Owned::new(HLOCAL(g.cast())) };
+        // SAFETY: `g` points to an initialized GUID that lives until `_alloc` drops.
+        Some(unsafe { g.read() })
     }
 
     fn schemes() -> Vec<GUID> {
@@ -131,7 +119,7 @@ mod imp {
     fn read(scheme: &GUID, s: Setting) -> power::AcDc {
         let (sub, set) = (GUID::from_u128(s.subgroup()), GUID::from_u128(s.guid()));
         let (mut ac, mut dc) = (0u32, 0u32);
-        // SAFETY: GUID pointers and out values are valid for the calls.
+        // SAFETY: GUID pointers and out values are valid locals for the calls.
         let ac_ok =
             unsafe { PowerReadACValueIndex(None, Some(scheme), Some(&sub), Some(&set), &mut ac) }
                 == ERROR_SUCCESS;
@@ -147,7 +135,7 @@ mod imp {
 
     fn capabilities() -> Capabilities {
         let mut c = SYSTEM_POWER_CAPABILITIES::default();
-        // SAFETY: valid out struct.
+        // SAFETY: valid out struct (a local).
         if !unsafe { GetPwrCapabilities(&mut c) } {
             return Capabilities::default();
         }
@@ -168,7 +156,7 @@ mod imp {
             .map(|g| {
                 let guid = guid_text(g);
                 Scheme {
-                    name: friendly_name(g),
+                    name: scheme_name(g),
                     kind: PlanKind::from_guid(&guid),
                     guid,
                 }
@@ -185,14 +173,6 @@ mod imp {
 
     // ---- Devices ----------------------------------------------------------------------------
 
-    struct DevInfoSet(HDEVINFO);
-    impl Drop for DevInfoSet {
-        fn drop(&mut self) {
-            // SAFETY: created by SetupDiGetClassDevsW / SetupDiCreateDeviceInfoList.
-            let _ = unsafe { SetupDiDestroyDeviceInfoList(self.0) };
-        }
-    }
-
     /// A present device: (instance ID, setup class, friendly name or description).
     struct Dev {
         id: String,
@@ -200,47 +180,38 @@ mod imp {
         name: String,
     }
 
-    fn utf16_bytes(b: &[u8]) -> String {
-        let w: Vec<u16> = b
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let end = w.iter().position(|&c| c == 0).unwrap_or(w.len());
-        String::from_utf16_lossy(&w[..end])
-    }
-
     fn prop(set: HDEVINFO, d: &SP_DEVINFO_DATA, p: SETUP_DI_REGISTRY_PROPERTY) -> Option<String> {
         let mut buf = [0u8; 512];
-        // SAFETY: buffer slice passed with its length.
+        // SAFETY: valid device info set and element; the buffer slice is passed with its length.
         unsafe { SetupDiGetDeviceRegistryPropertyW(set, d, p, None, Some(&mut buf), None) }.ok()?;
-        Some(utf16_bytes(&buf)).filter(|s| !s.is_empty())
+        Some(from_wide_bytes(&buf)).filter(|s| !s.is_empty())
     }
 
     fn present_devices() -> Vec<Dev> {
-        // SAFETY: enumerates all present devices; the set is destroyed by DevInfoSet.
+        // SAFETY: enumerates all present devices; no class, enumerator or window.
         let Ok(set) = (unsafe {
             SetupDiGetClassDevsW(None, PCWSTR::null(), None, DIGCF_PRESENT | DIGCF_ALLCLASSES)
         }) else {
             return Vec::new();
         };
-        let set = DevInfoSet(set);
+        // SAFETY: the set was just created and is destroyed exactly once, on drop.
+        let set = unsafe { Owned::new(set) };
         let mut out = Vec::new();
         for i in 0..4096 {
             let mut d = SP_DEVINFO_DATA {
                 cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
                 ..Default::default()
             };
-            // SAFETY: cbSize set as required.
-            if unsafe { SetupDiEnumDeviceInfo(set.0, i, &mut d) }.is_err() {
+            // SAFETY: valid set; cbSize of the out struct is set as required.
+            if unsafe { SetupDiEnumDeviceInfo(*set, i, &mut d) }.is_err() {
                 break;
             }
             let mut id = [0u16; 512];
-            // SAFETY: buffer slice passed with its length.
-            if unsafe { SetupDiGetDeviceInstanceIdW(set.0, &d, Some(&mut id), None) }.is_err() {
+            // SAFETY: valid set and element; the buffer slice is passed with its length.
+            if unsafe { SetupDiGetDeviceInstanceIdW(*set, &d, Some(&mut id), None) }.is_err() {
                 continue;
             }
-            let end = id.iter().position(|&c| c == 0).unwrap_or(id.len());
-            let id = String::from_utf16_lossy(&id[..end]);
+            let id = from_wide(&id);
             let upper = id.to_ascii_uppercase();
             if !(upper.starts_with(r"USB\")
                 || upper.starts_with(r"HID\VID_")
@@ -249,9 +220,9 @@ mod imp {
                 continue;
             }
             out.push(Dev {
-                class: prop(set.0, &d, SPDRP_CLASS).unwrap_or_default(),
-                name: prop(set.0, &d, SPDRP_FRIENDLYNAME)
-                    .or_else(|| prop(set.0, &d, SPDRP_DEVICEDESC))
+                class: prop(*set, &d, SPDRP_CLASS).unwrap_or_default(),
+                name: prop(*set, &d, SPDRP_FRIENDLYNAME)
+                    .or_else(|| prop(*set, &d, SPDRP_DEVICEDESC))
                     .unwrap_or_default(),
                 id,
             });
@@ -340,17 +311,33 @@ mod imp {
         out
     }
 
+    /// The device power API session (`DevicePowerOpen`), closed on drop.
+    struct DevicePowerSession;
+
+    impl DevicePowerSession {
+        fn open() -> Option<DevicePowerSession> {
+            // SAFETY: no pointers; balanced by DevicePowerClose in Drop.
+            unsafe { DevicePowerOpen(None) }.then_some(DevicePowerSession)
+        }
+    }
+
+    impl Drop for DevicePowerSession {
+        fn drop(&mut self) {
+            // SAFETY: matches the successful DevicePowerOpen in `open`.
+            unsafe { DevicePowerClose() };
+        }
+    }
+
     /// Devices allowed to wake the PC (`powercfg /devicequery wake_armed`).
     fn wake_armed() -> Vec<String> {
-        // SAFETY: opened and closed around the enumeration.
-        if !unsafe { DevicePowerOpen(None) } {
+        let Some(_session) = DevicePowerSession::open() else {
             return Vec::new();
-        }
+        };
         let mut out = Vec::new();
         for i in 0..256 {
             let mut buf = [0u16; 512];
             let mut size = (buf.len() * 2) as u32;
-            // SAFETY: buffer size in bytes passed in `size`.
+            // SAFETY: open session; the buffer size in bytes is passed in `size`.
             let ok = unsafe {
                 DevicePowerEnumDevices(
                     i,
@@ -363,45 +350,12 @@ mod imp {
             if !ok {
                 break;
             }
-            let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
-            let name = String::from_utf16_lossy(&buf[..end]);
+            let name = from_wide(&buf);
             if !name.is_empty() && !out.contains(&name) {
                 out.push(name);
             }
         }
-        // SAFETY: opened above.
-        unsafe { DevicePowerClose() };
         out
-    }
-
-    struct Evt(EVT_HANDLE);
-    impl Drop for Evt {
-        fn drop(&mut self) {
-            // SAFETY: handle from EvtQuery/EvtNext.
-            let _ = unsafe { EvtClose(self.0) };
-        }
-    }
-
-    fn render_xml(e: &Evt) -> Option<String> {
-        let mut used = 0u32;
-        let mut count = 0u32;
-        let mut buf = vec![0u16; 8192];
-        // SAFETY: buffer size in bytes.
-        unsafe {
-            EvtRender(
-                None,
-                e.0,
-                EvtRenderEventXml.0,
-                (buf.len() * 2) as u32,
-                Some(buf.as_mut_ptr().cast()),
-                &mut used,
-                &mut count,
-            )
-        }
-        .ok()?;
-        let n = (used as usize / 2).min(buf.len());
-        let end = buf[..n].iter().position(|&c| c == 0).unwrap_or(n);
-        Some(String::from_utf16_lossy(&buf[..end]))
     }
 
     /// Recent Power-Troubleshooter "returned from a low power state" events, newest first.
@@ -409,34 +363,7 @@ mod imp {
         let xpath = format!(
             "*[System[Provider[@Name='Microsoft-Windows-Power-Troubleshooter'] and EventID=1 and TimeCreated[timediff(@SystemTime) <= {WAKE_HISTORY_MS}]]]"
         );
-        // SAFETY: NUL-terminated strings; handle closed by Evt.
-        let Ok(q) = (unsafe {
-            EvtQuery(
-                None,
-                w!("System"),
-                &HSTRING::from(xpath),
-                EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
-            )
-        }) else {
-            return Vec::new();
-        };
-        let q = Evt(q);
-        let mut out = Vec::new();
-        while out.len() < 50 {
-            let mut handles = [0isize; 10];
-            let mut n = 0u32;
-            // SAFETY: output array and count.
-            if unsafe { EvtNext(q.0, &mut handles, 1000, 0, &mut n) }.is_err() || n == 0 {
-                break;
-            }
-            for &h in &handles[..n as usize] {
-                let e = Evt(EVT_HANDLE(h));
-                if let Some(w) = render_xml(&e).and_then(|x| power::parse_wake_event(&x)) {
-                    out.push(w);
-                }
-            }
-        }
-        out
+        crate::win::eventlog::query_system(&xpath, 50, power::parse_wake_event).unwrap_or_default()
     }
 
     fn powercfg(arg: &str) -> Option<String> {
@@ -489,7 +416,7 @@ mod imp {
             GUID::from_u128(setting.guid()),
         );
         if matches!(source, Source::Ac | Source::Both) {
-            // SAFETY: valid GUID pointers.
+            // SAFETY: valid GUID pointers to locals.
             let st =
                 unsafe { PowerWriteACValueIndex(None, &scheme, Some(&sub), Some(&set), value) };
             if st != ERROR_SUCCESS {
@@ -497,7 +424,7 @@ mod imp {
             }
         }
         if matches!(source, Source::Dc | Source::Both) {
-            // SAFETY: valid GUID pointers.
+            // SAFETY: valid GUID pointers to locals.
             let st =
                 unsafe { PowerWriteDCValueIndex(None, &scheme, Some(&sub), Some(&set), value) };
             if st != ERROR_SUCCESS.0 {
@@ -523,14 +450,16 @@ mod imp {
                 ApplyError::Failed(e.message())
             }
         };
-        // SAFETY: the set is destroyed by DevInfoSet; structures sized as required.
+        // SAFETY: an empty set is created and destroyed (on drop) exactly once; the instance id
+        // is a NUL-terminated HSTRING; every struct's size field is set as required and the
+        // params size covers the full SP_PROPCHANGE_PARAMS its header starts.
         unsafe {
-            let set = DevInfoSet(SetupDiCreateDeviceInfoList(None, None).map_err(fail)?);
+            let set = Owned::new(SetupDiCreateDeviceInfoList(None, None).map_err(fail)?);
             let mut d = SP_DEVINFO_DATA {
                 cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
                 ..Default::default()
             };
-            SetupDiOpenDeviceInfoW(set.0, &HSTRING::from(instance_id), None, 0, Some(&mut d))
+            SetupDiOpenDeviceInfoW(*set, &HSTRING::from(instance_id), None, 0, Some(&mut d))
                 .map_err(fail)?;
             let params = SP_PROPCHANGE_PARAMS {
                 ClassInstallHeader: SP_CLASSINSTALL_HEADER {
@@ -542,13 +471,13 @@ mod imp {
                 HwProfile: 0,
             };
             SetupDiSetClassInstallParamsW(
-                set.0,
+                *set,
                 Some(&d),
                 Some(&params.ClassInstallHeader),
                 size_of::<SP_PROPCHANGE_PARAMS>() as u32,
             )
             .map_err(fail)?;
-            SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set.0, Some(&d)).map_err(fail)
+            SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, *set, Some(&d)).map_err(fail)
         }
     }
 
@@ -613,11 +542,9 @@ mod imp {
                 restart_device(&id)
             }
             Action::DisarmWake(name) => {
-                // SAFETY: opened and closed around the call.
-                if !unsafe { DevicePowerOpen(None) } {
-                    return Err(ApplyError::Failed("Device power API unavailable".into()));
-                }
-                // SAFETY: NUL-terminated device name.
+                let _session = DevicePowerSession::open()
+                    .ok_or_else(|| ApplyError::Failed("Device power API unavailable".into()))?;
+                // SAFETY: open session; NUL-terminated device name that outlives the call.
                 let st = unsafe {
                     DevicePowerSetDeviceState(
                         &HSTRING::from(name.as_str()),
@@ -625,8 +552,6 @@ mod imp {
                         None,
                     )
                 };
-                // SAFETY: opened above.
-                unsafe { DevicePowerClose() };
                 if st == ERROR_SUCCESS.0 {
                     Ok(())
                 } else {
@@ -649,4 +574,6 @@ mod imp {
     }
 }
 
+#[cfg(windows)]
+pub(crate) use imp::{active_scheme, scheme_name};
 pub use imp::{apply, gather_devices, gather_settings, query_admin_raw};

@@ -5,11 +5,11 @@ use crate::gpu::{GpuAdapter, NvmlDetails};
 use crate::sensors::{Reading, SensorBackend, Unit};
 use std::ffi::c_void;
 use std::ptr;
-use windows::Win32::Foundation::{FreeLibrary, HMODULE};
+use windows::Win32::Foundation::HMODULE;
 use windows::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
-use windows::core::{s, w};
+use windows::core::{Owned, s, w};
 
 // NVML is a third-party driver DLL with no `windows` crate bindings, so its handle type,
 // structs and entry-point signatures below stay hand-written (from nvml.h).
@@ -43,6 +43,7 @@ struct Memory {
 }
 
 #[repr(C)]
+#[derive(Default)]
 struct PciInfo {
     bus_id_legacy: [u8; 16],
     domain: u32,
@@ -93,12 +94,15 @@ struct Fns {
 }
 
 pub struct Nvml {
-    lib: HMODULE,
     f: Fns,
     devices: Vec<Device>,
+    /// Keeps `nvml.dll` loaded while the entry points in `f` are in use; freed on drop,
+    /// after `Drop for Nvml` has shut NVML down.
+    _lib: Owned<HMODULE>,
 }
 
-// SAFETY: NVML is thread-safe; handles are plain identifiers.
+// SAFETY: NVML is thread-safe; device handles are plain identifiers and the module handle
+// may be freed from any thread.
 unsafe impl Send for Nvml {}
 
 fn c_str(buf: &[u8]) -> String {
@@ -120,11 +124,13 @@ impl Nvml {
             })
         }
         .ok()?;
+        // SAFETY: the module was just loaded and is freed exactly once, when this drops.
+        let lib = unsafe { Owned::new(lib) };
         macro_rules! opt {
             ($name:literal, $t:ty) => {
                 // SAFETY: valid module and NUL-terminated name; NVML exports these
                 // symbols with the declared C signatures.
-                unsafe { GetProcAddress(lib, s!($name)) }.map(|p| unsafe {
+                unsafe { GetProcAddress(*lib, s!($name)) }.map(|p| unsafe {
                     std::mem::transmute::<unsafe extern "system" fn() -> isize, $t>(p)
                 })
             };
@@ -135,13 +141,10 @@ impl Nvml {
             opt!("nvmlDeviceGetCount_v2", FnU32Out),
             opt!("nvmlDeviceGetHandleByIndex_v2", FnHandle),
         ) else {
-            // SAFETY: module loaded above.
-            let _ = unsafe { FreeLibrary(lib) };
             return None;
         };
-        // SAFETY: entry points resolved above.
+        // SAFETY: entry point resolved above with its nvml.h signature.
         if unsafe { init() } != SUCCESS {
-            let _ = unsafe { FreeLibrary(lib) };
             return None;
         }
         let f = Fns {
@@ -170,18 +173,22 @@ impl Nvml {
                 .or(opt!("nvmlDeviceGetCurrentClocksThrottleReasons", FnDevU64)),
         };
         let mut n = 0;
-        // SAFETY: valid out pointer.
         let mut devices = Vec::new();
+        // SAFETY: NVML is initialized; valid out pointer.
         if unsafe { count(&mut n) } == SUCCESS {
             for i in 0..n {
                 let mut d = ptr::null_mut();
-                // SAFETY: index < count.
+                // SAFETY: NVML is initialized; index < count; valid out pointer.
                 if unsafe { handle(i, &mut d) } == SUCCESS {
                     devices.push(d);
                 }
             }
         }
-        Some(Nvml { lib, f, devices })
+        Some(Nvml {
+            f,
+            devices,
+            _lib: lib,
+        })
     }
 
     pub fn device_count(&self) -> usize {
@@ -196,14 +203,14 @@ impl Nvml {
 
     fn arg_u32(&self, f: Option<FnDevArgU32>, i: usize, arg: u32) -> Option<u32> {
         let mut v = 0;
-        // SAFETY: as above.
+        // SAFETY: function resolved from NVML; device handle valid while initialized.
         (unsafe { f?(self.devices[i], arg, &mut v) } == SUCCESS).then_some(v)
     }
 
     fn string(&self, f: Option<FnStr>, i: usize) -> String {
         let mut buf = [0u8; 96];
         match f {
-            // SAFETY: buffer length passed explicitly.
+            // SAFETY: function resolved from NVML; the buffer length is passed explicitly.
             Some(f)
                 if unsafe { f(self.devices[i], buf.as_mut_ptr(), buf.len() as u32) } == SUCCESS =>
             {
@@ -214,8 +221,8 @@ impl Nvml {
     }
 
     fn pci_info(&self, i: usize) -> Option<PciInfo> {
-        // SAFETY: zeroed POD out-struct.
-        let mut p: PciInfo = unsafe { std::mem::zeroed() };
+        let mut p = PciInfo::default();
+        // SAFETY: function resolved from NVML; valid device handle and out pointer.
         (unsafe { self.f.pci?(self.devices[i], &mut p) } == SUCCESS).then_some(p)
     }
 
@@ -233,7 +240,7 @@ impl Nvml {
     pub fn details(&self, i: usize) -> NvmlDetails {
         let mut driver = [0u8; 96];
         let driver_version = match self.f.driver {
-            // SAFETY: buffer length passed explicitly.
+            // SAFETY: function resolved from NVML; the buffer length is passed explicitly.
             Some(f) if unsafe { f(driver.as_mut_ptr(), driver.len() as u32) } == SUCCESS => {
                 c_str(&driver)
             }
@@ -266,36 +273,35 @@ impl Nvml {
 
     fn memory(&self, i: usize) -> Option<Memory> {
         let mut m = Memory::default();
-        // SAFETY: valid out pointer.
+        // SAFETY: function resolved from NVML; valid device handle and out pointer.
         (unsafe { self.f.memory?(self.devices[i], &mut m) } == SUCCESS).then_some(m)
     }
 
     fn bar1_total(&self, i: usize) -> Option<u64> {
         let mut m = Memory::default();
-        // SAFETY: valid out pointer; same layout as nvmlBAR1Memory_t.
+        // SAFETY: function resolved from NVML; valid out pointer with the same layout as
+        // nvmlBAR1Memory_t.
         (unsafe { self.f.bar1?(self.devices[i], &mut m) } == SUCCESS).then_some(m.total)
     }
 
     fn clock_events(&self, i: usize) -> Option<u64> {
         let mut v = 0u64;
-        // SAFETY: valid out pointer.
+        // SAFETY: function resolved from NVML; valid device handle and out pointer.
         (unsafe { self.f.clock_events?(self.devices[i], &mut v) } == SUCCESS).then_some(v)
     }
 
     fn utilization(&self, i: usize) -> Option<Utilization> {
         let mut u = Utilization::default();
-        // SAFETY: valid out pointer.
+        // SAFETY: function resolved from NVML; valid device handle and out pointer.
         (unsafe { self.f.utilization?(self.devices[i], &mut u) } == SUCCESS).then_some(u)
     }
 }
 
 impl Drop for Nvml {
     fn drop(&mut self) {
-        // SAFETY: initialized in load(); library freed once.
-        unsafe {
-            (self.f.shutdown)();
-            let _ = FreeLibrary(self.lib);
-        }
+        // SAFETY: NVML was initialized in load(); the library is still loaded (`_lib` drops
+        // after this runs).
+        unsafe { (self.f.shutdown)() };
     }
 }
 

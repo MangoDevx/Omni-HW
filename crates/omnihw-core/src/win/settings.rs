@@ -70,7 +70,8 @@ mod imp {
             CodeIntegrityOptions: 0,
         };
         let mut ret = 0;
-        // SAFETY: Length set as required; buffer size matches.
+        // SAFETY: the buffer is a SYSTEM_CODEINTEGRITY_INFORMATION of the size passed, with its
+        // Length field set as required; valid out pointer for the returned length.
         let st = unsafe {
             NtQuerySystemInformation(
                 SystemCodeIntegrityInformation,

@@ -3,8 +3,6 @@
 //! The Run entry starts Omni-HW with `--autostart` (never shows the UAC prompt) and, when
 //! requested, `--minimized` (window starts minimized).
 
-// Wired into app.rs/main.rs after merge; remove this allow then.
-
 pub const AUTOSTART_FLAG: &str = "--autostart";
 pub const MINIMIZED_FLAG: &str = "--minimized";
 

@@ -57,39 +57,50 @@ fn pick(start: &std::path::Path) -> Option<PathBuf> {
         FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
         SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
     };
-    use windows::core::{HSTRING, w};
+    use windows::core::{HSTRING, PWSTR, w};
 
-    // SAFETY: COM is initialised for this (new, short-lived) thread and uninitialised at the end;
-    // every interface is released (dropped) before CoUninitialize, and the path string returned
-    // by GetDisplayName is freed with CoTaskMemFree.
-    unsafe {
-        if CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE).is_err() {
-            return None;
+    /// COM initialised for this (new, short-lived) thread; uninitialised on drop.
+    struct Com;
+    impl Drop for Com {
+        fn drop(&mut self) {
+            // SAFETY: pairs the successful CoInitializeEx below, on the same thread.
+            unsafe { CoUninitialize() };
         }
-        let result = (|| -> Option<PathBuf> {
-            let dialog: IFileOpenDialog =
-                CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
-            let opts = dialog.GetOptions().ok()?;
-            dialog
-                .SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)
-                .ok()?;
-            let _ = dialog.SetTitle(w!("Choose where to save recordings and reports"));
-            if let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(
-                &HSTRING::from(start.as_os_str()),
-                None,
-            ) {
-                let _ = dialog.SetFolder(&item);
-            }
-            // Errors when cancelled.
-            dialog.Show(None).ok()?;
-            let item = dialog.GetResult().ok()?;
-            let name = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
-            let path = name.to_string().ok();
-            CoTaskMemFree(Some(name.0 as *const _));
-            path.map(PathBuf::from)
-        })();
-        CoUninitialize();
-        result
+    }
+    /// A string allocated by COM; freed on drop.
+    struct CoString(PWSTR);
+    impl Drop for CoString {
+        fn drop(&mut self) {
+            // SAFETY: allocated by the shell with CoTaskMemAlloc, freed exactly once.
+            unsafe { CoTaskMemFree(Some(self.0.0 as *const _)) };
+        }
+    }
+
+    // SAFETY: plain COM initialisation for this thread; undone by `Com`'s drop.
+    if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_err() {
+        return None;
+    }
+    let _com = Com;
+    // SAFETY: standard IFileOpenDialog use on the COM thread set up above. Every interface is
+    // dropped at the end of this block, before `_com` uninitialises COM.
+    unsafe {
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let opts = dialog.GetOptions().ok()?;
+        dialog
+            .SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)
+            .ok()?;
+        let _ = dialog.SetTitle(w!("Choose where to save recordings and reports"));
+        if let Ok(item) =
+            SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(start.as_os_str()), None)
+        {
+            let _ = dialog.SetFolder(&item);
+        }
+        // Errors when cancelled.
+        dialog.Show(None).ok()?;
+        let item = dialog.GetResult().ok()?;
+        let name = CoString(item.GetDisplayName(SIGDN_FILESYSPATH).ok()?);
+        name.0.to_string().ok().map(PathBuf::from)
     }
 }
 

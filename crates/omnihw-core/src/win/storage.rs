@@ -1,18 +1,18 @@
 //! Physical drives via `\\.\PhysicalDriveN` storage IOCTLs, volumes, and live disk sensors.
 
+use super::device::{Handle, read_struct};
 use super::pdh::{Counter, PDH_FMT_DOUBLE_NOCAP100, Query, read_array};
+use super::wide::from_wide;
 use crate::sensors::{Reading, SensorBackend, Unit};
 use crate::smart::{AtaSmart, parse_ata_smart};
 use crate::storage::*;
 use std::mem::offset_of;
 use std::ptr;
-use windows::Win32::Foundation::{CloseHandle, GENERIC_READ, GENERIC_WRITE, HANDLE};
+use windows::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE};
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAGS_AND_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, GetDiskFreeSpaceExW,
-    GetLogicalDrives, GetVolumeInformationW, OPEN_EXISTING,
+    GetDiskFreeSpaceExW, GetLogicalDrives, GetVolumeInformationW,
 };
 use windows::Win32::Storage::Nvme::NVME_LOG_PAGE_HEALTH_INFO;
-use windows::Win32::System::IO::DeviceIoControl;
 use windows::Win32::System::Ioctl::{
     DISK_GEOMETRY_EX, DRIVE_LAYOUT_INFORMATION_EX, ID_CMD, IDEREGS,
     IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_DISK_GET_DRIVE_LAYOUT_EX,
@@ -28,60 +28,14 @@ use windows::core::HSTRING;
 
 const NVME_LOG_DATA_SIZE: u32 = 512;
 
-/// Owned Win32 handle.
-struct Handle(HANDLE);
+/// Access rights for a metadata/IOCTL-only handle (no read or write; no admin needed).
+const QUERY_ONLY: u32 = 0;
+/// Read/write access, which Windows only grants to administrators for physical drives.
+const READ_WRITE: u32 = GENERIC_READ.0 | GENERIC_WRITE.0;
 
-// SAFETY: device handles may be used from any thread.
-unsafe impl Send for Handle {}
-
-impl Drop for Handle {
-    fn drop(&mut self) {
-        // SAFETY: valid handle owned by us.
-        let _ = unsafe { CloseHandle(self.0) };
-    }
-}
-
-fn open(path: &str, access: u32) -> Option<Handle> {
-    // SAFETY: NUL-terminated path; no template.
-    unsafe {
-        CreateFileW(
-            &HSTRING::from(path),
-            access,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            None,
-            OPEN_EXISTING,
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            None,
-        )
-    }
-    .ok()
-    .map(Handle)
-}
-
-/// `DeviceIoControl` with `input` sent as-is; returns the number of bytes written to `out`.
-fn ioctl<I: ?Sized>(h: &Handle, code: u32, input: &I, out: &mut [u8]) -> Option<usize> {
-    let mut got = 0;
-    // SAFETY: buffers are valid for the given lengths.
-    unsafe {
-        DeviceIoControl(
-            h.0,
-            code,
-            Some((input as *const I).cast()),
-            size_of_val(input) as u32,
-            Some(out.as_mut_ptr().cast()),
-            out.len() as u32,
-            Some(&mut got),
-            None,
-        )
-    }
-    .ok()?;
-    Some(got as usize)
-}
-
-/// A Win32 struct from the start of an IOCTL output buffer.
-fn read_struct<T: Copy>(b: &[u8]) -> Option<T> {
-    // SAFETY: length checked; the buffer is fully initialized and the read is unaligned-safe.
-    (b.len() >= size_of::<T>()).then(|| unsafe { ptr::read_unaligned(b.as_ptr().cast()) })
+/// `\\.\PhysicalDriveN` opened with `access`.
+fn open_drive(index: u32, access: u32) -> Option<Handle> {
+    Handle::open(&format!(r"\\.\PhysicalDrive{index}"), access)
 }
 
 /// `IOCTL_STORAGE_QUERY_PROPERTY` with a standard query for `property`.
@@ -92,7 +46,7 @@ fn query_property(h: &Handle, property: STORAGE_PROPERTY_ID, out_len: usize) -> 
         AdditionalParameters: [0],
     };
     let mut out = vec![0u8; out_len];
-    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, &q, &mut out)?;
+    let n = h.ioctl(IOCTL_STORAGE_QUERY_PROPERTY, &q, &mut out)?;
     out.truncate(n);
     Some(out)
 }
@@ -120,14 +74,16 @@ fn nvme_health(h: &Handle) -> Option<NvmeHealth> {
         ProtocolDataLength: NVME_LOG_DATA_SIZE,
         ..Default::default()
     };
-    // SAFETY: both writes are in bounds; `spec` overwrites the query's AdditionalParameters.
+    // SAFETY: `q` is SPEC_AT + SPEC_SIZE + log bytes long, so both unaligned writes are in
+    // bounds; `spec` deliberately overwrites the query's one-byte AdditionalParameters.
     unsafe {
         ptr::write_unaligned(q.as_mut_ptr().cast(), query);
         ptr::write_unaligned(q.as_mut_ptr().add(SPEC_AT).cast(), spec);
     }
     let mut out = vec![0u8; q.len()];
-    let n = ioctl(h, IOCTL_STORAGE_QUERY_PROPERTY, q.as_slice(), &mut out)?;
-    let d: STORAGE_PROTOCOL_DATA_DESCRIPTOR = read_struct(&out)?;
+    let n = h.ioctl(IOCTL_STORAGE_QUERY_PROPERTY, q.as_slice(), &mut out)?;
+    // SAFETY: STORAGE_PROTOCOL_DATA_DESCRIPTOR is plain integer data.
+    let d: STORAGE_PROTOCOL_DATA_DESCRIPTOR = unsafe { read_struct(&out) }?;
     let data = d.ProtocolSpecificData;
     let start = offset_of!(STORAGE_PROTOCOL_DATA_DESCRIPTOR, ProtocolSpecificData)
         + data.ProtocolDataOffset as usize;
@@ -163,17 +119,18 @@ fn ata_read(h: &Handle, drive: u32, command: u8, features: u8) -> Option<Vec<u8>
         bDriveNumber: drive as u8,
         ..Default::default()
     };
-    // SAFETY: SENDCMDINPARAMS is packed(1) with no padding; the trailing 1-byte buffer is
-    // not sent.
+    // SAFETY: SENDCMDINPARAMS is packed(1), so every byte is initialized; the slice covers
+    // only the header before the trailing 1-byte buffer (which is not sent) and borrows
+    // `input`, which outlives it.
     let input = unsafe {
         std::slice::from_raw_parts(
-            (&input as *const SENDCMDINPARAMS).cast::<u8>(),
+            ptr::from_ref(&input).cast::<u8>(),
             offset_of!(SENDCMDINPARAMS, bBuffer),
         )
     };
     const HEADER: usize = offset_of!(SENDCMDOUTPARAMS, bBuffer);
     let mut out = [0u8; HEADER + 512];
-    let n = ioctl(h, SMART_RCV_DRIVE_DATA, input, &mut out)?;
+    let n = h.ioctl(SMART_RCV_DRIVE_DATA, input, &mut out)?;
     out.get(HEADER..n).map(<[u8]>::to_vec)
 }
 
@@ -182,12 +139,16 @@ fn layout(h: &Handle, size: u64) -> Option<DiskLayout> {
     const HEADER: usize = offset_of!(DRIVE_LAYOUT_INFORMATION_EX, PartitionEntry);
     const ENTRY: usize = size_of::<PARTITION_INFORMATION_EX>();
     let mut out = vec![0u8; HEADER + 128 * ENTRY];
-    let n = ioctl(h, IOCTL_DISK_GET_DRIVE_LAYOUT_EX, &[0u8; 0], &mut out)?;
+    let n = h.ioctl(IOCTL_DISK_GET_DRIVE_LAYOUT_EX, &[0u8; 0], &mut out)?;
     let out = &out[..n];
-    let style = PartitionStyle::from_raw(u32::from_le_bytes(out.get(0..4)?.try_into().ok()?))?;
-    let count = u32::from_le_bytes(out.get(4..8)?.try_into().ok()?) as usize;
+    let style = PartitionStyle::from_raw(crate::le::u32_at(out, 0)?)?;
+    let count = crate::le::u32_at(out, 4)? as usize;
     let parts: Vec<(u64, u64)> = (0..count.min(128))
-        .filter_map(|i| read_struct::<PARTITION_INFORMATION_EX>(out.get(HEADER + i * ENTRY..)?))
+        .filter_map(|i| {
+            let entry = out.get(HEADER + i * ENTRY..)?;
+            // SAFETY: PARTITION_INFORMATION_EX is plain data (integers, BOOLEANs and GUIDs).
+            unsafe { read_struct::<PARTITION_INFORMATION_EX>(entry) }
+        })
         .map(|p| {
             (
                 p.StartingOffset.max(0) as u64,
@@ -209,43 +170,45 @@ fn layout(h: &Handle, size: u64) -> Option<DiskLayout> {
 
 fn disk_size(h: &Handle) -> Option<u64> {
     let mut out = [0u8; 256];
-    ioctl(h, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, &[0u8; 0], &mut out)?;
-    Some(read_struct::<DISK_GEOMETRY_EX>(&out)?.DiskSize as u64)
-}
-
-fn utf16_z(b: &[u16]) -> String {
-    String::from_utf16_lossy(&b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())])
+    h.ioctl(IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, &[0u8; 0], &mut out)?;
+    // SAFETY: DISK_GEOMETRY_EX is plain integer data.
+    let geometry = unsafe { read_struct::<DISK_GEOMETRY_EX>(&out) }?;
+    Some(geometry.DiskSize as u64)
 }
 
 /// Mounted drive-letter volumes with the physical disk number they live on.
 fn volumes() -> Vec<(u32, Volume)> {
     let mut out = Vec::new();
-    // SAFETY: trivially safe.
+    // SAFETY: no arguments.
     let mask = unsafe { GetLogicalDrives() };
     for i in 0..26u32 {
         if mask >> i & 1 == 0 {
             continue;
         }
         let letter = (b'A' + i as u8) as char;
-        let Some(h) = open(&format!(r"\\.\{letter}:"), 0) else {
+        let Some(h) = Handle::open(&format!(r"\\.\{letter}:"), QUERY_ONLY) else {
             continue;
         };
         let mut num = [0u8; size_of::<STORAGE_DEVICE_NUMBER>()];
-        if ioctl(&h, IOCTL_STORAGE_GET_DEVICE_NUMBER, &[0u8; 0], &mut num).is_none() {
+        if h.ioctl(IOCTL_STORAGE_GET_DEVICE_NUMBER, &[0u8; 0], &mut num)
+            .is_none()
+        {
             continue;
         }
-        let disk = read_struct::<STORAGE_DEVICE_NUMBER>(&num)
-            .unwrap()
-            .DeviceNumber;
+        // SAFETY: STORAGE_DEVICE_NUMBER is plain integer data.
+        let Some(number) = (unsafe { read_struct::<STORAGE_DEVICE_NUMBER>(&num) }) else {
+            continue;
+        };
+        let disk = number.DeviceNumber;
         let root = HSTRING::from(format!(r"{letter}:\"));
         let (mut avail, mut total, mut free) = (0u64, 0u64, 0u64);
-        // SAFETY: valid root path and out pointers.
+        // SAFETY: NUL-terminated root path that outlives the call; out pointers to locals.
         let _ = unsafe {
             GetDiskFreeSpaceExW(&root, Some(&mut avail), Some(&mut total), Some(&mut free))
         };
         let mut label = [0u16; 128];
         let mut fs = [0u16; 32];
-        // SAFETY: buffer lengths passed with the slices.
+        // SAFETY: NUL-terminated root path; buffer lengths are passed with the slices.
         let _ = unsafe {
             GetVolumeInformationW(&root, Some(&mut label), None, None, None, Some(&mut fs))
         };
@@ -253,8 +216,8 @@ fn volumes() -> Vec<(u32, Volume)> {
             disk,
             Volume {
                 mount: format!("{letter}:"),
-                label: utf16_z(&label),
-                file_system: utf16_z(&fs),
+                label: from_wide(&label),
+                file_system: from_wide(&fs),
                 total_bytes: total,
                 free_bytes: free,
             },
@@ -269,8 +232,7 @@ pub fn drives() -> Vec<Drive> {
     let mut out = Vec::new();
     let mut misses = 0;
     for index in 0..64u32 {
-        let path = format!(r"\\.\PhysicalDrive{index}");
-        let Some(h) = open(&path, 0) else {
+        let Some(h) = open_drive(index, QUERY_ONLY) else {
             // Drive numbers can have gaps; stop after a run of misses.
             misses += 1;
             if misses > 8 {
@@ -288,14 +250,14 @@ pub fn drives() -> Vec<Drive> {
             .and_then(|b| b.get(8).map(|&v| v == 0));
         let nvme_health = if desc.bus == BusType::Nvme {
             // The protocol-specific query generally needs read/write access (administrator).
-            open(&path, (GENERIC_READ | GENERIC_WRITE).0)
+            open_drive(index, READ_WRITE)
                 .and_then(|rw| nvme_health(&rw))
                 .or_else(|| nvme_health(&h))
         } else {
             None
         };
         let rw = if desc.bus.smart_capable() {
-            open(&path, (GENERIC_READ | GENERIC_WRITE).0)
+            open_drive(index, READ_WRITE)
         } else {
             None
         };
@@ -345,7 +307,7 @@ impl StorageBackend {
         let handles = drives
             .iter()
             .filter_map(|d| {
-                let h = open(&format!(r"\\.\PhysicalDrive{}", d.index), 0)?;
+                let h = open_drive(d.index, QUERY_ONLY)?;
                 Some((h, d.bus == BusType::Nvme, d.sensor_prefix(), group(d)))
             })
             .collect();
@@ -437,7 +399,7 @@ impl SensorBackend for StorageBackend {
 pub fn has_smart_capable_drive() -> bool {
     let mut misses = 0;
     for index in 0..64u32 {
-        let Some(h) = open(&format!(r"\\.\PhysicalDrive{index}"), 0) else {
+        let Some(h) = open_drive(index, QUERY_ONLY) else {
             misses += 1;
             if misses > 8 {
                 break;

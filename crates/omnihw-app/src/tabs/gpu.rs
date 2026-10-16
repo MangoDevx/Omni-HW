@@ -1,4 +1,4 @@
-use super::{or_dash, section};
+use super::section;
 use crate::sampler::Snapshot;
 use omnihw_core::{SystemInfo, format_bytes};
 
@@ -47,8 +47,8 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
             let cur = link(n.pcie_current).unwrap_or_default();
             card.push(("Bus Interface", format!("PCIe {max} @ {cur}")));
         }
-        card.push(("Bus ID", or_dash(&n.bus_id)));
-        card.push(("BIOS Version", or_dash(&n.vbios)));
+        card.push(("Bus ID", n.bus_id.clone()));
+        card.push(("BIOS Version", n.vbios.clone()));
     }
     let driver = match nv {
         Some(n) if !n.driver_version.is_empty() => {

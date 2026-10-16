@@ -36,8 +36,3 @@ pub fn gather() -> Checkup {
 pub fn gather() -> Checkup {
     Checkup::default()
 }
-
-#[cfg(windows)]
-fn utf16_z(b: &[u16]) -> String {
-    String::from_utf16_lossy(&b[..b.iter().position(|&c| c == 0).unwrap_or(b.len())])
-}

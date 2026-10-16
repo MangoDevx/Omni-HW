@@ -12,7 +12,7 @@ use windows::Win32::System::TpmBaseServices::{
 
 pub fn firmware() -> Firmware {
     let mut ft = FIRMWARE_TYPE::default();
-    // SAFETY: valid out pointer.
+    // SAFETY: valid out pointer to a local.
     let uefi = unsafe { GetFirmwareType(&mut ft) }
         .ok()
         .and_then(|_| match ft {
@@ -37,7 +37,7 @@ pub fn firmware() -> Firmware {
 
 fn tpm() -> Tpm {
     let mut info = TPM_DEVICE_INFO::default();
-    // SAFETY: buffer of the declared size.
+    // SAFETY: the out buffer is a TPM_DEVICE_INFO of the declared size.
     let r = unsafe {
         Tbsi_GetDeviceInfo(
             size_of::<TPM_DEVICE_INFO>() as u32,

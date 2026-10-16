@@ -33,6 +33,7 @@ pub enum Limit {
     Idle,
 }
 
+/// Overall verdict for a recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     GpuBound,
@@ -57,6 +58,7 @@ pub struct Columns {
     pub vram_used: Option<usize>,
 }
 
+/// The result of [`analyze`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct Analysis {
     pub columns: Columns,
@@ -125,14 +127,11 @@ pub fn find_columns(rec: &Recording) -> Result<Columns, String> {
     let gpu_prefix = rec.columns[gpu_load]
         .id
         .rsplit_once("/load")
-        .map(|(p, _)| p.trim_end_matches("/nv").to_string());
+        .map(|(p, _)| format!("{}/", p.trim_end_matches("/nv")));
 
     let find = |pred: &dyn Fn(&Column) -> bool| rec.columns.iter().position(pred);
     let in_gpu = |c: &Column| {
-        c.group == gpu_group
-            || gpu_prefix
-                .as_ref()
-                .is_some_and(|p| c.id.starts_with(&format!("{p}/")))
+        c.group == gpu_group || gpu_prefix.as_deref().is_some_and(|p| c.id.starts_with(p))
     };
     let vram_used =
         find(&|c| in_gpu(c) && (c.id.ends_with("/vram/used") || c.label == "GPU Memory Used"))
@@ -370,6 +369,7 @@ impl Analysis {
         }
     }
 
+    /// What to try, depending on the verdict.
     pub fn tips(&self) -> Vec<String> {
         let t: &[&str] = match self.verdict {
             Verdict::GpuBound => &[

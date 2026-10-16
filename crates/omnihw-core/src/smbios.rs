@@ -112,14 +112,10 @@ impl Structure<'_> {
         self.formatted.get(o).copied()
     }
     fn word(&self, o: usize) -> Option<u16> {
-        Some(u16::from_le_bytes(
-            self.formatted.get(o..o + 2)?.try_into().ok()?,
-        ))
+        crate::le::u16_at(self.formatted, o)
     }
     fn dword(&self, o: usize) -> Option<u32> {
-        Some(u32::from_le_bytes(
-            self.formatted.get(o..o + 4)?.try_into().ok()?,
-        ))
+        crate::le::u32_at(self.formatted, o)
     }
     /// String referenced by the index byte at offset `o` (1-based; 0 = none).
     fn string(&self, o: usize) -> String {
@@ -257,12 +253,11 @@ fn parse_processor(s: &Structure) -> Processor {
 impl Smbios {
     /// Parse a `RawSMBIOSData` buffer (8-byte header followed by table data).
     pub fn parse_raw(buf: &[u8]) -> Result<Smbios, ParseError> {
-        if buf.len() < 8 {
+        let Some(len) = crate::le::u32_at(buf, 4) else {
             return Err(ParseError::TooShort);
-        }
+        };
         let version = (buf[1], buf[2]);
-        let len = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as usize;
-        let data = &buf[8..buf.len().min(8 + len)];
+        let data = &buf[8..buf.len().min(8usize.saturating_add(len as usize))];
         let mut out = Smbios::parse_table(data);
         out.version = version;
         Ok(out)

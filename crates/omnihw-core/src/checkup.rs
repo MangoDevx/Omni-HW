@@ -26,6 +26,7 @@ pub struct Checkup {
     pub startup_apps: Option<Vec<String>>,
 }
 
+/// Boot mode and platform security state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Firmware {
     /// Booted through UEFI (false = legacy BIOS / CSM).
@@ -34,6 +35,7 @@ pub struct Firmware {
     pub tpm: Tpm,
 }
 
+/// TPM presence and version.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tpm {
     #[default]
@@ -72,6 +74,7 @@ impl Connection {
         }
     }
 
+    /// Display name, e.g. "HDMI".
     pub fn name(self) -> &'static str {
         match self {
             Connection::Vga => "VGA",
@@ -85,6 +88,7 @@ impl Connection {
     }
 }
 
+/// An active monitor and its refresh rates.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Monitor {
     /// Friendly name from the monitor's EDID, e.g. "LG ULTRAGEAR".
@@ -138,6 +142,7 @@ pub struct Device {
 }
 
 impl Device {
+    /// In the "Display" (display adapter) setup class.
     pub fn is_display(&self) -> bool {
         self.class.eq_ignore_ascii_case("Display")
     }
@@ -165,18 +170,22 @@ pub fn problem_is_benign(code: u32) -> bool {
     matches!(code, 22 | 24 | 45 | 47)
 }
 
+/// Problem codes meaning the device has no (working) driver installed.
+pub fn problem_is_missing_driver(code: u32) -> bool {
+    matches!(code, 1 | 18 | 28)
+}
+
 /// Plain-language meaning of common Device Manager problem codes.
 pub fn problem_text(code: u32) -> &'static str {
     match code {
-        1 | 18 | 28 => "no driver installed",
+        c if problem_is_missing_driver(c) => "no driver installed",
         3 => "driver may be corrupted or the system is low on memory",
         10 => "device cannot start",
         12 => "not enough free resources",
         14 => "needs a restart",
         19 | 32 | 39 => "driver configuration is damaged",
         21 => "Windows is removing this device",
-        31 => "driver failed to load",
-        37 | 38 | 40 | 41 => "driver failed to load",
+        31 | 37 | 38 | 40 | 41 => "driver failed to load",
         43 => "stopped by Windows after it reported problems",
         48 => "driver blocked for known compatibility problems",
         52 => "driver signature could not be verified",
@@ -197,7 +206,9 @@ pub struct Events {
     pub memory_diagnostic: Option<Event>,
 }
 
+/// Days of event log read for crashes and hardware errors.
 pub const EVENT_DAYS: u32 = 30;
+/// Days of event log searched for the last Windows Memory Diagnostic result.
 pub const MEMDIAG_DAYS: u32 = 90;
 /// Most events read per query; counts at the cap mean "this many or more".
 pub const EVENT_CAP: usize = 200;
@@ -205,6 +216,7 @@ pub const EVENT_CAP: usize = 200;
 /// Memory diagnostic event ids that mean errors were found (1101/1201 mean none were).
 pub const MEMDIAG_FAILED: [u32; 2] = [1102, 1202];
 
+/// One event log entry.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Event {
     pub id: u32,
@@ -226,16 +238,30 @@ fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     Some(&body[..body.find(&format!("</{tag}>"))?])
 }
 
-/// Value of `<Data Name='name'>value</Data>`.
-fn data_value<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
+/// Value of `<Data Name='name'>...</Data>` in an event's XML, unescaped; empty for
+/// `<Data Name='name'/>`.
+pub fn event_data(xml: &str, name: &str) -> Option<String> {
     for q in ['\'', '"'] {
-        let key = format!("<Data Name={q}{name}{q}>");
-        if let Some(i) = xml.find(&key) {
-            let body = &xml[i + key.len()..];
-            return Some(&body[..body.find("</Data>")?]);
+        let tag = format!("<Data Name={q}{name}{q}>");
+        if let Some(i) = xml.find(&tag) {
+            let rest = &xml[i + tag.len()..];
+            let end = rest.find("</Data>")?;
+            return Some(unescape_xml(&rest[..end]));
+        }
+        let empty = format!("<Data Name={q}{name}{q}/>");
+        if xml.contains(&empty) {
+            return Some(String::new());
         }
     }
     None
+}
+
+fn unescape_xml(s: &str) -> String {
+    s.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
 }
 
 /// "0x0000001a (0x..., ...)" or "209" -> stop code.
@@ -260,9 +286,10 @@ pub fn parse_event_xml(xml: &str) -> Option<Event> {
     let y: i64 = it.next()?.parse().ok()?;
     let m: u32 = it.next()?.parse().ok()?;
     let d: u32 = it.next()?.parse().ok()?;
-    let code = data_value(xml, "BugcheckCode")
-        .or_else(|| data_value(xml, "param1"))
-        .and_then(parse_code);
+    let code = event_data(xml, "BugcheckCode")
+        .filter(|s| !s.is_empty())
+        .or_else(|| event_data(xml, "param1"))
+        .and_then(|s| parse_code(&s));
     Some(Event {
         id,
         date: (y, m, d),
@@ -321,6 +348,7 @@ pub enum CrashCause {
     Unknown,
 }
 
+/// The usual cause group of a stop code.
 pub fn crash_cause(code: u32) -> CrashCause {
     match base_stop_code(code) {
         0x1A | 0x50 | 0x4E | 0x19 | 0xC2 | 0x0A | 0x109 => CrashCause::MemoryOrOverclock,
@@ -371,6 +399,7 @@ pub struct PcieLink {
     pub max: (u32, u32),
 }
 
+/// Windows license state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Activation {
     Activated,
@@ -442,6 +471,16 @@ mod tests {
         let whea = "<Event><System><EventID>19</EventID><TimeCreated SystemTime='2026-01-02T00:00:00Z'/></System></Event>";
         assert_eq!(parse_event_xml(whea).unwrap().code, None);
         assert_eq!(parse_event_xml("garbage"), None);
+        // An empty BugcheckCode falls back to param1.
+        let empty = "<Event><System><EventID>41</EventID><TimeCreated SystemTime='2026-01-02T00:00:00Z'/></System>\
+            <EventData><Data Name='BugcheckCode'/><Data Name='param1'>0x7E</Data></EventData></Event>";
+        assert_eq!(parse_event_xml(empty).unwrap().code, Some(0x7E));
+        assert_eq!(
+            event_data("<Data Name=\"x\">a &amp; b</Data>", "x").as_deref(),
+            Some("a & b")
+        );
+        assert_eq!(event_data("<Data Name='x'/>", "x").as_deref(), Some(""));
+        assert_eq!(event_data("<Data Name='y'>1</Data>", "x"), None);
     }
 
     #[test]

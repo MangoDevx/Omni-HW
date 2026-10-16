@@ -8,6 +8,8 @@ use egui::Color32;
 pub const ORANGE: Color32 = Color32::from_rgb(255, 152, 0);
 pub const RED: Color32 = Color32::from_rgb(229, 57, 53);
 pub const GREEN: Color32 = Color32::from_rgb(76, 175, 80);
+/// Informational blue (suggestions, CPU accents).
+pub const BLUE: Color32 = Color32::from_rgb(66, 133, 244);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -124,7 +126,7 @@ pub fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
 mod tests {
     use super::*;
 
-    const BLUE: Color32 = Color32::from_rgb(0, 0, 255);
+    const BASE: Color32 = Color32::from_rgb(0, 0, 255);
 
     #[test]
     fn severity_levels() {
@@ -151,14 +153,14 @@ mod tests {
 
     #[test]
     fn color_matches_severity() {
-        assert_eq!(GPU_TEMP.color(BLUE, 60.0), BLUE);
-        assert_eq!(GPU_TEMP.color(BLUE, 75.0), ORANGE);
-        let mid = GPU_TEMP.color(BLUE, 80.0);
+        assert_eq!(GPU_TEMP.color(BASE, 60.0), BASE);
+        assert_eq!(GPU_TEMP.color(BASE, 75.0), ORANGE);
+        let mid = GPU_TEMP.color(BASE, 80.0);
         assert!(mid != ORANGE && mid != RED, "warning band blends");
         // Whenever severity says critical (red text), the color is exactly red.
         for t in [85.0, 89.0, 95.0, 120.0] {
             assert_eq!(GPU_TEMP.severity(t), Severity::Critical);
-            assert_eq!(GPU_TEMP.color(BLUE, t), RED);
+            assert_eq!(GPU_TEMP.color(BASE, t), RED);
         }
     }
 }

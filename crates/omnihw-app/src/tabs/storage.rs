@@ -1,4 +1,4 @@
-use super::{or_dash, section};
+use super::section;
 use crate::sampler::Snapshot;
 use egui::RichText;
 use omnihw_core::smart::AtaSmart;
@@ -30,10 +30,7 @@ fn smart_section(ui: &mut egui::Ui, d: &Drive, s: &AtaSmart) {
                 .num_columns(5)
                 .spacing([14.0, 2.0])
                 .show(ui, |ui| {
-                    for h in ["ID", "Attribute", "Current", "Worst", "Raw"] {
-                        ui.label(RichText::new(h).underline());
-                    }
-                    ui.end_row();
+                    super::header_row(ui, &["ID", "Attribute", "Current", "Worst", "Raw"]);
                     for a in &s.attributes {
                         ui.label(RichText::new(format!("{:02X}", a.id)).monospace());
                         ui.label(a.name);
@@ -72,8 +69,8 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot) {
             ("Type", d.kind().to_string()),
             ("Interface", d.bus.name()),
             ("Capacity", format_bytes(d.size_bytes)),
-            ("Firmware", or_dash(&d.firmware)),
-            ("Serial Number", or_dash(d.serial.trim_end_matches('.'))),
+            ("Firmware", d.firmware.clone()),
+            ("Serial Number", d.serial.trim_end_matches('.').to_string()),
             ("Removable", if d.removable { "Yes" } else { "No" }.into()),
         ],
     );

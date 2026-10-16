@@ -98,6 +98,7 @@ impl Setting {
         Setting::BatterySaverThreshold,
     ];
 
+    /// Name as Power Options shows it.
     pub fn label(self) -> &'static str {
         match self {
             Setting::DisplayOff => "Turn off the display after",
@@ -137,10 +138,12 @@ impl Setting {
         }
     }
 
+    /// Inverse of [`Setting::key`].
     pub fn from_key(k: &str) -> Option<Setting> {
         Setting::ALL.into_iter().find(|s| s.key() == k)
     }
 
+    /// How the value is shown and edited.
     pub fn kind(self) -> Kind {
         match self {
             Setting::DisplayOff | Setting::Sleep | Setting::Hibernate | Setting::DiskOff => {
@@ -301,6 +304,7 @@ pub enum WakeSource {
 }
 
 impl WakeSource {
+    /// Plain-language description, e.g. "Wake timer: ...".
     pub fn describe(&self) -> String {
         match self {
             WakeSource::Unknown => "Unknown".into(),
@@ -381,6 +385,7 @@ pub enum AdapterKind {
 }
 
 impl AdapterKind {
+    /// Display name.
     pub fn name(self) -> &'static str {
         match self {
             AdapterKind::Ethernet => "Ethernet",
@@ -432,6 +437,7 @@ pub enum UsbSensitive {
 }
 
 impl UsbSensitive {
+    /// Display name.
     pub fn name(self) -> &'static str {
         match self {
             UsbSensitive::Audio => "USB audio",
@@ -548,6 +554,7 @@ impl PowerInfo {
         self.fast_startup = s.fast_startup;
     }
 
+    /// Values of `s` in the active plan (both `None` if unknown).
     pub fn get(&self, s: Setting) -> AcDc {
         self.values
             .iter()
@@ -556,6 +563,7 @@ impl PowerInfo {
             .unwrap_or_default()
     }
 
+    /// The active power plan, if known.
     pub fn active_scheme(&self) -> Option<&Scheme> {
         let a = self.active.as_deref()?;
         self.schemes.iter().find(|s| s.guid == a)
@@ -691,6 +699,7 @@ impl Action {
         s.bytes().map(|b| format!("{b:02x}")).collect()
     }
 
+    /// Decode [`Action::to_arg`]; `None` for anything malformed or not allowed.
     pub fn from_arg(arg: &str) -> Option<Action> {
         if arg.len() % 2 != 0 {
             return None;
@@ -746,6 +755,7 @@ pub const EEE_VALUES: &[&str] = &[
     "*GreenEthernet",
 ];
 
+/// One of the [`EEE_VALUES`] properties.
 pub fn is_eee_value(v: &str) -> bool {
     EEE_VALUES.contains(&v)
 }
@@ -841,30 +851,7 @@ pub fn parse_wake_timers(text: &str) -> Vec<String> {
     out
 }
 
-/// Value of `<Data Name='name'>...</Data>` in an event's XML, unescaped.
-pub fn event_data(xml: &str, name: &str) -> Option<String> {
-    for q in ['\'', '"'] {
-        let tag = format!("<Data Name={q}{name}{q}>");
-        if let Some(i) = xml.find(&tag) {
-            let rest = &xml[i + tag.len()..];
-            let end = rest.find("</Data>")?;
-            return Some(unescape_xml(&rest[..end]));
-        }
-        let empty = format!("<Data Name={q}{name}{q}/>");
-        if xml.contains(&empty) {
-            return Some(String::new());
-        }
-    }
-    None
-}
-
-fn unescape_xml(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
+pub use crate::checkup::event_data;
 
 /// A Power-Troubleshooter event 1 ("The system has returned from a low power state").
 pub fn parse_wake_event(xml: &str) -> Option<WakeEvent> {

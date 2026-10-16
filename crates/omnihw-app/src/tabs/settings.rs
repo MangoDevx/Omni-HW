@@ -1,7 +1,6 @@
 //! Settings page: appearance, startup, monitoring and file locations.
 
-// Wired into app.rs/main.rs after merge; remove this allow then.
-
+use super::{group_box, page_title, temp};
 use crate::autostart;
 use crate::heat::ORANGE;
 use crate::sampler::Sampler;
@@ -9,26 +8,42 @@ use crate::settings::{INTERVALS_MS, NavStyle, PAGES, Settings, Theme, UI_SCALE_R
 use crate::update::{RELEASES_URL, Status, UpdateChecker};
 use egui::{RichText, Ui};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 /// A titled group box.
 fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.label(RichText::new(title).size(16.0).strong());
-        ui.add_space(4.0);
-        add(ui);
-    });
-    ui.add_space(8.0);
+    group_box(ui, RichText::new(title).size(16.0).strong(), 4.0, 8.0, add);
+}
+
+fn temp_id(key: &str) -> egui::Id {
+    egui::Id::new(("settings", key))
 }
 
 /// Transient per-page text kept in egui memory (editing buffer, last error).
 fn temp_string(ui: &Ui, key: &str) -> String {
-    ui.data(|d| d.get_temp::<String>(egui::Id::new(("settings", key))))
-        .unwrap_or_default()
+    temp::get(ui.ctx(), temp_id(key)).unwrap_or_default()
 }
 
 fn set_temp_string(ui: &Ui, key: &str, v: String) {
-    ui.data_mut(|d| d.insert_temp(egui::Id::new(("settings", key)), v));
+    temp::set(ui.ctx(), temp_id(key), v);
+}
+
+/// Where reports go ([`crate::export::report_dir`]). Resolving it checks the file system, so the
+/// answer is kept for a couple of seconds (or until the chosen folder changes) instead of being
+/// re-checked on every frame.
+fn report_dir(ui: &Ui, chosen: &Option<PathBuf>) -> PathBuf {
+    const FRESH: Duration = Duration::from_secs(2);
+    type Cached = (Option<PathBuf>, PathBuf, Instant);
+    let id = temp_id("report_dir");
+    if let Some((for_dir, dir, at)) = temp::get::<Cached>(ui.ctx(), id)
+        && for_dir == *chosen
+        && at.elapsed() < FRESH
+    {
+        return dir;
+    }
+    let dir = crate::export::report_dir();
+    temp::set::<Cached>(ui.ctx(), id, (chosen.clone(), dir.clone(), Instant::now()));
+    dir
 }
 
 /// Parse a typed UI-scale percentage ("120", "120%", "120 %") into a scale factor.
@@ -40,7 +55,7 @@ fn parse_percent(text: &str) -> Option<f64> {
 /// Returns true when a setting changed; the caller saves and applies them.
 pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateChecker) -> bool {
     let before = s.clone();
-    ui.label(RichText::new("Settings").size(20.0).strong());
+    page_title(ui, "Settings");
     ui.weak("Changes apply immediately and are saved automatically.");
     ui.add_space(8.0);
 
@@ -191,7 +206,7 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
     });
 
     group(ui, "Files", |ui| {
-        let current = crate::export::report_dir();
+        let current = report_dir(ui, &s.data_dir);
         ui.horizontal_wrapped(|ui| {
             ui.label("Recordings and reports are saved in:");
             ui.label(RichText::new(current.display().to_string()).strong());
@@ -203,12 +218,9 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
                     .hint_text("Paste a folder path")
                     .desired_width(360.0),
             );
-            let picker = ui.ctx().data_mut(|d| {
-                d.get_temp_mut_or_default::<crate::folder_picker::FolderPicker>(egui::Id::new(
-                    "data_dir_picker",
-                ))
-                .clone()
-            });
+            let picker: crate::folder_picker::FolderPicker =
+                temp::get(ui.ctx(), egui::Id::new("data_dir_picker")).unwrap_or_default();
+            temp::set(ui.ctx(), egui::Id::new("data_dir_picker"), picker.clone());
             if let Some(p) = picker.take() {
                 s.data_dir = Some(p);
                 edit.clear();
@@ -250,10 +262,7 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
                 s.data_dir = None;
             }
             if ui.button("Open folder").clicked() {
-                #[cfg(windows)]
-                let _ = std::process::Command::new("explorer.exe")
-                    .arg(&current)
-                    .spawn();
+                crate::export::open_in_explorer(&current, false);
             }
         });
         let err = temp_string(ui, "data_dir_err");

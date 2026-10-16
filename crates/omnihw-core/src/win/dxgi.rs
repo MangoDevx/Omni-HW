@@ -1,5 +1,6 @@
 //! DXGI adapter enumeration through the `windows` crate's COM bindings.
 
+use super::wide::from_wide;
 use crate::gpu::{Display, GpuAdapter};
 use windows::Wdk::Graphics::Direct3D::{
     D3DKMT_ADAPTERTYPE, D3DKMT_CLOSEADAPTER, D3DKMT_OPENADAPTERFROMLUID, D3DKMT_QUERYADAPTERINFO,
@@ -33,7 +34,7 @@ fn kmt_adapter_type(luid: LUID) -> Option<u32> {
         AdapterLuid: luid,
         hAdapter: 0,
     };
-    // SAFETY: valid in/out struct.
+    // SAFETY: valid in/out struct (a local).
     if unsafe { D3DKMTOpenAdapterFromLuid(&mut open) } != STATUS_SUCCESS {
         return None;
     }
@@ -44,8 +45,10 @@ fn kmt_adapter_type(luid: LUID) -> Option<u32> {
         pPrivateDriverData: (&mut flags as *mut D3DKMT_ADAPTERTYPE).cast(),
         PrivateDriverDataSize: size_of::<D3DKMT_ADAPTERTYPE>() as u32,
     };
-    // SAFETY: data points to a D3DKMT_ADAPTERTYPE of the declared size; adapter closed once.
+    // SAFETY: the private data points to a D3DKMT_ADAPTERTYPE of the declared size, which
+    // outlives the call; the adapter was opened above.
     let st = unsafe { D3DKMTQueryAdapterInfo(&mut q) };
+    // SAFETY: closes the adapter opened above, exactly once (no early return in between).
     let _ = unsafe {
         D3DKMTCloseAdapter(&D3DKMT_CLOSEADAPTER {
             hAdapter: open.hAdapter,
@@ -59,21 +62,20 @@ fn kmt_adapter_type(luid: LUID) -> Option<u32> {
 fn outputs(adapter: &IDXGIAdapter1) -> Vec<Display> {
     let mut out = Vec::new();
     for i in 0..16 {
-        // SAFETY: valid adapter; errors (DXGI_ERROR_NOT_FOUND) end the list.
+        // SAFETY: valid adapter interface; errors (DXGI_ERROR_NOT_FOUND) end the list.
         let Ok(output) = (unsafe { adapter.EnumOutputs(i) }) else {
             break;
         };
-        // SAFETY: valid output.
+        // SAFETY: valid output interface.
         let Ok(d) = (unsafe { output.GetDesc() }) else {
             continue;
         };
         if !d.AttachedToDesktop.as_bool() {
             continue;
         }
-        let len = d.DeviceName.iter().position(|&c| c == 0).unwrap_or(32);
         let r = d.DesktopCoordinates;
         out.push(Display {
-            name: String::from_utf16_lossy(&d.DeviceName[..len]),
+            name: from_wide(&d.DeviceName),
             width: (r.right - r.left).unsigned_abs(),
             height: (r.bottom - r.top).unsigned_abs(),
         });
@@ -85,7 +87,7 @@ fn outputs(adapter: &IDXGIAdapter1) -> Vec<Display> {
 /// (virtual monitor) adapters, which mirror their render GPU's description, are skipped.
 pub fn adapters() -> Vec<GpuAdapter> {
     let mut out = Vec::new();
-    // SAFETY: plain factory creation.
+    // SAFETY: plain factory creation; no pointers involved.
     let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
         return out;
     };
@@ -94,7 +96,7 @@ pub fn adapters() -> Vec<GpuAdapter> {
         let Ok(adapter) = (unsafe { factory.EnumAdapters1(i) }) else {
             break;
         };
-        // SAFETY: valid adapter.
+        // SAFETY: valid adapter interface.
         let Ok(d) = (unsafe { adapter.GetDesc1() }) else {
             continue;
         };
@@ -113,14 +115,11 @@ pub fn adapters() -> Vec<GpuAdapter> {
             Ok(umd) => version_string(umd),
             Err(_) => String::new(),
         };
-        let len = d.Description.iter().position(|&c| c == 0).unwrap_or(128);
         let displays = outputs(&adapter);
         let luid = d.AdapterLuid;
         out.push(GpuAdapter {
             displays,
-            name: String::from_utf16_lossy(&d.Description[..len])
-                .trim()
-                .to_string(),
+            name: from_wide(&d.Description).trim().to_string(),
             vendor_id: d.VendorId,
             device_id: d.DeviceId,
             subsys_id: d.SubSysId,

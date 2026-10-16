@@ -29,20 +29,25 @@ pub struct UpdateChecker {
 }
 
 impl UpdateChecker {
+    /// The status, even if a check thread panicked while holding the lock.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Status> {
+        self.status.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     pub fn status(&self) -> Status {
-        self.status.lock().unwrap().clone()
+        self.lock().clone()
     }
 
     /// Start a check in the background unless one is already running.
     pub fn start(&self, ctx: &egui::Context) {
         {
-            let mut s = self.status.lock().unwrap();
+            let mut s = self.lock();
             if *s == Status::Checking {
                 return;
             }
             *s = Status::Checking;
         }
-        let status = self.status.clone();
+        let checker = self.clone();
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("update-check".into())
@@ -51,7 +56,7 @@ impl UpdateChecker {
                     Ok(tag) => compare(env!("CARGO_PKG_VERSION"), &tag),
                     Err(e) => Status::Failed(e),
                 };
-                *status.lock().unwrap() = result;
+                *checker.lock() = result;
                 ctx.request_repaint();
             })
             .expect("spawn update-check thread");

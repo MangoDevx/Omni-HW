@@ -38,6 +38,8 @@ pub struct Snapshot {
     pub alert_log: Vec<AlertEvent>,
     /// Power settings, devices and wake history (None until first read).
     pub power: Option<PowerInfo>,
+    /// Bumped whenever `power` changes, so the UI can tell when to recompute what depends on it.
+    pub power_rev: u64,
     /// A power change or elevated query is in progress.
     pub power_busy: bool,
     /// Result of the last power change, for the status bar.
@@ -158,6 +160,7 @@ impl Sampler {
                     let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
                     snap.power_busy = false;
                     done(r, &mut snap);
+                    snap.power_rev += 1;
                 }
                 shared.power_refresh.store(true, Ordering::Relaxed);
                 ctx.request_repaint();
@@ -411,6 +414,7 @@ fn update_power(shared: &Shared, last: &mut Option<Instant>) {
     };
     *last = Some(Instant::now());
     let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    snap.power_rev += 1;
     match (&mut snap.power, full) {
         (Some(old), false) => old.merge_settings(fresh),
         (old, _) => {

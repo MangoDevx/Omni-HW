@@ -2,6 +2,7 @@
 //! PCIe link of each NVMe drive's controller.
 
 use crate::checkup::{Device, PcieLink, problem_is_benign};
+use crate::win::wide::from_wide_bytes;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     CM_DEVNODE_STATUS_FLAGS, CM_GETIDLIST_FILTER_PRESENT, CM_Get_DevNode_PropertyW,
     CM_Get_DevNode_Status, CM_Get_Device_ID_List_SizeW, CM_Get_Device_ID_ListW, CM_Get_Parent,
@@ -21,13 +22,13 @@ use windows::core::PCWSTR;
 fn prop(inst: u32, key: &DEVPROPKEY) -> Option<Vec<u8>> {
     let mut ty = DEVPROPTYPE::default();
     let mut size = 0u32;
-    // SAFETY: size query without a buffer (fails with CR_BUFFER_SMALL).
+    // SAFETY: size query without a buffer (fails with CR_BUFFER_SMALL); valid out pointers.
     let _ = unsafe { CM_Get_DevNode_PropertyW(inst, key, &mut ty, None, &mut size, 0) };
     if size == 0 {
         return None;
     }
     let mut buf = vec![0u8; size as usize];
-    // SAFETY: buffer of `size` bytes.
+    // SAFETY: the buffer holds `size` bytes, the size passed in.
     let r = unsafe {
         CM_Get_DevNode_PropertyW(inst, key, &mut ty, Some(buf.as_mut_ptr()), &mut size, 0)
     };
@@ -40,32 +41,25 @@ fn prop(inst: u32, key: &DEVPROPKEY) -> Option<Vec<u8>> {
 /// String property (the first entry of a string list).
 fn prop_string(inst: u32, key: &DEVPROPKEY) -> String {
     prop(inst, key)
-        .map(|b| {
-            let w: Vec<u16> = b
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            super::utf16_z(&w)
-        })
+        .map(|b| from_wide_bytes(&b))
         .unwrap_or_default()
 }
 
 fn prop_u32(inst: u32, key: &DEVPROPKEY) -> Option<u32> {
-    let b = prop(inst, key)?;
-    Some(u32::from_le_bytes(b.get(..4)?.try_into().ok()?))
+    crate::le::u32_at(&prop(inst, key)?, 0)
 }
 
-/// Instance ids of all present devices.
+/// Instance ids of all present devices, each NUL-terminated.
 fn present_ids() -> Vec<Vec<u16>> {
     let mut len = 0u32;
-    // SAFETY: valid out pointer; no filter string.
+    // SAFETY: valid out pointer; no filter string (null is allowed).
     if unsafe { CM_Get_Device_ID_List_SizeW(&mut len, PCWSTR::null(), CM_GETIDLIST_FILTER_PRESENT) }
         != CR_SUCCESS
     {
         return Vec::new();
     }
     let mut buf = vec![0u16; len as usize];
-    // SAFETY: buffer length passed with the slice.
+    // SAFETY: the buffer length is passed with the slice; no filter string.
     if unsafe { CM_Get_Device_ID_ListW(PCWSTR::null(), &mut buf, CM_GETIDLIST_FILTER_PRESENT) }
         != CR_SUCCESS
     {
@@ -96,14 +90,14 @@ pub fn devices() -> (Vec<Device>, Vec<PcieLink>) {
     let mut links = Vec::new();
     for id in present_ids() {
         let mut inst = 0u32;
-        // SAFETY: NUL-terminated instance id.
+        // SAFETY: `id` is NUL-terminated (see `present_ids`) and outlives the call.
         if unsafe { CM_Locate_DevNodeW(&mut inst, PCWSTR(id.as_ptr()), CM_LOCATE_DEVNODE_NORMAL) }
             != CR_SUCCESS
         {
             continue;
         }
         let (mut status, mut problem) = (CM_DEVNODE_STATUS_FLAGS(0), CM_PROB(0));
-        // SAFETY: valid out pointers.
+        // SAFETY: valid out pointers to locals; `inst` came from CM_Locate_DevNodeW.
         let problem = (unsafe { CM_Get_DevNode_Status(&mut status, &mut problem, inst, 0) }
             == CR_SUCCESS
             && status.0 & DN_HAS_PROBLEM.0 != 0)
@@ -122,7 +116,7 @@ pub fn devices() -> (Vec<Device>, Vec<PcieLink>) {
         };
         if is_disk {
             let mut parent = 0u32;
-            // SAFETY: valid out pointer.
+            // SAFETY: valid out pointer to a local; `inst` is a located devnode.
             if unsafe { CM_Get_Parent(&mut parent, inst, 0) } == CR_SUCCESS
                 && prop_string(parent, &DEVPKEY_Device_HardwareIds)
                     .to_ascii_uppercase()
