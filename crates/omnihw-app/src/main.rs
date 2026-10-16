@@ -10,6 +10,7 @@ mod folder_picker;
 mod heat;
 mod help;
 mod icon;
+mod nav;
 mod notify;
 mod power_ops;
 mod retro;

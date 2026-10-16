@@ -52,7 +52,7 @@ Set rules like *"GPU above 85 °C for 30 seconds"* and get a Windows notificatio
 Save a tidy HTML report or copy a text one, handy for asking for help on forums.
 
 ### 🎨 Comfort features
-Dark or light theme · adjustable UI scale · compact menus with ↑/↓ arrow-key paging · minimize to the system tray · launch at sign-in · a built-in feature guide (**Info → Feature guide**).
+Dark or light theme · adjustable UI scale · compact menus with arrow-key page navigation · minimize to the system tray · launch at sign-in · a built-in feature guide (**Info → Feature guide**).
 
 ---
 

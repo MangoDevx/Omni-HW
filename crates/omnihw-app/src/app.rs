@@ -1,3 +1,4 @@
+use crate::nav::{self, GROUPS};
 use crate::sampler::Sampler;
 use crate::settings::{NavStyle, Settings};
 use crate::{export, tabs};
@@ -86,39 +87,14 @@ impl Tab {
     }
 }
 
-/// Navigation groups shown as drop-down menus in the grouped navigation bar.
-const GROUPS: [(&str, &[Tab]); 2] = [
-    (
-        "Hardware",
-        &[
-            Tab::Cpu,
-            Tab::Caches,
-            Tab::Mainboard,
-            Tab::Memory,
-            Tab::Gpu,
-            Tab::Storage,
-            Tab::Power,
-        ],
-    ),
-    ("Monitoring", &[Tab::Sensors, Tab::Recording, Tab::Alerts]),
-];
-
-/// Pages that Up/Down arrow keys step through, per category.
-const ARROW_CATEGORIES: [&[Tab]; 3] = [&[Tab::Overview, Tab::Health], GROUPS[0].1, GROUPS[1].1];
-
-/// The page above (`delta` = -1) or below (+1) `tab` within its category; stops at the ends.
-fn arrow_neighbor(tab: Tab, delta: i32) -> Option<Tab> {
-    let pages = ARROW_CATEGORIES.iter().find(|p| p.contains(&tab))?;
-    let i = pages.iter().position(|&t| t == tab)? as i32 + delta;
-    pages.get(usize::try_from(i).ok()?).copied()
-}
-
 const STATUS_DURATION: Duration = Duration::from_secs(6);
 
 pub struct OmniApp {
     tab: Tab,
     /// Page shown last frame, to notice when the Power page is opened.
     last_tab: Option<Tab>,
+    /// Last page used in each navigation category, for Left/Right arrows.
+    nav_memory: nav::NavMemory,
     /// Persisted user settings (theme, navigation style, start page, ...).
     settings: Settings,
     /// Selected adapter on the GPU tab.
@@ -158,6 +134,7 @@ impl OmniApp {
         OmniApp {
             tab: Tab::from_key(&settings.start_page).unwrap_or(Tab::Overview),
             last_tab: None,
+            nav_memory: Default::default(),
             settings,
             gpu_index: 0,
             sampler,
@@ -171,25 +148,32 @@ impl OmniApp {
         }
     }
 
-    /// Up/Down arrows move to the previous/next page within the current category, unless a
-    /// text field is being edited or a menu is open.
+    /// Arrow keys switch pages (see [`nav`]) unless a widget has keyboard focus (text field,
+    /// slider, Tab-key focus) or a menu is open. Keys that don't move are left for the page.
     fn arrow_navigation(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        self.nav_memory.visit(self.tab);
+        if ctx.egui_wants_keyboard_input()
+            || egui::Popup::is_any_open(ctx)
+            || ctx.memory(|m| m.focused().is_some())
+        {
             return;
         }
-        let delta = ctx.input_mut(|i| {
-            if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-                1
-            } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-                -1
-            } else {
-                0
+        let pressed = ctx.input(|i| {
+            if !i.modifiers.is_none() {
+                return None;
             }
+            nav::Arrow::ALL
+                .into_iter()
+                .find(|&(key, _)| i.key_pressed(key))
         });
-        if delta != 0
-            && let Some(next) = arrow_neighbor(self.tab, delta)
+        let Some((key, arrow)) = pressed else {
+            return;
+        };
+        if let Some(next) = nav::target(self.settings.nav_style, self.tab, arrow, &self.nav_memory)
         {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
             self.tab = next;
+            self.nav_memory.visit(next);
         }
     }
 
@@ -302,7 +286,11 @@ impl OmniApp {
         }
 
         let mut open_about = false;
-        egui::containers::menu::MenuButton::new("Info  ⏷").ui(ui, |ui| {
+        // In the grouped bar, highlighted while About is open, like the Hardware and Monitoring
+        // menus (the classic bar has its own About tab).
+        let info_button = Button::new("Info  ⏷")
+            .selected(self.tab == Tab::About && self.settings.nav_style == NavStyle::Grouped);
+        egui::containers::menu::MenuButton::from_button(info_button).ui(ui, |ui| {
             if ui.button("Feature guide").clicked() {
                 self.help.open = true;
                 ui.close();
@@ -475,22 +463,5 @@ impl eframe::App for OmniApp {
                 self.status = Some((e, Instant::now()));
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Tab, arrow_neighbor};
-
-    #[test]
-    fn arrows_move_within_a_category() {
-        assert_eq!(arrow_neighbor(Tab::Cpu, 1), Some(Tab::Caches));
-        assert_eq!(arrow_neighbor(Tab::Caches, -1), Some(Tab::Cpu));
-        assert_eq!(arrow_neighbor(Tab::Cpu, -1), None, "stops at the top");
-        assert_eq!(arrow_neighbor(Tab::Storage, 1), Some(Tab::Power));
-        assert_eq!(arrow_neighbor(Tab::Power, 1), None, "stops at the bottom");
-        assert_eq!(arrow_neighbor(Tab::Sensors, 1), Some(Tab::Recording));
-        assert_eq!(arrow_neighbor(Tab::Overview, 1), Some(Tab::Health));
-        assert_eq!(arrow_neighbor(Tab::Settings, 1), None);
     }
 }

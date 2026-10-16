@@ -150,11 +150,16 @@ fn getting_started(ui: &mut Ui) {
         ],
     );
     h(ui, "Keyboard");
-    p(
+    bullets(
         ui,
-        "Up and Down arrow keys move to the previous or next page within the current category: Overview and Health Check; \
-         CPU through Storage; Sensors, Recording and Alerts. They stop at the first and last page, and are ignored while \
-         you're typing in a text field or a menu is open.",
+        &[
+            "Grouped navigation bar: Left and Right move between the top-level entries (Overview, Health Check, Hardware, \
+             Monitoring, About, Settings), returning to the page you last used in Hardware or Monitoring. Up and Down move \
+             through the pages inside Hardware or Monitoring and stop at the first and last page.",
+            "Classic navigation bar: Left and Right move to the previous or next tab, wrapping around at the ends.",
+            "The arrows are left alone while you're typing in a text field, adjusting a slider, moving between controls \
+             with Tab, or a menu is open.",
+        ],
     );
     h(ui, "Static and live data");
     p(
