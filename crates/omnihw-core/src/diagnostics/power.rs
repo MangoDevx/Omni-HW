@@ -606,6 +606,7 @@ mod tests {
             today: (2026, 10, 12),
             uptime_secs: Some(3600),
             power: Some(p),
+            network: None,
         }
     }
 
@@ -643,6 +644,7 @@ mod tests {
             today: (2026, 10, 12),
             uptime_secs: None,
             power: None,
+            network: None,
         };
         for (_, _, check) in CHECKS {
             assert!(matches!(check(&c), Outcome::Skipped(_)));

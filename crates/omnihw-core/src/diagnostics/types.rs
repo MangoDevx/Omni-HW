@@ -4,6 +4,7 @@
 use std::fmt::Write;
 
 use crate::SystemInfo;
+use crate::network::NetworkInfo;
 use crate::power::{Action, PowerInfo};
 use crate::sensors::SensorTable;
 
@@ -33,6 +34,8 @@ pub enum Category {
     Memory,
     Gpu,
     Storage,
+    /// Network adapters: addresses, Wi-Fi signal and link speed.
+    Network,
     System,
     /// Settings that mainly matter for games; shown in their own section.
     Gaming,
@@ -50,6 +53,7 @@ impl Category {
             Category::Memory => "Memory",
             Category::Gpu => "GPU",
             Category::Storage => "Storage",
+            Category::Network => "Network",
             Category::System => "System",
             Category::Gaming => "Gaming",
             Category::Power => "Power Management",
@@ -58,13 +62,14 @@ impl Category {
     }
 
     /// Every category, in the order the Health Check tab lists them.
-    pub const ALL: [Category; 8] = [
+    pub const ALL: [Category; 9] = [
         Category::Crashes,
         Category::System,
         Category::Cpu,
         Category::Memory,
         Category::Gpu,
         Category::Storage,
+        Category::Network,
         Category::Power,
         Category::Gaming,
     ];
@@ -241,6 +246,8 @@ pub struct Context<'a> {
     pub uptime_secs: Option<u64>,
     /// Power settings, once gathered.
     pub power: Option<&'a PowerInfo>,
+    /// Network adapters, once gathered.
+    pub network: Option<&'a NetworkInfo>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

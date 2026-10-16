@@ -191,8 +191,9 @@ pub(super) fn privacy(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Omni-HW makes no network connections on its own: no telemetry, no uploads.",
-            "The one exception is the update check, which only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
+            "Omni-HW makes no network connections on its own and works fully offline: no telemetry, no uploads.",
+            "The update check only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
+            "The internet tests on the Network page only run when you click Run internet tests. They look up dns.msftncsi.com, request www.msftconnecttest.com/connecttest.txt (Windows' own connectivity probes) and ping the public DNS resolvers 1.1.1.1 and 8.8.8.8. The local tests only contact your own router and the DNS servers on your local network.",
             "It only reads hardware information and settings and never changes system settings on its own. It changes a setting only when you ask: power settings on the Power page or a Health Check Fix button, and the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
             "Health Check links (Google searches, Settings pages, driver downloads) only open in your browser or Windows when you click them; Omni-HW itself requests nothing.",
             "It reads the System event log (hardware errors, blue screens) and the Device Manager state locally to explain crashes and missing drivers.",
@@ -206,7 +207,7 @@ pub(super) fn privacy(ui: &mut Ui) {
     );
     p(
         ui,
-        "Some power changes (Fast Startup, adapter power saving, wake devices) and reading power requests also need them. \
+        "Some power changes (Fast Startup, adapter power saving, wake devices), network changes on the Network page and reading power requests also need them. \
          Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
     );
     h(ui, "Security-related advice");

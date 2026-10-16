@@ -32,6 +32,7 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         today: omnihw_core::civil_from_days(days),
         uptime_secs: omnihw_core::win::uptime_secs(),
         power: snap.power.as_ref(),
+        network: snap.network.as_ref(),
     };
     diagnostics::run(&ctx)
 }

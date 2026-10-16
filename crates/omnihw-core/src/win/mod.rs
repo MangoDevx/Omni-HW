@@ -8,6 +8,8 @@ mod dxgi;
 #[cfg(windows)]
 mod eventlog;
 #[cfg(windows)]
+pub mod network;
+#[cfg(windows)]
 pub mod nvml;
 #[cfg(windows)]
 mod pdh;

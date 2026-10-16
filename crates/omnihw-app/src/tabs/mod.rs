@@ -10,6 +10,7 @@ pub mod gpu;
 pub mod health;
 pub mod mainboard;
 pub mod memory;
+pub mod network;
 pub mod overview;
 pub mod power;
 pub mod recording;

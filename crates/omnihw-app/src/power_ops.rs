@@ -52,6 +52,11 @@ pub fn run_helper() -> Option<i32> {
 /// write anywhere else. (With over-the-shoulder elevation the helper runs as another account, so
 /// its own %TEMP% may differ from the caller's.)
 fn result_path(p: &str) -> Option<PathBuf> {
+    helper_result_path(p, FILE_PREFIX)
+}
+
+/// [`result_path`] for any helper's file prefix (`omnihw-<kind>-`).
+pub(crate) fn helper_result_path(p: &str, prefix: &str) -> Option<PathBuf> {
     let p = PathBuf::from(p);
     let in_temp = p.parent().is_some_and(|d| {
         d == std::env::temp_dir().as_path()
@@ -61,7 +66,7 @@ fn result_path(p: &str) -> Option<PathBuf> {
     let ok = in_temp
         && p.file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.starts_with(FILE_PREFIX) && n.ends_with(".txt"));
+            .is_some_and(|n| n.starts_with(prefix) && n.ends_with(".txt"));
     ok.then_some(p)
 }
 
@@ -69,7 +74,7 @@ fn temp_file(kind: &str) -> PathBuf {
     std::env::temp_dir().join(format!("{FILE_PREFIX}{kind}-{}.txt", std::process::id()))
 }
 
-fn quote(p: &Path) -> String {
+pub(crate) fn quote(p: &Path) -> String {
     format!("\"{}\"", p.display())
 }
 

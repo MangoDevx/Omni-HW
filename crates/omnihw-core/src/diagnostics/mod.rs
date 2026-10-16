@@ -10,6 +10,7 @@ mod crashes;
 mod gpu;
 mod helpers;
 mod memory;
+mod network;
 mod power;
 mod settings;
 mod storage;
@@ -143,9 +144,15 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ),
     (
         "Ethernet link speed",
-        Category::System,
+        Category::Network,
         system::ethernet_speed,
     ),
+    (
+        "Network address (DHCP and DNS)",
+        Category::Network,
+        network::addresses,
+    ),
+    ("Wi-Fi signal", Category::Network, network::wifi_signal),
     (
         "Secure Boot, TPM and UEFI boot",
         Category::System,

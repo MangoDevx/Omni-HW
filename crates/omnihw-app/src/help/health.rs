@@ -18,6 +18,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             today: (2026, 1, 1),
             uptime_secs: None,
             power: None,
+            network: None,
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -152,8 +153,12 @@ fn check_description(name: &str) -> &'static str {
             "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days."
         }
         "Ethernet link speed" => {
-            "Wired network connected at 100 Mbps or less, which points to a bad cable or port."
+            "Wired network connected at 100 Mbps or less (a bad cable or port), or below the adapter's maximum (e.g. 1 Gbps on a 2.5 Gbps adapter, a suggestion)."
         }
+        "Network address (DHCP and DNS)" => {
+            "A connected adapter with only a self-assigned 169.254.x.x address (no DHCP), an IP address conflict, or no DNS servers."
+        }
+        "Wi-Fi signal" => "Wi-Fi signal below 40 %, with tips for 2.4 GHz connections.",
         "Secure Boot, TPM and UEFI boot" => {
             "Legacy (CSM) boot, Secure Boot off or no TPM 2.0: needed for Windows 11 and some games' anti-cheat."
         }
@@ -178,7 +183,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Critical (red): fix soon, e.g. a failing drive or outdated CPU microcode with a known stability problem.",
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
             "Suggestion (blue, shown as INFO on cards): optional improvements.",
-            "Results are grouped by category: Crashes (BSOD), System, CPU, Memory, GPU, Storage, Power Management and Gaming. A category opens by default only when it has something to fix; its pill shows the count in the colour of the most serious one.",
+            "Results are grouped by category: Crashes (BSOD), System, CPU, Memory, GPU, Storage, Network, Power Management and Gaming. A category opens by default only when it has something to fix; its pill shows the count in the colour of the most serious one.",
             "Inside each category, OK rows are checks that found nothing wrong (with what was measured) and dash rows are checks that don't apply to this PC (with the reason, e.g. no battery).",
         ],
     );

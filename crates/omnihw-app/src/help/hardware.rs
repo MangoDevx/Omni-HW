@@ -75,6 +75,56 @@ pub(super) fn hardware(ui: &mut Ui) {
     );
 }
 
+pub(super) fn network(ui: &mut Ui) {
+    p(
+        ui,
+        "The Network page (Hardware > Network) lists every adapter Windows shows in Network Connections. It works fully offline: \
+         details are read from Windows, and nothing is sent anywhere unless you click Run internet tests.",
+    );
+    h(ui, "What it shows");
+    bullets(
+        ui,
+        &[
+            "Status (connected, disconnected, disabled), adapter model, type (Ethernet, Wi-Fi, virtual), MAC address and driver version and date.",
+            "Link speed and duplex, plus the fastest speed the adapter supports when it's linked slower.",
+            "IPv4 and IPv6 addresses (with DHCP lease time and address conflicts), gateway, DNS servers, DHCP on/off and server, MTU and DNS suffix.",
+            "Wi-Fi: network name (SSID), band (2.4 / 5 / 6 GHz), channel, signal quality and strength, Wi-Fi standard and link rates.",
+            "Advanced driver properties (Speed & Duplex, Energy-Efficient Ethernet, power saving, jumbo frames, interrupt moderation and so on), as in Device Manager.",
+        ],
+    );
+    h(ui, "Changing settings");
+    bullets(
+        ui,
+        &[
+            "Per adapter: Enable / Disable, Rename, IP address (automatic DHCP or a fixed IPv4 address, mask and gateway), DNS servers (automatic or your own IPv4 servers), MTU, Release and Renew.",
+            "Advanced driver properties with a list of values can be changed from their drop-down; the adapter restarts, so the connection drops for a few seconds. Free-form values are shown read-only (change them in Device Manager).",
+            "Repair tools: Flush DNS cache, Reset Winsock and Reset TCP/IP. The two resets need a restart of Windows.",
+            "Every change asks for confirmation first. Except flushing the DNS cache, they need administrator rights: Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
+        ],
+    );
+    h(ui, "Tests");
+    bullets(
+        ui,
+        &[
+            "Local tests (run once when you open the page, and again with Run local tests): link up, a real IP address (169.254.x.x means no DHCP server answered), duplicate addresses, gateway reachable (4 pings), DNS servers on your local network answering, and link speed below what the adapter supports. They only contact your own router and local DNS servers.",
+            &format!(
+                "Internet tests run only when you click Run internet tests. They contact: {}. They report whether DNS and the web work (and spot captive portals) and the latency, jitter and packet loss of {} pings to each resolver.",
+                omnihw_core::network::INTERNET_TARGETS,
+                omnihw_core::network::INTERNET_PINGS
+            ),
+        ],
+    );
+    details(
+        ui,
+        "network",
+        &[
+            "Addresses and link state come from IP Helper (GetAdaptersAddresses, GetIfEntry2); Wi-Fi from the WLAN API; driver details and advanced properties from WMI (MSFT_NetAdapter). They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
+            "On Windows 11 24H2 and later the Wi-Fi network name is hidden unless location access for apps is on (Settings > Privacy & security > Location).",
+            "Changes use WMI (MSFT_NetAdapter, Win32_NetworkAdapterConfiguration, MSFT_NetIPInterface); the resets run netsh and the DNS flush runs ipconfig, without a console window.",
+        ],
+    );
+}
+
 pub(super) fn power(ui: &mut Ui) {
     p(
         ui,

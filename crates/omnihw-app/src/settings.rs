@@ -22,7 +22,7 @@ pub enum NavStyle {
 }
 
 /// Page keys accepted for `start_page`, with friendly names.
-pub const PAGES: [(&str, &str); 12] = [
+pub const PAGES: [(&str, &str); 13] = [
     ("overview", "Overview"),
     ("health", "Health Check"),
     ("cpu", "CPU"),
@@ -31,6 +31,7 @@ pub const PAGES: [(&str, &str); 12] = [
     ("memory", "Memory"),
     ("gpu", "GPU"),
     ("storage", "Storage"),
+    ("network", "Network"),
     ("sensors", "Sensors"),
     ("recording", "Recording"),
     ("alerts", "Alerts"),

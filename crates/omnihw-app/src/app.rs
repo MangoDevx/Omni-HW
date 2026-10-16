@@ -15,6 +15,7 @@ pub enum Tab {
     Memory,
     Gpu,
     Storage,
+    Network,
     Power,
     Sensors,
     Recording,
@@ -24,7 +25,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 13] = [
+    pub const ALL: [Tab; 14] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -33,6 +34,7 @@ impl Tab {
         Tab::Memory,
         Tab::Gpu,
         Tab::Storage,
+        Tab::Network,
         Tab::Power,
         Tab::Sensors,
         Tab::Recording,
@@ -50,6 +52,7 @@ impl Tab {
             Tab::Memory => "Memory",
             Tab::Gpu => "GPU",
             Tab::Storage => "Storage",
+            Tab::Network => "Network",
             Tab::Power => "Power",
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
@@ -70,6 +73,7 @@ impl Tab {
             Tab::Memory => "memory",
             Tab::Gpu => "gpu",
             Tab::Storage => "storage",
+            Tab::Network => "network",
             Tab::Power => "power",
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
@@ -391,6 +395,12 @@ impl eframe::App for OmniApp {
         if self.tab == Tab::Power && self.last_tab != Some(Tab::Power) {
             self.sampler.refresh_power();
         }
+        // Read network adapters often (and in full right away) while the Network page is open.
+        let on_network = self.tab == Tab::Network;
+        self.sampler.set_network_page(on_network);
+        if on_network && self.last_tab != Some(Tab::Network) {
+            self.sampler.refresh_network();
+        }
         self.last_tab = Some(self.tab);
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -452,6 +462,7 @@ impl eframe::App for OmniApp {
                         Tab::Memory => tabs::memory::show(ui, info, &snap),
                         Tab::Gpu => tabs::gpu::show(ui, info, &snap, &mut self.gpu_index),
                         Tab::Storage => tabs::storage::show(ui, info, &snap),
+                        Tab::Network => tabs::network::show(ui, &snap),
                         Tab::Power => tabs::power::show(ui, &snap),
                         Tab::About => tabs::about::show(ui, info, &snap),
                         Tab::Sensors | Tab::Recording | Tab::Alerts | Tab::Settings => {
@@ -464,6 +475,10 @@ impl eframe::App for OmniApp {
         // Power changes requested this frame (Power page or a Health Check "Fix"), applied
         // outside the snapshot lock.
         if let Some(msg) = tabs::power::dispatch(ui.ctx(), &self.sampler) {
+            self.set_status(msg);
+        }
+        // Same for network changes and tests.
+        if let Some(msg) = tabs::network::dispatch(ui.ctx(), &self.sampler, on_network) {
             self.set_status(msg);
         }
 

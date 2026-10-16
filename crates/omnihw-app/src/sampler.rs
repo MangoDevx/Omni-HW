@@ -4,6 +4,7 @@
 use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
+use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
@@ -20,6 +21,22 @@ pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 const ALERT_LOG_LEN: usize = 200;
 /// How often power plan settings are re-read (devices and wake history only on request).
 const POWER_SETTINGS_EVERY: Duration = Duration::from_secs(30);
+/// Network adapter re-reads (addresses, link, Wi-Fi) while the Network page is open / closed.
+const NETWORK_EVERY_OPEN: Duration = Duration::from_secs(5);
+const NETWORK_EVERY_CLOSED: Duration = Duration::from_secs(60);
+/// Full re-reads including WMI details (driver, duplex, advanced properties).
+const NETWORK_DETAILS_EVERY_OPEN: Duration = Duration::from_secs(30);
+const NETWORK_DETAILS_EVERY_CLOSED: Duration = Duration::from_secs(300);
+
+/// Test results grouped under headings (adapter names; empty for the internet tests).
+pub type TestGroups = Vec<(String, Vec<TestLine>)>;
+
+/// A network test run: whether it's running and its last results, grouped by heading.
+#[derive(Default, Clone)]
+pub struct TestRun {
+    pub running: bool,
+    pub results: Option<(TestGroups, SystemTime)>,
+}
 
 /// Latest sensor state, shared with the UI.
 #[derive(Default)]
@@ -44,6 +61,14 @@ pub struct Snapshot {
     pub power_busy: bool,
     /// Result of the last power change, for the status bar.
     pub power_msg: Option<String>,
+    /// Network adapters (None until first read).
+    pub network: Option<NetworkInfo>,
+    /// A network change is in progress.
+    pub net_busy: bool,
+    /// Result of the last network change, for the status bar.
+    pub net_msg: Option<String>,
+    pub net_local: TestRun,
+    pub net_internet: TestRun,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -78,6 +103,12 @@ struct Shared {
     alert_notifications: AtomicBool,
     /// Re-read all power info (devices, wake history) on the next sample.
     power_refresh: AtomicBool,
+    /// The Network page is open: read adapters more often.
+    network_page: AtomicBool,
+    /// Re-read network adapters with all details on the next sample.
+    network_refresh: AtomicBool,
+    /// A network read is running on its worker thread; the sampler schedules no second one.
+    network_reading: AtomicBool,
 }
 
 /// Where alert rules are saved: `%APPDATA%/OmniHW/alerts.tsv`.
@@ -117,6 +148,9 @@ impl Sampler {
             test_notification: AtomicBool::new(false),
             alert_notifications: AtomicBool::new(true),
             power_refresh: AtomicBool::new(false),
+            network_page: AtomicBool::new(false),
+            network_refresh: AtomicBool::new(false),
+            network_reading: AtomicBool::new(false),
         });
         let (stop, stop_rx) = mpsc::channel::<()>();
         let s = shared.clone();
@@ -195,6 +229,155 @@ impl Sampler {
             }
             Err(e) => snap.power_msg = Some(format!("Couldn't read power requests: {e}")),
         });
+    }
+
+    /// Whether the Network page is open (it reads adapters more often then).
+    pub fn set_network_page(&self, open: bool) {
+        self.shared.network_page.store(open, Ordering::Relaxed);
+    }
+
+    /// Re-read network adapters, with all details, on the next sample.
+    pub fn refresh_network(&self) {
+        self.shared.network_refresh.store(true, Ordering::Relaxed);
+    }
+
+    /// Run `work` on a short-lived worker thread, then `done(result, snapshot)` and a repaint.
+    /// Returns false if the thread couldn't be started.
+    fn worker<T: Send + 'static>(
+        &self,
+        name: &str,
+        work: impl FnOnce() -> T + Send + 'static,
+        done: impl FnOnce(T, &mut Snapshot) + Send + 'static,
+    ) -> bool {
+        let (shared, ctx) = (self.shared.clone(), self.ctx.clone());
+        std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || {
+                let r = work();
+                done(
+                    r,
+                    &mut shared.snapshot.lock().unwrap_or_else(|e| e.into_inner()),
+                );
+                ctx.request_repaint();
+            })
+            .is_ok()
+    }
+
+    /// Apply a network change (asks for administrator rights when needed), then re-read.
+    pub fn net_action(&self, action: NetAction) {
+        {
+            let mut snap = self.snapshot();
+            if snap.net_busy {
+                return;
+            }
+            snap.net_busy = true;
+        }
+        let shared = self.shared.clone();
+        let previous = self.snapshot().network.clone();
+        let a = action.clone();
+        let ok = self.worker(
+            "omnihw-net",
+            move || {
+                let r = crate::net_ops::apply(&a);
+                // Re-read right away so the page never shows the state from before the change.
+                // Wait (briefly) for a background read to finish so it can't overwrite this one.
+                let mut owned = false;
+                for _ in 0..100 {
+                    if shared
+                        .network_reading
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        owned = true;
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                let fresh = NetworkInfo::gather(true, previous.as_ref());
+                // Only release the flag if this thread took it (not another read's).
+                if owned {
+                    shared.network_reading.store(false, Ordering::Release);
+                }
+                (r, fresh)
+            },
+            move |(r, fresh), snap| {
+                snap.network = Some(fresh);
+                snap.net_busy = false;
+                snap.net_msg = Some(match r {
+                    Ok(()) if action.needs_restart() => {
+                        format!("Done: {}. Restart Windows to finish.", action.label())
+                    }
+                    Ok(()) => format!("Done: {}", action.label()),
+                    Err(e) => format!("{} failed: {e}", action.label()),
+                });
+            },
+        );
+        if !ok {
+            self.snapshot().net_busy = false;
+        }
+    }
+
+    /// Local network tests on every connected adapter: gateway ping and local DNS servers.
+    pub fn run_local_tests(&self) {
+        let adapters: Vec<_> = {
+            let mut snap = self.snapshot();
+            if snap.net_local.running {
+                return;
+            }
+            let Some(n) = &snap.network else { return };
+            let list: Vec<_> = n.connected().cloned().collect();
+            snap.net_local.running = true;
+            list
+        };
+        let ok = self.worker(
+            "omnihw-net-local",
+            move || {
+                std::thread::scope(|s| {
+                    let handles: Vec<_> = adapters
+                        .iter()
+                        .map(|a| s.spawn(move || net::local_results(a, &net::probe_local(a))))
+                        .collect();
+                    adapters
+                        .iter()
+                        .zip(handles)
+                        .map(|(a, h)| (a.name.clone(), h.join().unwrap_or_default()))
+                        .collect::<Vec<_>>()
+                })
+            },
+            |r, snap| {
+                snap.net_local = TestRun {
+                    running: false,
+                    results: Some((r, SystemTime::now())),
+                };
+            },
+        );
+        if !ok {
+            self.snapshot().net_local.running = false;
+        }
+    }
+
+    /// Internet tests (DNS, HTTP and pings to public servers). Only on the user's click.
+    pub fn run_internet_tests(&self) {
+        {
+            let mut snap = self.snapshot();
+            if snap.net_internet.running {
+                return;
+            }
+            snap.net_internet.running = true;
+        }
+        let ok = self.worker(
+            "omnihw-net-internet",
+            || net::internet_results(&net::probe_internet()),
+            |r, snap| {
+                snap.net_internet = TestRun {
+                    running: false,
+                    results: Some((vec![(String::new(), r)], SystemTime::now())),
+                };
+            },
+        );
+        if !ok {
+            self.snapshot().net_internet.running = false;
+        }
     }
 
     /// Static info, once gathered.
@@ -339,6 +522,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
     let started = Instant::now();
     let mut notifier: Option<Notifier> = None;
     let mut power_read: Option<Instant> = None;
+    let mut network_read = NetworkReads::default();
     loop {
         let interval = Duration::from_millis(shared.interval_ms.load(Ordering::Relaxed));
         match stop.recv_timeout(interval) {
@@ -396,6 +580,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
             }
         }
         update_power(&shared, &mut power_read);
+        update_network(&shared, &ctx, &mut network_read);
         ctx.request_repaint();
     }
 }
@@ -428,6 +613,64 @@ fn update_power(shared: &Shared, last: &mut Option<Instant>) {
             }
             *old = Some(fresh);
         }
+    }
+}
+
+/// When the network adapters were last read (quickly / with all details).
+#[derive(Default)]
+struct NetworkReads {
+    fast: Option<Instant>,
+    full: Option<Instant>,
+}
+
+/// Re-read network adapters outside the snapshot lock: addresses, link and Wi-Fi every few
+/// seconds while the Network page is open (every minute otherwise), WMI details less often.
+fn update_network(shared: &Arc<Shared>, ctx: &egui::Context, last: &mut NetworkReads) {
+    if shared.network_reading.load(Ordering::Acquire) {
+        return;
+    }
+    let open = shared.network_page.load(Ordering::Relaxed);
+    let due = |t: Option<Instant>, every: Duration| t.is_none_or(|t| t.elapsed() >= every);
+    let (fast_every, full_every) = if open {
+        (NETWORK_EVERY_OPEN, NETWORK_DETAILS_EVERY_OPEN)
+    } else {
+        (NETWORK_EVERY_CLOSED, NETWORK_DETAILS_EVERY_CLOSED)
+    };
+    let full = shared.network_refresh.load(Ordering::Relaxed) || due(last.full, full_every);
+    if !full && !due(last.fast, fast_every) {
+        return;
+    }
+    if shared
+        .network_reading
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    shared.network_refresh.store(false, Ordering::Relaxed);
+    let now = Some(Instant::now());
+    last.fast = now;
+    if full {
+        last.full = now;
+    }
+    let previous = shared
+        .snapshot
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .network
+        .clone();
+    // The read can take hundreds of milliseconds (WMI), so it never runs on the sampler loop.
+    let (s, c) = (shared.clone(), ctx.clone());
+    let spawned = std::thread::Builder::new()
+        .name("omnihw-net-read".into())
+        .spawn(move || {
+            let fresh = NetworkInfo::gather(full, previous.as_ref());
+            s.snapshot.lock().unwrap_or_else(|e| e.into_inner()).network = Some(fresh);
+            s.network_reading.store(false, Ordering::Release);
+            c.request_repaint();
+        });
+    if spawned.is_err() {
+        shared.network_reading.store(false, Ordering::Release);
     }
 }
 

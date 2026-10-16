@@ -7,6 +7,7 @@ use super::helpers::{
 use super::{Category, Context, Level, Outcome, Step};
 use crate::bios_help::{self, BiosSetting};
 use crate::checkup::{Activation, Tpm, format_link_speed, problem_is_missing_driver, problem_text};
+use crate::network::Media;
 use crate::power::{Action, BALANCED};
 use crate::win::PlanKind;
 
@@ -200,38 +201,85 @@ pub(super) fn device_problems(ctx: &Context) -> Outcome {
 }
 
 pub(super) fn ethernet_speed(ctx: &Context) -> Outcome {
-    let nics = &ctx.info.checkup.nics;
-    if nics.is_empty() {
+    // (name, link speed) of each wired adapter: from the live adapter list when it has been read,
+    // otherwise from the start-up check-up.
+    let wired: Vec<(&str, u64)> = match ctx.network {
+        Some(n) => n
+            .connected()
+            .filter(|a| a.media == Media::Ethernet && a.physical)
+            .filter_map(|a| Some((a.name.as_str(), a.speed_bps?)))
+            .collect(),
+        None => ctx
+            .info
+            .checkup
+            .nics
+            .iter()
+            .map(|n| (n.name.as_str(), n.speed_bps))
+            .collect(),
+    };
+    let has_wired = match ctx.network {
+        Some(n) => n
+            .connected()
+            .any(|a| a.media == Media::Ethernet && a.physical),
+        None => !wired.is_empty(),
+    };
+    if !has_wired {
         return Outcome::Skipped("No wired network connection".into());
     }
     let mut out = Vec::new();
-    for n in nics {
-        if n.speed_bps > 100_000_000 {
+    // Gigabit or faster, but below what the adapter supports (e.g. 1 Gbps on a 2.5 Gbps port).
+    for a in ctx
+        .network
+        .iter()
+        .flat_map(|n| n.connected())
+        .filter(|a| a.media == Media::Ethernet && a.physical)
+    {
+        let Some((cur, max)) = a.below_max_speed().filter(|(c, _)| *c > 100_000_000) else {
+            continue;
+        };
+        let (cur, max) = (format_link_speed(cur), format_link_speed(max));
+        out.push(guided(
+            Level::Info,
+            Category::Network,
+            format!("Ethernet linked at {cur}, below its {max} maximum"),
+            format!(
+                "{} supports {max} but connected at {cur}. That's expected if the router or switch port only does {cur}; if it supports {max}, the cable or a port is limiting it.",
+                a.name
+            ),
+            vec![
+                Step::new(format!("Check whether your router or switch has a {max} port, and plug into that one.")),
+                Step::new("Use a Cat5e or Cat6 cable (Cat6 for longer runs) and make sure both plugs click in."),
+                Step::new("On the Network page, check the adapter's Speed & Duplex setting is Auto Negotiation."),
+            ],
+        ));
+    }
+    for &(name, speed_bps) in &wired {
+        if speed_bps > 100_000_000 {
             continue;
         }
-        let speed = format_link_speed(n.speed_bps);
+        let speed = format_link_speed(speed_bps);
         out.push(guided(
             Level::Warning,
-            Category::System,
+            Category::Network,
             format!("Ethernet connected at only {speed}"),
             format!(
-                "{} linked at {speed}. Gigabit (1 Gbps) is standard on PCs and routers; 100 Mbps almost always means a damaged cable, a cable with only four wires, or a bad port, and caps downloads at about 12 MB/s.",
-                n.name
+                "{name} linked at {speed}. Gigabit (1 Gbps) is standard on PCs and routers; 100 Mbps almost always means a damaged cable, a cable with only four wires, or a bad port, and caps downloads at about 12 MB/s."
             ),
             vec![
                 Step::new("Replace the network cable with a Cat5e or Cat6 one, and make sure both plugs click in."),
                 Step::new("Try a different port on the router or switch, and check that it supports gigabit."),
                 Step::search(
                     "Update the network adapter's driver.",
-                    format!("{} driver download", n.name),
+                    format!("{name} driver download"),
                 ),
             ],
         ));
     }
     if out.is_empty() {
         return Outcome::Pass(
-            nics.iter()
-                .map(|n| format!("{}: {}", n.name, format_link_speed(n.speed_bps)))
+            wired
+                .iter()
+                .map(|(name, bps)| format!("{name}: {}", format_link_speed(*bps)))
                 .collect::<Vec<_>>()
                 .join("; "),
         );
@@ -531,6 +579,50 @@ mod tests {
         );
         info.checkup.nics[0].speed_bps = 2_500_000_000;
         assert!(matches!(ethernet_speed(&ctx(&info, &s)), Outcome::Pass(_)));
+        // 1 Gbps on a 2.5 Gbps adapter is only a suggestion.
+        let net = crate::network::NetworkInfo {
+            adapters: vec![crate::network::Adapter {
+                media: crate::network::Media::Ethernet,
+                physical: true,
+                status: crate::network::Status::Up,
+                speed_bps: Some(1_000_000_000),
+                max_speed_bps: Some(2_500_000_000),
+                ..Default::default()
+            }],
+            detailed: true,
+        };
+        let mut c = ctx(&info, &s);
+        c.network = Some(&net);
+        assert_eq!(levels(&ethernet_speed(&c)), vec![Level::Info]);
+
+        // 100 Mbps on a physical adapter, from the live adapter list: a Network warning.
+        let eth = |physical, speed| crate::network::NetworkInfo {
+            adapters: vec![crate::network::Adapter {
+                name: "Ethernet".into(),
+                media: crate::network::Media::Ethernet,
+                physical,
+                status: crate::network::Status::Up,
+                speed_bps: Some(speed),
+                ..Default::default()
+            }],
+            detailed: true,
+        };
+        let slow = eth(true, 100_000_000);
+        let mut c = ctx(&info, &s);
+        c.network = Some(&slow);
+        let Outcome::Findings(f) = ethernet_speed(&c) else {
+            panic!("expected a finding")
+        };
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].category, Category::Network);
+        // A virtual adapter is not a wired connection at all.
+        let virt = eth(false, 100_000_000);
+        c.network = Some(&virt);
+        assert!(matches!(ethernet_speed(&c), Outcome::Skipped(_)));
+        // A healthy physical adapter passes, ignoring the start-up list.
+        let fast = eth(true, 1_000_000_000);
+        c.network = Some(&fast);
+        assert!(matches!(ethernet_speed(&c), Outcome::Pass(_)));
 
         info.checkup.nvme_links = vec![
             PcieLink {

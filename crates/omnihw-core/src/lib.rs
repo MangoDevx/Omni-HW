@@ -13,6 +13,7 @@ pub mod cpuid;
 pub mod diagnostics;
 pub mod gpu;
 mod le;
+pub mod network;
 pub mod power;
 pub mod recording;
 pub mod report;

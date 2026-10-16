@@ -37,6 +37,9 @@ See your CPU, GPU, memory, storage and system at a glance, with live numbers, hi
 ### 🔍 Hardware details
 CPU model, codename, cores and threads (P/E cores), caches and instruction sets; motherboard and BIOS; every memory stick; GPU chip, VRAM, driver, PCIe link and Resizable BAR; and drive health for both NVMe and SATA drives. This is the same kind of system information that dedicated tools such as CPU-Z and GPU-Z report, gathered by Omni-HW's own code.
 
+### 🌐 Network
+Every network adapter in one place, like Network Connections but with more detail: link speed and duplex, IPv4/IPv6 addresses, gateway, DNS, DHCP lease, MTU, driver version, and for Wi-Fi the network, band, channel and signal. Enable or disable adapters, rename them, switch between DHCP and a fixed IP, set DNS servers and MTU, release/renew, change advanced driver properties, flush the DNS cache or reset Winsock/TCP-IP (each asks first, and Windows asks for administrator permission). Local tests check the link, address, gateway and local DNS without leaving your network; the internet tests run only when you click them.
+
 ### 📈 Live sensors
 Live readings with current, min, max and average: per-core clocks and usage, CPU power, GPU load, temperature, clocks, power and fan, memory, and disk speed and temperature.
 
@@ -83,7 +86,9 @@ The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --w
 
 ## 🔒 Privacy & permissions
 
-- 🌐 **Offline:** Omni-HW never connects to the internet on its own. Everything stays on your PC. The only exception is the optional update check (Settings > Updates), which runs only when you click it or turn on the check at start (off by default) and only asks GitHub for the latest version number.
+- 🌐 **Offline:** Omni-HW never connects to the internet on its own and works fully offline. Everything stays on your PC. The only exceptions run when you ask for them:
+  - the update check (Settings > Updates), which runs only when you click it or turn on the check at start (off by default) and only asks GitHub for the latest version number;
+  - the **internet tests** on the Network page, which run only when you click *Run internet tests*: a DNS lookup of `dns.msftncsi.com`, an HTTP request to `www.msftconnecttest.com/connecttest.txt` (Windows' own connectivity probes) and pings to the public DNS resolvers `1.1.1.1` and `8.8.8.8`. Nothing about your PC is sent.
 - 🔍 **Read-only:** Omni-HW reads your hardware through standard Windows APIs and your GPU driver's own monitoring library. It never changes clocks, fans or firmware settings, and nothing gets installed.
 - 🛡️ **Admin only for SATA health:** reading SATA drive health needs administrator rights, so Omni-HW asks once at start if you have SATA drives. Say no and everything else still works, or turn the prompt off in Settings. NVMe drives don't need it.
 - 📁 **Where your files go:**

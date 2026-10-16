@@ -11,6 +11,7 @@ mod heat;
 mod help;
 mod icon;
 mod nav;
+mod net_ops;
 mod notify;
 mod power_ops;
 mod retro;
@@ -23,6 +24,10 @@ mod update;
 fn main() -> eframe::Result {
     // Elevated helper for a power change: do it and exit without a window.
     if let Some(code) = power_ops::run_helper() {
+        std::process::exit(code);
+    }
+    // Elevated helper for a network change.
+    if let Some(code) = net_ops::run_helper() {
         std::process::exit(code);
     }
     if elevate::relaunch_elevated_if_useful() {

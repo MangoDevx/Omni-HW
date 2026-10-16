@@ -20,6 +20,7 @@ pub const GROUPS: [(&str, &[Tab]); 2] = [
             Tab::Memory,
             Tab::Gpu,
             Tab::Storage,
+            Tab::Network,
             Tab::Power,
         ],
     ),
