@@ -29,6 +29,8 @@ pub enum Editor {
         if_index: u32,
         name: String,
         dhcp: bool,
+        /// The adapter is connected: Windows only applies a fixed address then.
+        connected: bool,
         ip: String,
         mask: String,
         gateway: String,
@@ -214,13 +216,23 @@ fn editor_dialog(ctx: &egui::Context, mut ed: Editor) -> Option<NetAction> {
             }
             Editor::Ip {
                 dhcp,
+                connected,
                 ip,
                 mask,
                 gateway,
                 ..
             } => {
+                if !*connected {
+                    *dhcp = true;
+                }
                 ui.radio_value(dhcp, true, "Get an IP address automatically (DHCP)");
-                ui.radio_value(dhcp, false, "Use this IP address:");
+                ui.add_enabled_ui(*connected, |ui| {
+                    ui.radio_value(dhcp, false, "Use this IP address:");
+                })
+                .response
+                .on_disabled_hover_text(
+                    "Connect the adapter first: Windows only applies a fixed address to a connected adapter.",
+                );
                 ui.add_enabled_ui(!*dhcp, |ui| {
                     egui::Grid::new("net_ip_grid")
                         .num_columns(2)
@@ -371,6 +383,7 @@ mod tests {
             if_index: 7,
             name: "Ethernet".into(),
             dhcp,
+            connected: true,
             ip: ip.into(),
             mask: mask.into(),
             gateway: gw.into(),

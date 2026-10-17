@@ -241,6 +241,7 @@ fn changes(ui: &mut Ui, a: &Adapter) {
                     if_index: idx,
                     name: a.name.clone(),
                     dhcp: a.dhcp_enabled,
+                    connected: a.status == Status::Up,
                     ip: first.map(|e| e.addr.to_string()).unwrap_or_default(),
                     mask: first
                         .map(|e| omnihw_core::network::prefix_mask(e.prefix).to_string())
@@ -291,7 +292,7 @@ fn changes(ui: &mut Ui, a: &Adapter) {
                 },
             );
         }
-        if a.dhcp_enabled {
+        if a.dhcp_enabled && a.status == Status::Up {
             lazy_action_button(
                 ui,
                 "Renew",

@@ -23,7 +23,7 @@ mod imp {
         Scheme, Setting, Source, UsbSensitive,
     };
     use crate::win::PlanKind;
-    use crate::win::registry::{self, Hive};
+    use crate::win::registry::{self, Hive, NET_CLASS};
     use crate::win::wide::{from_wide, from_wide_bytes, guid_text};
     use std::ptr;
     use windows::Win32::Devices::DeviceAndDriverInstallation::{
@@ -44,8 +44,6 @@ mod imp {
     };
     use windows::core::{GUID, HSTRING, Owned, PCWSTR};
 
-    const NET_CLASS: &str =
-        r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
     const POWER_KEY: &str = r"SYSTEM\CurrentControlSet\Control\Session Manager\Power";
     /// NCF_PHYSICAL: a real (not virtual) network adapter.
     const NCF_PHYSICAL: u32 = 0x4;

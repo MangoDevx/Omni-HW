@@ -10,6 +10,10 @@ use windows::Win32::System::Registry::{
 };
 use windows::core::{HSTRING, Owned, PWSTR};
 
+/// HKLM key of the network adapter device class; one subkey per adapter driver instance.
+pub(crate) const NET_CLASS: &str =
+    r"SYSTEM\CurrentControlSet\Control\Class\{4d36e972-e325-11ce-bfc1-08002be10318}";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Hive {
     LocalMachine,

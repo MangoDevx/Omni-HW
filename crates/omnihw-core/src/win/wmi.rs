@@ -208,14 +208,13 @@ pub(crate) struct Wmi {
 /// A value to write into a WMI property or method parameter.
 pub(crate) enum Value<'a> {
     Str(&'a str),
-    Strs(&'a [String]),
     /// CIM uint32/sint32 travel as VT_I4.
     I32(i32),
 }
 
 impl Variant {
     fn from_value(v: &Value) -> windows::core::Result<Variant> {
-        use windows::Win32::System::Variant::{InitVariantFromStringArray, VT_BSTR, VT_I4};
+        use windows::Win32::System::Variant::{VT_BSTR, VT_I4};
         let mut out = VARIANT::default();
         match v {
             Value::Str(s) => {
@@ -233,13 +232,6 @@ impl Variant {
                     (*out.Anonymous.Anonymous).vt = VT_I4;
                     (*out.Anonymous.Anonymous).Anonymous.lVal = *n;
                 }
-            }
-            Value::Strs(list) => {
-                let wide: Vec<HSTRING> = list.iter().map(|s| HSTRING::from(s.as_str())).collect();
-                let ptrs: Vec<PCWSTR> = wide.iter().map(|h| PCWSTR(h.as_ptr())).collect();
-                // SAFETY: the pointers stay valid (held by `wide`) for the call, which copies
-                // the strings into a new SAFEARRAY owned by the returned VARIANT.
-                out = unsafe { InitVariantFromStringArray(&ptrs) }?;
             }
         }
         Ok(Variant(out))
