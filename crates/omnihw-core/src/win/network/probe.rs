@@ -198,7 +198,13 @@ pub fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
     unsafe {
         while !p.is_null() {
             if (*p).wType == DNS_TYPE_PTR.0 && !(*p).Data.PTR.pNameHost.is_null() {
-                return (*p).Data.PTR.pNameHost.to_string().ok().filter(|s| !s.is_empty());
+                return (*p)
+                    .Data
+                    .PTR
+                    .pNameHost
+                    .to_string()
+                    .ok()
+                    .filter(|s| !s.is_empty());
             }
             p = (*p).pNext;
         }

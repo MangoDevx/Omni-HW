@@ -72,31 +72,76 @@ const fn p(port: u16, service: &'static str, risk: Risk, note: &'static str) -> 
 pub const SCAN_PORTS: &[PortInfo] = &[
     p(21, "FTP", Risk::High, "File transfer with no encryption"),
     p(22, "SSH", Risk::Low, "Encrypted remote login"),
-    p(23, "Telnet", Risk::High, "Remote console with no encryption"),
+    p(
+        23,
+        "Telnet",
+        Risk::High,
+        "Remote console with no encryption",
+    ),
     p(25, "SMTP", Risk::Info, "Mail transfer"),
     p(53, "DNS", Risk::Info, "Name lookups"),
-    p(80, "HTTP", Risk::Low, "Web page or admin console without encryption"),
+    p(
+        80,
+        "HTTP",
+        Risk::Low,
+        "Web page or admin console without encryption",
+    ),
     p(110, "POP3", Risk::Low, "Mail retrieval without encryption"),
     p(135, "MS RPC", Risk::Low, "Windows remote procedure calls"),
-    p(139, "NetBIOS", Risk::Medium, "Legacy Windows file/printer sharing"),
+    p(
+        139,
+        "NetBIOS",
+        Risk::Medium,
+        "Legacy Windows file/printer sharing",
+    ),
     p(143, "IMAP", Risk::Low, "Mail retrieval without encryption"),
     p(445, "SMB", Risk::Medium, "Windows file and printer sharing"),
     p(515, "LPD", Risk::Info, "Network printing"),
     p(554, "RTSP", Risk::Info, "Camera or media stream"),
     p(631, "IPP", Risk::Info, "Network printing"),
     p(1433, "MS SQL", Risk::Medium, "Database server"),
-    p(2323, "Telnet (alt)", Risk::High, "Remote console with no encryption"),
+    p(
+        2323,
+        "Telnet (alt)",
+        Risk::High,
+        "Remote console with no encryption",
+    ),
     p(3306, "MySQL", Risk::Medium, "Database server"),
     p(3389, "RDP", Risk::Medium, "Windows Remote Desktop"),
     p(5000, "UPnP/HTTP", Risk::Low, "Device web service"),
     p(5432, "PostgreSQL", Risk::Medium, "Database server"),
-    p(5900, "VNC", Risk::High, "Remote desktop, often with weak or no password"),
-    p(6379, "Redis", Risk::High, "Database that is unauthenticated by default"),
-    p(7547, "TR-069", Risk::Medium, "ISP remote management of the router"),
-    p(8080, "HTTP (alt)", Risk::Low, "Web page or admin console without encryption"),
+    p(
+        5900,
+        "VNC",
+        Risk::High,
+        "Remote desktop, often with weak or no password",
+    ),
+    p(
+        6379,
+        "Redis",
+        Risk::High,
+        "Database that is unauthenticated by default",
+    ),
+    p(
+        7547,
+        "TR-069",
+        Risk::Medium,
+        "ISP remote management of the router",
+    ),
+    p(
+        8080,
+        "HTTP (alt)",
+        Risk::Low,
+        "Web page or admin console without encryption",
+    ),
     p(8443, "HTTPS (alt)", Risk::Info, "Encrypted web console"),
     p(9100, "Raw print", Risk::Info, "Direct-to-printer port"),
-    p(27017, "MongoDB", Risk::High, "Database that is unauthenticated by default"),
+    p(
+        27017,
+        "MongoDB",
+        Risk::High,
+        "Database that is unauthenticated by default",
+    ),
 ];
 
 /// Look up a port in [`SCAN_PORTS`].
@@ -310,19 +355,23 @@ where
     if n == 0 {
         return Vec::new();
     }
-    let out: Vec<std::sync::Mutex<R>> = (0..n).map(|_| std::sync::Mutex::new(R::default())).collect();
+    let out: Vec<std::sync::Mutex<R>> = (0..n)
+        .map(|_| std::sync::Mutex::new(R::default()))
+        .collect();
     let next = AtomicU32::new(0);
     let workers = WORKERS.min(n);
     std::thread::scope(|s| {
         for _ in 0..workers {
-            s.spawn(|| loop {
-                let i = next.fetch_add(1, Ordering::Relaxed) as usize;
-                if i >= n {
-                    break;
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed) as usize;
+                    if i >= n {
+                        break;
+                    }
+                    let r = each(&jobs[i]);
+                    *out[i].lock().unwrap_or_else(|e| e.into_inner()) = r;
+                    tick();
                 }
-                let r = each(&jobs[i]);
-                *out[i].lock().unwrap_or_else(|e| e.into_inner()) = r;
-                tick();
             });
         }
     });
@@ -419,7 +468,10 @@ pub fn scan(adapters: &[Adapter], progress: &Progress) -> LanScan {
             _ => None,
         });
         let mut hosts: Vec<Host> = Vec::new();
-        for &ip in live.iter().filter(|&&ip| same_subnet(ip, n.self_ip, n.prefix)) {
+        for &ip in live
+            .iter()
+            .filter(|&&ip| same_subnet(ip, n.self_ip, n.prefix))
+        {
             let is_self = ip == n.self_ip;
             let mac = mac_of(ip);
             hosts.push(Host {
@@ -477,10 +529,10 @@ fn read_banner(stream: &mut TcpStream, port: u16) -> String {
 fn tidy_banner(bytes: &[u8], port: u16) -> String {
     let text = String::from_utf8_lossy(bytes);
     if matches!(port, 80 | 8080 | 5000 | 7547) {
-        if let Some(server) = text
-            .lines()
-            .find_map(|l| l.strip_prefix("Server:").or_else(|| l.strip_prefix("server:")))
-        {
+        if let Some(server) = text.lines().find_map(|l| {
+            l.strip_prefix("Server:")
+                .or_else(|| l.strip_prefix("server:"))
+        }) {
             return clean(server.trim());
         }
     }
@@ -491,7 +543,13 @@ fn tidy_banner(bytes: &[u8], port: u16) -> String {
 fn clean(s: &str) -> String {
     let mut out: String = s
         .chars()
-        .map(|c| if c.is_ascii_graphic() || c == ' ' { c } else { ' ' })
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                ' '
+            }
+        })
         .collect::<String>()
         .split_whitespace()
         .collect::<Vec<_>>()
@@ -504,16 +562,14 @@ fn clean(s: &str) -> String {
 }
 
 /// Help links (open in the user's own browser; the app makes no request).
-const HELP_SMB1: &str =
-    "https://learn.microsoft.com/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3";
-const HELP_ROUTER: &str =
-    "https://www.cisa.gov/news-events/news/home-network-security";
+const HELP_SMB1: &str = "https://learn.microsoft.com/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3";
+const HELP_ROUTER: &str = "https://www.cisa.gov/news-events/news/home-network-security";
 const HELP_TELNET: &str = "https://www.google.com/search?q=disable+telnet+on+my+router";
-const HELP_RDP: &str =
-    "https://learn.microsoft.com/windows-server/remote/remote-desktop-services/clients/remote-desktop-allow-access";
+const HELP_RDP: &str = "https://learn.microsoft.com/windows-server/remote/remote-desktop-services/clients/remote-desktop-allow-access";
 const HELP_DB: &str = "https://www.google.com/search?q=restrict+database+to+localhost";
 const HELP_VNC: &str = "https://www.google.com/search?q=secure+VNC+password+encryption";
-const HELP_CAMERA: &str = "https://www.google.com/search?q=secure+IP+camera+change+default+password";
+const HELP_CAMERA: &str =
+    "https://www.google.com/search?q=secure+IP+camera+change+default+password";
 
 /// Turn the scanned subnets and this PC's posture into ranked findings.
 pub fn analyze(subnets: &[SubnetScan], local: &LocalPosture) -> Vec<Finding> {
@@ -675,7 +731,11 @@ fn finding_for(at: &str, host: &Host, port: &OpenPort) -> Option<Finding> {
 /// A short maker name for a MAC's OUI (first three bytes), best-effort. Not a full OUI database:
 /// just common router, console and IoT makers so a device list is easier to read.
 pub fn vendor_from_mac(mac: &str) -> Option<&'static str> {
-    let hex: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).take(6).collect();
+    let hex: String = mac
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .take(6)
+        .collect();
     if hex.len() < 6 {
         return None;
     }
@@ -776,9 +836,7 @@ mod imp {
             "Start",
         )
         .map(|start| start != 4);
-        LocalPosture {
-            smb1_enabled: smb1,
-        }
+        LocalPosture { smb1_enabled: smb1 }
     }
 }
 
@@ -813,7 +871,10 @@ mod tests {
         assert_eq!(hosts[0], Ipv4Addr::new(192, 168, 1, 1));
         assert_eq!(*hosts.last().unwrap(), Ipv4Addr::new(192, 168, 1, 254));
         // /30 has 2 usable hosts.
-        assert_eq!(subnet_hosts(Ipv4Addr::new(10, 0, 0, 1), 30).unwrap().len(), 2);
+        assert_eq!(
+            subnet_hosts(Ipv4Addr::new(10, 0, 0, 1), 30).unwrap().len(),
+            2
+        );
         // A public address is refused.
         assert!(subnet_hosts(Ipv4Addr::new(8, 8, 8, 8), 24).is_none());
         // Too wide (smaller prefix than MIN_PREFIX) is refused.

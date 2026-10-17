@@ -48,7 +48,10 @@ pub fn show(ui: &mut Ui, snap: &Snapshot) {
             ui.add(egui::Spinner::new());
             ui.label("Scanning...");
         } else if ui
-            .add_enabled(scannable, egui::Button::new(RichText::new("Scan my network").strong()))
+            .add_enabled(
+                scannable,
+                egui::Button::new(RichText::new("Scan my network").strong()),
+            )
             .on_hover_text("Discover devices and probe common ports on your local subnet")
             .on_disabled_hover_text("Connect to a network first")
             .clicked()
@@ -219,7 +222,12 @@ fn host_row(ui: &mut Ui, host: &Host) {
             if open_ports == 0 {
                 ui.weak("no open ports");
             } else {
-                let worst = host.ports.iter().map(|p| p.risk).max().unwrap_or(Risk::Info);
+                let worst = host
+                    .ports
+                    .iter()
+                    .map(|p| p.risk)
+                    .max()
+                    .unwrap_or(Risk::Info);
                 pill(
                     ui,
                     format!("{open_ports} open port{}", plural(open_ports)),
