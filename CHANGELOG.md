@@ -2,7 +2,7 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
-## Unreleased
+## 0.3.0
 
 ### New
 - **Network page**: every adapter's driver, link speed, addresses, gateway, DNS, DHCP lease, MTU, Wi-Fi details and advanced driver settings.
