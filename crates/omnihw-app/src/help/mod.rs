@@ -10,7 +10,7 @@ mod monitoring;
 mod start;
 
 use egui::{Context, RichText, Ui};
-use hardware::{hardware, network, power, sensors};
+use hardware::{hardware, lan_security, network, power, sensors};
 use health::health_check;
 use monitoring::{alerts, recording, reports};
 use start::{getting_started, overview, privacy, settings, troubleshooting};
@@ -23,6 +23,7 @@ pub enum HelpTab {
     HealthCheck,
     Hardware,
     Network,
+    LanSecurity,
     Power,
     Sensors,
     Recording,
@@ -33,12 +34,13 @@ pub enum HelpTab {
     Troubleshooting,
 }
 
-const TABS: [(HelpTab, &str); 13] = [
+const TABS: [(HelpTab, &str); 14] = [
     (HelpTab::GettingStarted, "Getting Started"),
     (HelpTab::Overview, "Overview"),
     (HelpTab::HealthCheck, "Health Check"),
     (HelpTab::Hardware, "Hardware Tabs"),
     (HelpTab::Network, "Network"),
+    (HelpTab::LanSecurity, "LAN Security"),
     (HelpTab::Power, "Power"),
     (HelpTab::Sensors, "Sensors"),
     (HelpTab::Recording, "Recording"),
@@ -80,6 +82,7 @@ pub fn show(ctx: &Context, state: &mut HelpState) {
                     HelpTab::HealthCheck => health_check(ui),
                     HelpTab::Hardware => hardware(ui),
                     HelpTab::Network => network(ui),
+                    HelpTab::LanSecurity => lan_security(ui),
                     HelpTab::Power => power(ui),
                     HelpTab::Sensors => sensors(ui),
                     HelpTab::Recording => recording(ui),

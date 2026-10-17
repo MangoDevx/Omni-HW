@@ -10,7 +10,7 @@ use crate::app::Tab;
 use crate::settings::NavStyle;
 
 /// Drop-down menus in the grouped navigation bar: (label, pages).
-pub const GROUPS: [(&str, &[Tab]); 2] = [
+pub const GROUPS: [(&str, &[Tab]); 3] = [
     (
         "Hardware",
         &[
@@ -20,20 +20,21 @@ pub const GROUPS: [(&str, &[Tab]); 2] = [
             Tab::Memory,
             Tab::Gpu,
             Tab::Storage,
-            Tab::Network,
             Tab::Power,
         ],
     ),
+    ("Network", &[Tab::Network, Tab::LanSecurity]),
     ("Monitoring", &[Tab::Sensors, Tab::Recording, Tab::Alerts]),
 ];
 
 /// Top-level entries of the grouped bar that hold pages, left to right. Record and Report are
 /// actions rather than pages, so the arrows skip them; Info leads to About.
-pub const CATEGORIES: [&[Tab]; 6] = [
+pub const CATEGORIES: [&[Tab]; 7] = [
     &[Tab::Overview],
     &[Tab::Health],
     GROUPS[0].1,
     GROUPS[1].1,
+    GROUPS[2].1,
     &[Tab::About],
     &[Tab::Settings],
 ];
@@ -156,21 +157,23 @@ mod tests {
         let g = NavStyle::Grouped;
         assert_eq!(go(g, Tab::Overview, Arrow::Right), Some(Tab::Health));
         assert_eq!(go(g, Tab::Health, Arrow::Right), Some(Tab::Cpu));
-        assert_eq!(go(g, Tab::Gpu, Arrow::Right), Some(Tab::Sensors));
+        assert_eq!(go(g, Tab::Gpu, Arrow::Right), Some(Tab::Network));
+        assert_eq!(go(g, Tab::Network, Arrow::Right), Some(Tab::Sensors));
         assert_eq!(go(g, Tab::Alerts, Arrow::Right), Some(Tab::About));
         assert_eq!(go(g, Tab::Settings, Arrow::Right), Some(Tab::Overview));
         assert_eq!(go(g, Tab::Overview, Arrow::Left), Some(Tab::Settings));
-        assert_eq!(go(g, Tab::Sensors, Arrow::Left), Some(Tab::Cpu));
+        assert_eq!(go(g, Tab::Sensors, Arrow::Left), Some(Tab::Network));
     }
 
     #[test]
     fn grouped_left_right_returns_to_the_last_page_of_a_category() {
         let mut m = NavMemory::default();
-        m.visit(Tab::Gpu);
-        m.visit(Tab::Sensors);
+        m.visit(Tab::Recording);
+        m.visit(Tab::About);
+        // Left from About returns to the last page used in the Monitoring category.
         assert_eq!(
-            target(NavStyle::Grouped, Tab::Sensors, Arrow::Left, &m),
-            Some(Tab::Gpu)
+            target(NavStyle::Grouped, Tab::About, Arrow::Left, &m),
+            Some(Tab::Recording)
         );
     }
 
@@ -181,6 +184,8 @@ mod tests {
         assert_eq!(go(g, Tab::Caches, Arrow::Up), Some(Tab::Cpu));
         assert_eq!(go(g, Tab::Cpu, Arrow::Up), None, "stops at the top");
         assert_eq!(go(g, Tab::Power, Arrow::Down), None, "stops at the bottom");
+        assert_eq!(go(g, Tab::Network, Arrow::Down), Some(Tab::LanSecurity));
+        assert_eq!(go(g, Tab::LanSecurity, Arrow::Up), Some(Tab::Network));
         assert_eq!(go(g, Tab::Sensors, Arrow::Down), Some(Tab::Recording));
         assert_eq!(
             go(g, Tab::Overview, Arrow::Down),

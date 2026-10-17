@@ -12,10 +12,11 @@ use windows::Win32::NetworkManagement::Dns::{
     DNS_TYPE_PTR, DnsFree, DnsFreeRecordList, DnsQuery_W, IP4_ARRAY,
 };
 use windows::Win32::NetworkManagement::IpHelper::{
-    ICMP_ECHO_REPLY, ICMPV6_ECHO_REPLY_LH, Icmp6CreateFile, Icmp6ParseReplies, Icmp6SendEcho2,
-    IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho2,
+    FreeMibTable, GetIpNetTable2, ICMP_ECHO_REPLY, ICMPV6_ECHO_REPLY_LH, Icmp6CreateFile,
+    Icmp6ParseReplies, Icmp6SendEcho2, IcmpCloseHandle, IcmpCreateFile, IcmpSendEcho2,
+    MIB_IPNET_TABLE2,
 };
-use windows::Win32::Networking::WinSock::{AF_INET6, SOCKADDR_IN6};
+use windows::Win32::Networking::WinSock::{AF_INET, AF_INET6, SOCKADDR_IN6};
 use windows::core::HSTRING;
 
 const PING_TIMEOUT_MS: u32 = 1000;
@@ -181,6 +182,63 @@ pub fn dns_server_answers(server: IpAddr, scope: u32) -> bool {
         }
         IpAddr::V6(_) => ping_series(server, scope, 2, 200).received() > 0,
     }
+}
+
+/// Reverse-DNS (PTR) name for `ip`, from the configured DNS servers. Used by the LAN Security
+/// Report to label devices; `None` when nothing answers.
+pub fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
+    let o = ip.octets();
+    let name = format!("{}.{}.{}.{}.in-addr.arpa", o[3], o[2], o[1], o[0]);
+    let (status, recs) = dns_query(&name, DNS_TYPE_PTR, None);
+    if status != 0 {
+        return None;
+    }
+    let mut p = recs.0;
+    // SAFETY: a record list owned by `recs`; PTR records carry an ANSI host name in pNameHost.
+    unsafe {
+        while !p.is_null() {
+            if (*p).wType == DNS_TYPE_PTR.0 && !(*p).Data.PTR.pNameHost.is_null() {
+                return (*p).Data.PTR.pNameHost.to_string().ok().filter(|s| !s.is_empty());
+            }
+            p = (*p).pNext;
+        }
+    }
+    None
+}
+
+/// The IPv4 neighbour (ARP) table: (address, 6-byte MAC) for each reachable entry. Used by the
+/// LAN Security Report to attach a hardware address to each discovered device.
+pub fn neighbours() -> Vec<(Ipv4Addr, [u8; 6])> {
+    let mut table: *mut MIB_IPNET_TABLE2 = std::ptr::null_mut();
+    // SAFETY: GetIpNetTable2 allocates the table; it's freed by FreeMibTable below.
+    let r = unsafe { GetIpNetTable2(AF_INET, &mut table) };
+    if r.is_err() || table.is_null() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    // SAFETY: on success `table` points to a MIB_IPNET_TABLE2 with `NumEntries` rows.
+    unsafe {
+        let n = (*table).NumEntries as usize;
+        let rows = (*table).Table.as_ptr();
+        for i in 0..n {
+            let row = &*rows.add(i);
+            if row.Address.si_family != AF_INET {
+                continue;
+            }
+            let addr = Ipv4Addr::from(row.Address.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes());
+            if row.PhysicalAddressLength < 6 {
+                continue;
+            }
+            let mut mac = [0u8; 6];
+            mac.copy_from_slice(&row.PhysicalAddress[..6]);
+            // Skip all-zero or broadcast MACs.
+            if mac != [0; 6] && mac != [0xff; 6] {
+                out.push((addr, mac));
+            }
+        }
+        FreeMibTable(table as *const _);
+    }
+    out
 }
 
 /// IPv4 addresses of `name` from the configured DNS servers (cache bypassed).

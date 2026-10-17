@@ -78,7 +78,7 @@ pub(super) fn hardware(ui: &mut Ui) {
 pub(super) fn network(ui: &mut Ui) {
     p(
         ui,
-        "The Network page (Hardware > Network) lists every adapter Windows shows in Network Connections. It works fully offline: \
+        "The Network page lists every adapter Windows shows in Network Connections. It works fully offline: \
          details are read from Windows, and nothing is sent anywhere unless you click Run internet tests.",
     );
     h(ui, "What it shows");
@@ -121,6 +121,44 @@ pub(super) fn network(ui: &mut Ui) {
             "Addresses and link state come from IP Helper (GetAdaptersAddresses, GetIfEntry2); Wi-Fi from the WLAN API; driver details and advanced properties from WMI (MSFT_NetAdapter). They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
             "On Windows 11 24H2 and later the Wi-Fi network name is hidden unless location access for apps is on (Settings > Privacy & security > Location).",
             "Changes use WMI (MSFT_NetAdapter, Win32_NetworkAdapterConfiguration, MSFT_NetIPInterface); the resets run netsh and the DNS flush runs ipconfig, without a console window.",
+        ],
+    );
+}
+
+pub(super) fn lan_security(ui: &mut Ui) {
+    p(
+        ui,
+        "The LAN Security Report (Network > LAN Security Report) scans your own local network for \
+         devices and common security problems. It runs only when you click Scan my network, stays \
+         on your local network, and changes nothing: it identifies and explains issues, it does \
+         not try to exploit them.",
+    );
+    h(ui, "What it does");
+    bullets(
+        ui,
+        &[
+            "Works out the private subnet of each connected adapter (for example 192.168.1.0/24) and refuses a range wider than a /22, so a scan stays bounded.",
+            "Finds which addresses answer (a quick ping and the neighbour/ARP table), and labels each device with its MAC address, a best-effort maker, and its reverse-DNS name when it has one.",
+            "Checks a short list of well-known TCP ports on each device and reads the greeting (banner) a service shows on connect. It never sends a password or anything beyond a bare request used to read the banner.",
+            "Adds a couple of read-only checks of this PC itself, such as whether the old, insecure SMBv1 protocol is still enabled.",
+        ],
+    );
+    h(ui, "Reading the report");
+    bullets(
+        ui,
+        &[
+            "Findings are ranked RISK (fix this), CHECK (worth tightening) and INFO (just so you know). Each one explains the problem in plain terms and links to fix steps you open in your browser.",
+            "Typical RISK findings: Telnet or FTP (clear-text logins), VNC remote desktop, or an unauthenticated database (Redis, MongoDB) reachable on the network.",
+            "Typical CHECK findings: a database or Remote Desktop exposed to the LAN, a router admin page over plain HTTP, or legacy NetBIOS sharing.",
+            "The device list shows every device found; expand one to see its MAC address and open ports with their banners.",
+        ],
+    );
+    details(
+        ui,
+        "lan_security",
+        &[
+            "Discovery uses one ICMP echo per address plus the IPv4 neighbour table (GetIpNetTable2); reverse names use a PTR DNS query. Port probes are plain TCP connects from the standard library with short timeouts; banners are at most a couple of hundred printable characters.",
+            "Nothing contacts the internet: every address is on your own private subnet. The scan runs on a background worker thread, so the app stays responsive, and a typical home network finishes in well under a minute.",
         ],
     );
 }

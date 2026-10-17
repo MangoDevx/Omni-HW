@@ -4,6 +4,7 @@
 use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
+use omnihw_core::lansec::{self, LanScan};
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
@@ -69,6 +70,18 @@ pub struct Snapshot {
     pub net_msg: Option<String>,
     pub net_local: TestRun,
     pub net_internet: TestRun,
+    /// LAN Security Report: scan progress and last results.
+    pub lan: LanScanState,
+}
+
+/// State of the LAN Security Report scan.
+#[derive(Default, Clone)]
+pub struct LanScanState {
+    pub running: bool,
+    /// Live progress of a running scan (phase and done/total).
+    pub progress: Arc<lansec::Progress>,
+    /// The last finished report, with the time it ran.
+    pub results: Option<(LanScan, SystemTime)>,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -377,6 +390,36 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().net_internet.running = false;
+        }
+    }
+
+    /// Run the LAN Security Report: scan the connected adapters' private subnets. Only on the
+    /// user's click. Progress is updated on the shared [`lansec::Progress`] as it runs.
+    pub fn run_lan_scan(&self) {
+        let (adapters, progress) = {
+            let mut snap = self.snapshot();
+            if snap.lan.running {
+                return;
+            }
+            let Some(n) = &snap.network else { return };
+            let adapters = n.adapters.clone();
+            snap.lan = LanScanState {
+                running: true,
+                progress: Arc::new(lansec::Progress::default()),
+                results: snap.lan.results.take(),
+            };
+            (adapters, snap.lan.progress.clone())
+        };
+        let ok = self.worker(
+            "omnihw-lan-scan",
+            move || lansec::scan(&adapters, &progress),
+            |scan, snap| {
+                snap.lan.running = false;
+                snap.lan.results = Some((scan, SystemTime::now()));
+            },
+        );
+        if !ok {
+            self.snapshot().lan.running = false;
         }
     }
 

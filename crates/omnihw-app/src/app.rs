@@ -16,6 +16,7 @@ pub enum Tab {
     Gpu,
     Storage,
     Network,
+    LanSecurity,
     Power,
     Sensors,
     Recording,
@@ -25,7 +26,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 14] = [
+    pub const ALL: [Tab; 15] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -35,6 +36,7 @@ impl Tab {
         Tab::Gpu,
         Tab::Storage,
         Tab::Network,
+        Tab::LanSecurity,
         Tab::Power,
         Tab::Sensors,
         Tab::Recording,
@@ -53,6 +55,7 @@ impl Tab {
             Tab::Gpu => "GPU",
             Tab::Storage => "Storage",
             Tab::Network => "Network",
+            Tab::LanSecurity => "LAN Security Report",
             Tab::Power => "Power",
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
@@ -74,6 +77,7 @@ impl Tab {
             Tab::Gpu => "gpu",
             Tab::Storage => "storage",
             Tab::Network => "network",
+            Tab::LanSecurity => "lansecurity",
             Tab::Power => "power",
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
@@ -463,6 +467,7 @@ impl eframe::App for OmniApp {
                         Tab::Gpu => tabs::gpu::show(ui, info, &snap, &mut self.gpu_index),
                         Tab::Storage => tabs::storage::show(ui, info, &snap),
                         Tab::Network => tabs::network::show(ui, &snap),
+                        Tab::LanSecurity => tabs::lansec::show(ui, &snap),
                         Tab::Power => tabs::power::show(ui, &snap),
                         Tab::About => tabs::about::show(ui, info, &snap),
                         Tab::Sensors | Tab::Recording | Tab::Alerts | Tab::Settings => {
@@ -481,6 +486,8 @@ impl eframe::App for OmniApp {
         if let Some(msg) = tabs::network::dispatch(ui.ctx(), &self.sampler, on_network) {
             self.set_status(msg);
         }
+        // The LAN Security Report scan, when its button asks for one.
+        tabs::lansec::dispatch(ui.ctx(), &self.sampler);
 
         // Health Check dismissals changed this frame: keep them in the settings (saved to disk
         // only when "remember dismissed" is on).

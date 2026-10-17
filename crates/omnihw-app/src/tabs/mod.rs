@@ -8,6 +8,7 @@ pub mod compare;
 pub mod cpu;
 pub mod gpu;
 pub mod health;
+pub mod lansec;
 pub mod mainboard;
 pub mod memory;
 pub mod network;

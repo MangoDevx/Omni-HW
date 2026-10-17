@@ -12,6 +12,7 @@ pub mod codename;
 pub mod cpuid;
 pub mod diagnostics;
 pub mod gpu;
+pub mod lansec;
 mod le;
 pub mod network;
 pub mod power;
