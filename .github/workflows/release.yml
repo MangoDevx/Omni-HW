@@ -152,6 +152,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A re-run (e.g. after a failed redeploy) finds the release already there: refresh its files.
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/omnihw.exe dist/omnihw.exe.sha256 \
+              --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" dist/omnihw.exe dist/omnihw.exe.sha256 \
             --repo "$GITHUB_REPOSITORY" \
             --title "Omni-HW ${GITHUB_REF_NAME#v}" \
@@ -162,8 +168,17 @@ jobs:
         env:
           HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
         run: |
+          # Strip whitespace, line breaks and quotes a pasted secret may carry. Never print the hook.
+          HOOK="$(printf '%s' "$HOOK" | tr -d "[:space:]\"'")"
           if [ -z "$HOOK" ]; then
             echo "::warning::PAGES_DEPLOY_HOOK is not set; the site was not redeployed."
             exit 0
           fi
+          case "$HOOK" in
+            https://api.cloudflare.com/*) ;;
+            *)
+              echo "::error::PAGES_DEPLOY_HOOK isn't a Cloudflare deploy hook URL (it should start with https://api.cloudflare.com/). Re-copy it from Pages > Settings > Builds > Deploy hooks."
+              exit 1
+              ;;
+          esac
           curl -fsS -X POST "$HOOK" -o /dev/null
