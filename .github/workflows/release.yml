@@ -73,15 +73,6 @@ jobs:
           $text = ($body -join "`n").Trim()
           [IO.File]::WriteAllText("$PWD/notes.md", $text + "`n", [Text.UTF8Encoding]::new($false))
 
-      - name: Format check
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Tests
-        run: cargo test --workspace
-
       - name: Build release
         run: cargo build --release -p omnihw-app --locked
 
@@ -132,8 +123,58 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The checks run once, in ci.yml, on the push to main. Wait for that run on this exact commit.
+  ci-passed:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Wait for CI on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          POLL="${POLL:-30}"                   # seconds between checks
+          NO_RUN_LIMIT="${NO_RUN_LIMIT:-300}"  # give up if no CI run exists after this many seconds
+          TIMEOUT="${TIMEOUT:-2400}"           # give up waiting after this many seconds
+          elapsed=0
+          while true; do
+            # Newest first, as: id, status, conclusion. Manual (workflow_dispatch) runs count, pull_request runs don't.
+            run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --commit "$GITHUB_SHA" \
+              --json databaseId,status,conclusion,event --limit 20 \
+              --jq '[.[] | select(.event == "push" or .event == "workflow_dispatch")] | first // empty | [.databaseId, .status, .conclusion] | @tsv')"
+            if [ -n "$run" ]; then
+              IFS=$'\t' read -r id status conclusion <<< "$run"
+              url="https://github.com/$GITHUB_REPOSITORY/actions/runs/$id"
+              if [ "$status" = "completed" ]; then
+                if [ "$conclusion" = "success" ]; then
+                  echo "::notice::CI passed for $GITHUB_SHA: $url"
+                  exit 0
+                fi
+                echo "::error::CI failed for $GITHUB_SHA ($conclusion): $url"
+                exit 1
+              fi
+              echo "CI run $id is $status; waiting... ($elapsed s)"
+            else
+              if [ "$elapsed" -ge "$NO_RUN_LIMIT" ]; then
+                echo "::error::No CI run found for $GITHUB_SHA. Push the commit to main (CI runs on main pushes) before tagging, or run CI on it manually (Actions > CI > Run workflow)."
+                exit 1
+              fi
+              echo "No CI run for $GITHUB_SHA yet; waiting... ($elapsed s)"
+            fi
+            if [ "$elapsed" -ge "$TIMEOUT" ]; then
+              echo "::error::Timed out after $TIMEOUT s waiting for CI on $GITHUB_SHA."
+              exit 1
+            fi
+            sleep "$POLL"
+            elapsed=$((elapsed + POLL))
+          done
+
   publish:
-    needs: build
+    needs: [build, ci-passed]
     runs-on: ubuntu-latest
     environment: release
     permissions:

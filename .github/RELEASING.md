@@ -9,6 +9,8 @@
    ```
 4. Open the Actions tab, wait for the `build` job, and approve the `release` environment run. The release (exe, SHA-256 file and notes) is then created and the website is redeployed.
 
+The release doesn't re-run fmt, clippy or tests; it waits for CI on the tagged commit, so push `main` together with (or before) the tag.
+
 The build fails early if the tag doesn't match the Cargo version, or if `CHANGELOG.md` has no bullets under `## <version>`.
 
 ## One-time setup
