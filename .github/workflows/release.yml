@@ -1,0 +1,169 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Verify tag matches workspace version
+        run: |
+          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
+          $version = ($meta.packages | Where-Object { $_.name -eq 'omnihw-app' }).version
+          if (-not $version) {
+            Write-Host "::error::Could not read the omnihw-app version from cargo metadata."
+            exit 1
+          }
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            Write-Host "::error::Tag $env:GITHUB_REF_NAME does not match the workspace version v$version. Bump Cargo.toml or retag."
+            exit 1
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          $version = $env:VERSION
+          if (-not (Test-Path CHANGELOG.md)) {
+            Write-Host "::error::CHANGELOG.md not found."
+            exit 1
+          }
+          $lines = Get-Content -LiteralPath CHANGELOG.md
+          $start = -1
+          for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i].TrimEnd() -eq "## $version") { $start = $i; break }
+          }
+          if ($start -lt 0) {
+            Write-Host "::error::CHANGELOG.md has no '## $version' section. Rename '## Unreleased' to '## $version'."
+            exit 1
+          }
+          $body = @()
+          for ($i = $start + 1; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '^## ') { break }
+            $body += $lines[$i]
+          }
+          if (-not ($body | Where-Object { $_ -match '^\s*- ' })) {
+            Write-Host "::error::The '## $version' section in CHANGELOG.md has no '- ' bullets."
+            exit 1
+          }
+          $text = ($body -join "`n").Trim()
+          [IO.File]::WriteAllText("$PWD/notes.md", $text + "`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Build release
+        run: cargo build --release -p omnihw-app --locked
+
+      # Enabled once SignPath approves the project. It will submit
+      # target/release/omnihw.exe to SignPath, replace it with the signed
+      # binary, then run `signtool verify /pa` on the result.
+      - name: Sign (SignPath)
+        if: ${{ false }}
+        run: echo "not configured"
+
+      - name: Package and hash
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/omnihw.exe dist/omnihw.exe
+          $hash = (Get-FileHash -Algorithm SHA256 dist/omnihw.exe).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText("$PWD/dist/omnihw.exe.sha256", "$hash *omnihw.exe`n", [Text.UTF8Encoding]::new($false))
+          "HASH=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build release body
+        run: |
+          $notes = (Get-Content -Raw -LiteralPath notes.md).Trim()
+          # Remove the SmartScreen bullet (and the "Still applies" heading if empty) once signing is on.
+          $body = @(
+            '## Download'
+            ''
+            "**``omnihw.exe``** is a single portable executable for Windows 10 and 11 (x64). There's no installer: download it and double-click (your settings and alert rules carry over from earlier versions)."
+            ''
+            "SHA-256: ``$($env:HASH)``"
+            ''
+            '## What''s new'
+            ''
+            $notes
+            ''
+            '## Still applies'
+            ''
+            ('- **SmartScreen warning.** The exe isn''t code-signed yet, so Windows may show "Windows protected your PC". Click **More info {0} Run anyway**.' -f [char]0x2192)
+          ) -join "`n"
+          [IO.File]::WriteAllText("$PWD/dist/body.md", $body + "`n", [Text.UTF8Encoding]::new($false))
+
+      - name: Upload release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: |
+            dist/omnihw.exe
+            dist/omnihw.exe.sha256
+            dist/body.md
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Download release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: dist
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/omnihw.exe dist/omnihw.exe.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Omni-HW ${GITHUB_REF_NAME#v}" \
+            --notes-file dist/body.md \
+            --verify-tag
+
+      - name: Redeploy website
+        env:
+          HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::warning::PAGES_DEPLOY_HOOK is not set; the site was not redeployed."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" -o /dev/null
