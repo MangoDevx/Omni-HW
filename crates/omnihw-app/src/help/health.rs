@@ -182,24 +182,24 @@ pub(super) fn health_check(ui: &mut Ui) {
         &[
             "Critical (red): fix soon, e.g. a failing drive or outdated CPU microcode with a known stability problem.",
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
-            "Suggestion (blue, shown as INFO on cards): optional improvements.",
-            "Results are grouped by category: Crashes (BSOD), System, CPU, Memory, GPU, Storage, Network, Power Management and Gaming. A category opens by default only when it has something to fix; its pill shows the count in the colour of the most serious one.",
-            "Inside each category, OK rows are checks that found nothing wrong (with what was measured) and dash rows are checks that don't apply to this PC (with the reason, e.g. no battery).",
+            "Suggestion (blue, shown as Info): optional improvements.",
+            "The tiles at the top show each category (Crashes (BSOD), System, CPU, Memory, GPU, Storage, Network, Power Management and Gaming): OK, not checked, or how many findings it has in the colour of the most serious one. Click a tile to list only that category, and click it again (or All) to show everything.",
+            "The list on the left groups findings into Fix these (critical issues and warnings), Suggestions and For gaming, most serious first. Click one to see its details, steps and buttons on the right.",
+            "Passed checks lists each category's checks that found nothing: OK rows found nothing wrong (with what was measured) and dash rows don't apply to this PC (with the reason, e.g. no battery).",
         ],
     );
     h(ui, "Gaming section");
     p(
         ui,
         "Settings that mainly matter for games (Resizable BAR, Memory Integrity, hardware GPU scheduling, Game Mode) are \
-         grouped in the Gaming category. Its findings are counted separately at the top (\"gaming suggestions below\") \
-         rather than in the main summary. Turn off Show gaming suggestions in Settings > Health Check to hide the \n         Gaming category and its count everywhere.",
+         grouped in the Gaming category and listed under For gaming, separate from the main summary. Turn off Show \
+         gaming suggestions in Settings > Health Check to hide the Gaming category and its count everywhere.",
     );
     h(ui, "Dismissing issues");
     bullets(
         ui,
         &[
-            "Dismiss on a card hides it from its category, the summary and the Overview banner. It moves to Dismissed at the bottom of the page; the Dismissed (n) button at the top jumps there. Open a dismissed card to read it again, and Restore brings it back.",
-            "Expand all opens every category, Expand issues only opens just the categories with something to fix, and Collapse all closes them.",
+            "Dismiss at the bottom of a finding's details hides it from the list, the summary and the Overview banner. It moves to Dismissed (n) at the bottom of the list, where you can read it again; Restore brings it back, and Restore all brings them all back.",
             "If the same check later finds something more serious (e.g. a suggestion becomes a warning), it shows up again.",
             "By default dismissed issues stay dismissed after restarting Omni-HW. Turn that off in Settings > Health Check to have them come back on each start; Restore dismissed issues there brings them all back.",
         ],
@@ -225,8 +225,8 @@ pub(super) fn health_check(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Click a card's header to collapse or expand it; warnings and critical issues start open, suggestions start collapsed.",
-            "Expand all / Collapse all open or close every card at once.",
+            "The most serious finding is selected when the page opens. The list and the details scroll separately; in a narrow window the details move below the list.",
+            "Hover the totals line under the tiles to see how the live checks work.",
             "Live checks (memory pressure, temperatures, throttling) use roughly the last two minutes of readings and need at least a few seconds of data first.",
             "The throttling check needs some time with the CPU under heavy load (a game, a render) before it gives a verdict.",
             "Results also appear at the top of saved and copied reports.",

@@ -8,6 +8,9 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 - **LAN Security Report** (Network → LAN Security Report): scans your own local network for devices and common security problems — clear-text logins (Telnet, FTP), exposed admin pages, unauthenticated databases, remote-desktop ports and more — and lists ranked findings with plain explanations and links to fix steps. It stays on your local network, runs only when you click, and changes nothing.
 - **Network is its own category** in the grouped navigation bar, holding the Network page and the LAN Security Report.
 
+### Improved
+- Health Check redesigned as a list of issues with a details pane, plus category tiles to filter it.
+
 ## 0.3.0
 
 ### New

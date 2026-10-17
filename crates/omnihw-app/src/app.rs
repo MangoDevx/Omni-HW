@@ -422,6 +422,15 @@ impl eframe::App for OmniApp {
                 }
                 return;
             }
+            if self.tab == Tab::Health {
+                // A list and a details pane, each with its own scroll area. The report
+                // doesn't borrow the snapshot, so the lock is released before drawing.
+                let snap = self.sampler.snapshot();
+                let report = self.health.get(info, &snap, self.settings.show_gaming);
+                drop(snap);
+                tabs::health::show(ui, info, report);
+                return;
+            }
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
@@ -453,13 +462,6 @@ impl eframe::App for OmniApp {
                                 self.tab = Tab::Health;
                             }
                         }
-                        Tab::Health => {
-                            tabs::health::show(
-                                ui,
-                                info,
-                                self.health.get(info, &snap, self.settings.show_gaming),
-                            );
-                        }
                         Tab::Cpu => tabs::cpu::show(ui, info, &snap),
                         Tab::Caches => tabs::caches::show(ui, info),
                         Tab::Mainboard => tabs::mainboard::show(ui, info),
@@ -470,7 +472,11 @@ impl eframe::App for OmniApp {
                         Tab::LanSecurity => tabs::lansec::show(ui, &snap),
                         Tab::Power => tabs::power::show(ui, &snap),
                         Tab::About => tabs::about::show(ui, info, &snap),
-                        Tab::Sensors | Tab::Recording | Tab::Alerts | Tab::Settings => {
+                        Tab::Sensors
+                        | Tab::Recording
+                        | Tab::Alerts
+                        | Tab::Settings
+                        | Tab::Health => {
                             unreachable!()
                         }
                     }
