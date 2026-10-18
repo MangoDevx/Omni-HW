@@ -4,12 +4,14 @@
 use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
+use omnihw_core::disktest::{self, DiskTestResult};
 use omnihw_core::lansec::{self, LanScan};
 use omnihw_core::memtest::{self, MemTestResult};
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -73,6 +75,8 @@ pub struct Snapshot {
     pub net_internet: TestRun,
     /// LAN Security Report: scan progress and last results.
     pub lan: LanScanState,
+    /// Disk speed test (Storage page): which drive is running and each drive's last result.
+    pub disk_test: DiskTestState,
     /// Memory page quick test: progress and last result.
     pub mem_test: MemTestState,
 }
@@ -85,6 +89,17 @@ pub struct LanScanState {
     pub progress: Arc<lansec::Progress>,
     /// The last finished report, with the time it ran.
     pub results: Option<(LanScan, SystemTime)>,
+}
+
+/// State of the disk speed test. One drive is tested at a time.
+#[derive(Default, Clone)]
+pub struct DiskTestState {
+    /// Index of the drive being tested.
+    pub running: Option<u32>,
+    /// Live progress of the running test.
+    pub progress: Arc<disktest::Progress>,
+    /// The last result per drive index, with the time it finished.
+    pub results: HashMap<u32, (Result<DiskTestResult, String>, SystemTime)>,
 }
 
 /// State of the Memory page's quick bandwidth/latency test.
@@ -433,6 +448,39 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().lan.running = false;
+        }
+    }
+
+    /// Run the disk speed test on drive `drive_index` (Storage page). Only on the user's click
+    /// and one drive at a time; progress is updated on the shared [`disktest::Progress`].
+    pub fn run_disk_test(&self, drive_index: u32) {
+        let Some(info) = self.info() else { return };
+        let Some(drive) = info.drives.iter().find(|d| d.index == drive_index).cloned() else {
+            return;
+        };
+        let link = disktest::nvme_link(&drive, &info.checkup.nvme_links);
+        let expected = disktest::expectation(&drive, link);
+        let progress = {
+            let mut snap = self.snapshot();
+            if snap.disk_test.running.is_some() {
+                return;
+            }
+            snap.disk_test.running = Some(drive_index);
+            snap.disk_test.progress = Arc::new(disktest::Progress::default());
+            snap.disk_test.progress.clone()
+        };
+        let ok = self.worker(
+            "omnihw-disk-test",
+            move || disktest::run(&drive, expected, &progress),
+            move |result, snap| {
+                snap.disk_test.running = None;
+                snap.disk_test
+                    .results
+                    .insert(drive_index, (result, SystemTime::now()));
+            },
+        );
+        if !ok {
+            self.snapshot().disk_test.running = None;
         }
     }
 

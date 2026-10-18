@@ -4,6 +4,8 @@
 #[cfg(windows)]
 mod device;
 #[cfg(windows)]
+pub(crate) mod disktest;
+#[cfg(windows)]
 mod dxgi;
 #[cfg(windows)]
 mod eventlog;

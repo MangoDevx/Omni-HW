@@ -11,6 +11,7 @@ pub mod checkup;
 pub mod codename;
 pub mod cpuid;
 pub mod diagnostics;
+pub mod disktest;
 pub mod gpu;
 pub mod lansec;
 mod le;
