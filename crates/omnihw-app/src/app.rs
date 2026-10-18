@@ -494,6 +494,7 @@ impl eframe::App for OmniApp {
         }
         // The LAN Security Report scan, when its button asks for one.
         tabs::lansec::dispatch(ui.ctx(), &self.sampler);
+        tabs::memory::dispatch(ui.ctx(), &self.sampler);
 
         // Health Check dismissals changed this frame: keep them in the settings (saved to disk
         // only when "remember dismissed" is on).

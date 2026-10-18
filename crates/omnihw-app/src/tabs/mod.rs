@@ -93,6 +93,16 @@ pub fn plural(n: usize, noun: &str) -> String {
     format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
+/// "just now" or "N min ago" for a test or scan that finished at `t`.
+pub fn ago(t: std::time::SystemTime) -> String {
+    let s = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+    if s < 60 {
+        "just now".into()
+    } else {
+        format!("{} min ago", s / 60)
+    }
+}
+
 /// Per-page values kept in egui's temporary memory (dialog flags, edit buffers, last errors).
 pub mod temp {
     use egui::{Context, Id};

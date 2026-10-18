@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod gpu;
 pub mod lansec;
 mod le;
+pub mod memtest;
 pub mod network;
 pub mod power;
 pub mod recording;

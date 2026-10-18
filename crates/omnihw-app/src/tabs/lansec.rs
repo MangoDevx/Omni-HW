@@ -4,13 +4,13 @@
 //! `Sampler::run_lan_scan`). It stays on the local network and changes nothing on any device —
 //! each finding explains the issue and links to fix steps the user opens in their own browser.
 
-use super::{group_box, page_title, pill, temp};
+use super::{ago, group_box, page_title, pill, temp};
 use crate::heat::{BLUE, GREEN, ORANGE, RED};
 use crate::sampler::{Sampler, Snapshot};
 use egui::collapsing_header::CollapsingState;
 use egui::{Color32, Id, RichText, Ui};
 use omnihw_core::lansec::{Finding, Host, Phase, Risk, Severity, SubnetScan};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 /// egui-memory flag: the user asked for a scan this frame.
 const SCAN: &str = "lan_scan";
@@ -272,15 +272,6 @@ fn host_row(ui: &mut Ui, host: &Host) {
 
 fn plural(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
-}
-
-fn ago(t: SystemTime) -> String {
-    let s = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-    if s < 60 {
-        "just now".into()
-    } else {
-        format!("{} min ago", s / 60)
-    }
 }
 
 /// Start a scan if the button asked for one. Call once per frame.

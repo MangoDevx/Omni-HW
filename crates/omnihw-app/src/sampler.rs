@@ -5,6 +5,7 @@ use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::lansec::{self, LanScan};
+use omnihw_core::memtest::{self, MemTestResult};
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
@@ -72,6 +73,8 @@ pub struct Snapshot {
     pub net_internet: TestRun,
     /// LAN Security Report: scan progress and last results.
     pub lan: LanScanState,
+    /// Memory page quick test: progress and last result.
+    pub mem_test: MemTestState,
 }
 
 /// State of the LAN Security Report scan.
@@ -82,6 +85,16 @@ pub struct LanScanState {
     pub progress: Arc<lansec::Progress>,
     /// The last finished report, with the time it ran.
     pub results: Option<(LanScan, SystemTime)>,
+}
+
+/// State of the Memory page's quick bandwidth/latency test.
+#[derive(Default, Clone)]
+pub struct MemTestState {
+    pub running: bool,
+    /// Live phase of a running test.
+    pub progress: Arc<memtest::Progress>,
+    /// The last finished test (or why it failed), with the time it ran.
+    pub result: Option<(Result<MemTestResult, String>, SystemTime)>,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -420,6 +433,43 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().lan.running = false;
+        }
+    }
+
+    /// Run the quick memory bandwidth/latency test. Only on the user's click; the test runs on
+    /// its own worker thread and updates the shared [`memtest::Progress`].
+    pub fn run_mem_test(&self) {
+        let Some(info) = self.info() else { return };
+        let progress = {
+            let mut snap = self.snapshot();
+            if snap.mem_test.running {
+                return;
+            }
+            snap.mem_test = MemTestState {
+                running: true,
+                progress: Arc::new(memtest::Progress::default()),
+                result: snap.mem_test.result.take(),
+            };
+            snap.mem_test.progress.clone()
+        };
+        let expected = info.smbios.as_ref().and_then(|s| {
+            let dimms: Vec<_> = s.populated_memory().collect();
+            memtest::expectation(&dimms, s.memory_slots)
+        });
+        // Size the buffer for what's free now, not at startup.
+        let available = omnihw_core::win::memory_status()
+            .or(info.memory)
+            .map_or(0, |m| m.available_bytes);
+        let ok = self.worker(
+            "omnihw-mem-test",
+            move || memtest::run(available, expected, &progress),
+            |r, snap| {
+                snap.mem_test.running = false;
+                snap.mem_test.result = Some((r, SystemTime::now()));
+            },
+        );
+        if !ok {
+            self.snapshot().mem_test.running = false;
         }
     }
 
