@@ -1,6 +1,6 @@
-//! Crash checks: WHEA hardware errors, blue screens and unexpected restarts from the System
-//! event log, plus WHEA errors logged while the app runs and what the crash dumps point at once
-//! the user had them analysed.
+//! Crash checks: WHEA hardware errors, blue screens, unexpected restarts and GPU driver
+//! timeouts (TDR) from the System and Application event logs, plus WHEA errors logged while
+//! the app runs and what the crash dumps point at once the user had them analysed.
 
 use super::helpers::{
     DDU_URL, board_drivers_step, count_text, format_date, guided, memory_test_steps, plural,
@@ -386,6 +386,80 @@ pub(super) fn crashes(ctx: &Context) -> Outcome {
     Outcome::Findings(out)
 }
 
+/// GPU driver timeouts: Display 4101 ("stopped responding and has successfully recovered") and
+/// LiveKernelEvent 141/117 reports from Windows Error Reporting.
+pub(super) fn gpu_timeouts(ctx: &Context) -> Outcome {
+    let Some(ev) = &ctx.info.checkup.events else {
+        return Outcome::Skipped("System event log not readable".into());
+    };
+    let n = ev.tdr.len();
+    if n == 0 {
+        return Outcome::Pass(format!(
+            "No graphics driver timeouts in the last {EVENT_DAYS} days"
+        ));
+    }
+    let hangs = ev
+        .tdr
+        .iter()
+        .filter(|e| e.code.map(base_stop_code) == Some(0x141))
+        .count();
+    let mut detail = format!(
+        "Windows reset the graphics driver {} after it stopped responding (TDR), most recently on {}. The screen goes black or freezes for a few seconds and games may crash.",
+        if n == 1 {
+            "once".to_string()
+        } else {
+            format!("{} times", count_text(n))
+        },
+        last_date(&ev.tdr)
+    );
+    if hangs > 0 {
+        detail.push_str(&format!(
+            " {} the graphics card itself hanging (LiveKernelEvent 141), which points at an unstable overclock or undervolt, power delivery or the card.",
+            if hangs == 1 {
+                "One was".to_string()
+            } else {
+                format!("{} were", count_text(hangs))
+            }
+        ));
+    } else if n >= 5 {
+        detail.push_str(
+            " This many timeouts is not normal: the driver, an unstable overclock or undervolt, or the card's power supply needs fixing.",
+        );
+    } else if n == 1 {
+        detail.push_str(
+            " A single timeout can follow a driver update or a game bug; watch whether it repeats.",
+        );
+    }
+    Outcome::Findings(vec![guided(
+        if n >= 2 || hangs > 0 {
+            Level::Warning
+        } else {
+            Level::Info
+        },
+        Category::Gpu,
+        format!(
+            "{} in the last {EVENT_DAYS} days",
+            plural(n, "graphics driver timeout", "graphics driver timeouts")
+        ),
+        detail,
+        vec![
+            Step::url(
+                "Clean-reinstall the graphics driver: remove it with Display Driver Uninstaller (DDU) in Safe Mode, then install the latest driver.",
+                DDU_URL,
+            ),
+            Step::new(
+                "Undo any GPU overclock or undervolt (MSI Afterburner, AMD Software tuning or the NVIDIA App) and see whether the timeouts stop.",
+            ),
+            Step::new(
+                "Check the graphics card's power cables are fully seated, with a separate PCIe cable from the power supply for each connector.",
+            ),
+            Step::new(
+                "Watch the GPU temperature on the Sensors tab while gaming: if it runs above about 85 °C, clean the dust from the fans and filters.",
+            ),
+        ],
+    )])
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::memory::memory_diagnostic;
@@ -421,6 +495,7 @@ mod tests {
             unexpected_shutdowns: vec![ev(41, Some(0)), ev(41, Some(0x1A)), ev(41, None)],
             bugchecks: vec![ev(1001, Some(0x1A)), ev(1001, Some(0x116))],
             memory_diagnostic: Some(ev(1102, None)),
+            ..Default::default()
         });
         let c = ctx(&info, &s);
         let o = whea_errors(&c);
@@ -574,5 +649,38 @@ mod tests {
             .filter(|s| s.link == Some(Link::Url(DDU_URL.into())))
             .count();
         assert_eq!(ddu, 1);
+    }
+
+    #[test]
+    fn tdr_check() {
+        let s = SensorTable::default();
+        let mut info = SystemInfo::default();
+        assert!(matches!(gpu_timeouts(&ctx(&info, &s)), Outcome::Skipped(_)));
+        info.checkup.events = Some(Events::default());
+        assert!(matches!(gpu_timeouts(&ctx(&info, &s)), Outcome::Pass(_)));
+
+        let with = |tdr: Vec<Event>| {
+            let mut info = SystemInfo::default();
+            info.checkup.events = Some(Events {
+                tdr,
+                ..Default::default()
+            });
+            let o = gpu_timeouts(&ctx(&info, &s));
+            let Outcome::Findings(f) = o else {
+                panic!("expected a finding")
+            };
+            f.into_iter().next().unwrap()
+        };
+        let one = with(vec![ev(4101, None)]);
+        assert_eq!(one.level, Level::Info);
+        assert!(one.title.starts_with("1 graphics driver timeout "));
+        assert!(one.steps.iter().any(|s| s.text.contains("DDU")));
+        assert_eq!(with(vec![ev(4101, None); 2]).level, Level::Warning);
+        let many = with(vec![ev(4101, None); 5]);
+        assert_eq!(many.level, Level::Warning);
+        assert!(many.detail.contains("not normal"));
+        let hang = with(vec![ev(1001, Some(0x141))]);
+        assert_eq!(hang.level, Level::Warning);
+        assert!(hang.detail.contains("LiveKernelEvent 141"));
     }
 }

@@ -1,12 +1,13 @@
-//! Windows event log queries (wevtapi), shared by the Health Check and the power collector.
-//! The System log is readable without administrator rights.
+//! Windows event log queries (wevtapi), shared by the Health Check, the power collector and
+//! the Event Log page. The System and Application logs are readable without administrator
+//! rights.
 
 use super::wide::from_wide;
 use windows::Win32::System::EventLog::{
     EVT_HANDLE, EvtNext, EvtQuery, EvtQueryChannelPath, EvtQueryReverseDirection, EvtRender,
     EvtRenderEventXml,
 };
-use windows::core::{HSTRING, Owned, w};
+use windows::core::{HSTRING, Owned};
 
 /// Events fetched per `EvtNext` call.
 const BATCH: usize = 32;
@@ -60,18 +61,29 @@ pub(crate) fn render_xml(ev: EVT_HANDLE) -> Option<String> {
 pub(crate) fn query_system<T>(
     filter: &str,
     cap: usize,
-    mut parse: impl FnMut(&str) -> Option<T>,
+    parse: impl FnMut(&str) -> Option<T>,
 ) -> Option<Vec<T>> {
+    query_channel("System", filter, cap, parse).ok()
+}
+
+/// Like [`query_system`] for any `channel` (e.g. "Application"). `Err` holds the Windows error
+/// message if the query itself failed (missing channel, invalid XPath).
+pub(crate) fn query_channel<T>(
+    channel: &str,
+    filter: &str,
+    cap: usize,
+    mut parse: impl FnMut(&str) -> Option<T>,
+) -> Result<Vec<T>, String> {
     // SAFETY: the channel and filter are NUL-terminated strings that outlive the call.
     let results = own(unsafe {
         EvtQuery(
             None,
-            w!("System"),
+            &HSTRING::from(channel),
             &HSTRING::from(filter),
             EvtQueryChannelPath.0 | EvtQueryReverseDirection.0,
         )
     }
-    .ok()?);
+    .map_err(|e| e.message())?);
     let mut out = Vec::new();
     while out.len() < cap {
         let mut batch = [0isize; BATCH];
@@ -94,5 +106,5 @@ pub(crate) fn query_system<T>(
             }
         }
     }
-    Some(out)
+    Ok(out)
 }

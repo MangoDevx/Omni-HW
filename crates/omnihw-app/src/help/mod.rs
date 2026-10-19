@@ -12,7 +12,7 @@ mod start;
 use egui::{Context, RichText, Ui};
 use hardware::{hardware, lan_security, network, power, sensors};
 use health::health_check;
-use monitoring::{alerts, recording, reports};
+use monitoring::{alerts, event_log, recording, reports};
 use start::{getting_started, overview, privacy, settings, troubleshooting};
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -28,13 +28,14 @@ pub enum HelpTab {
     Sensors,
     Recording,
     Alerts,
+    EventLog,
     Reports,
     Settings,
     Privacy,
     Troubleshooting,
 }
 
-const TABS: [(HelpTab, &str); 14] = [
+const TABS: [(HelpTab, &str); 15] = [
     (HelpTab::GettingStarted, "Getting Started"),
     (HelpTab::Overview, "Overview"),
     (HelpTab::HealthCheck, "Health Check"),
@@ -45,6 +46,7 @@ const TABS: [(HelpTab, &str); 14] = [
     (HelpTab::Sensors, "Sensors"),
     (HelpTab::Recording, "Recording"),
     (HelpTab::Alerts, "Alerts"),
+    (HelpTab::EventLog, "Event Log"),
     (HelpTab::Reports, "Reports"),
     (HelpTab::Settings, "Settings"),
     (HelpTab::Privacy, "Privacy & Safety"),
@@ -87,6 +89,7 @@ pub fn show(ctx: &Context, state: &mut HelpState) {
                     HelpTab::Sensors => sensors(ui),
                     HelpTab::Recording => recording(ui),
                     HelpTab::Alerts => alerts(ui),
+                    HelpTab::EventLog => event_log(ui),
                     HelpTab::Reports => reports(ui),
                     HelpTab::Settings => settings(ui),
                     HelpTab::Privacy => privacy(ui),

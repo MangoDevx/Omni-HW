@@ -141,6 +141,11 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ),
     (crashes::CRASHES_CHECK, Category::Crashes, crashes::crashes),
     (
+        "GPU driver timeouts (TDR)",
+        Category::Crashes,
+        crashes::gpu_timeouts,
+    ),
+    (
         "Ethernet link speed",
         Category::Network,
         system::ethernet_speed,

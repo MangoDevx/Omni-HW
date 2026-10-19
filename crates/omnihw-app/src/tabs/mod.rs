@@ -6,6 +6,7 @@ pub mod bottleneck;
 pub mod caches;
 pub mod compare;
 pub mod cpu;
+pub mod eventlog;
 pub mod gpu;
 pub mod health;
 pub mod lansec;

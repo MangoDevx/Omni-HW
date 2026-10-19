@@ -1,4 +1,4 @@
-//! Help pages: recording (compare, bottleneck), alerts and reports.
+//! Help pages: recording (compare, bottleneck), alerts, the event log and reports.
 
 use super::{bullets, details, h, p};
 use egui::Ui;
@@ -105,6 +105,47 @@ pub(super) fn alerts(ui: &mut Ui) {
         &[
             r"Rules are saved automatically to %APPDATA%\OmniHW\alerts.tsv.",
             "Windows hides notifications while Do Not Disturb / Focus is on or a full-screen game is running; the ALERT button and History still record them.",
+        ],
+    );
+}
+
+pub(super) fn event_log(ui: &mut Ui) {
+    h(ui, "What it shows");
+    p(
+        ui,
+        "The Event Log page (Monitoring menu) lists the problems Windows recorded in its event logs over the last 30 days, \
+         each with a plain-English meaning, so you don't have to dig through Event Viewer. It reads the logs when you \
+         first open the page and when you click Refresh; no administrator rights are needed.",
+    );
+    bullets(
+        ui,
+        &[
+            "Unexpected shutdown: the PC restarted without shutting down cleanly (Kernel-Power 41): a crash, freeze, power cut or the power button held down.",
+            "Blue screen: Windows crashed with a stop code (BugCheck 1001), shown with its name, e.g. MEMORY_MANAGEMENT.",
+            "Hardware error: CPU, memory or PCIe errors (WHEA-Logger 17, 18, 19, 47), often from an unstable overclock or XMP/EXPO profile.",
+            "GPU driver timeout: the graphics driver stopped responding and Windows reset it (Display 4101, or LiveKernelEvent 141/117 reports).",
+            "Disk problem: bad blocks, controller or paging errors, retried operations, a drive predicting failure, or file system corruption (disk 7, 11, 51, 52, 153; Ntfs 55, 98).",
+            "Unexpected restart: the previous shutdown was unexpected (EventLog 6008).",
+            "Other critical/error: any other critical or error event in the System log. Many are harmless (e.g. DCOM 10016); look them up before acting on them.",
+        ],
+    );
+    h(ui, "Using it");
+    bullets(
+        ui,
+        &[
+            "Filter by category, level (Critical, Error, Warning) and time (24 h, 7 days, 30 days), or type in Search to match the meaning, source or details.",
+            "Click an event's meaning to show its details: the stop code, the driver or the drive involved.",
+            "Copy puts the events shown on the clipboard as plain text, ready for a forum post or support ticket.",
+            "The Health Check uses the same events: see Crashes (BSOD) for blue screens, hardware errors and GPU driver timeouts with fix steps.",
+        ],
+    );
+    details(
+        ui,
+        "eventlog",
+        &[
+            "Up to 500 events are shown, newest first; other errors are limited to the newest 150 so they can't crowd out the important ones.",
+            "LiveKernelEvent reports come from Windows Error Reporting in the Application log and are often sent days later; they are dated by their dump file instead.",
+            "Times are your local time.",
         ],
     );
 }

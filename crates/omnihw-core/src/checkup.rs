@@ -204,6 +204,9 @@ pub struct Events {
     pub bugchecks: Vec<Event>,
     /// Most recent Windows Memory Diagnostic result.
     pub memory_diagnostic: Option<Event>,
+    /// GPU driver timeouts: Display 4101 (`code` `None`) and Windows Error Reporting
+    /// LiveKernelEvent 141/117 (id 1001, `code` 0x141 / 0x117).
+    pub tdr: Vec<Event>,
 }
 
 /// Days of event log read for crashes and hardware errors.
@@ -256,7 +259,7 @@ pub fn event_data(xml: &str, name: &str) -> Option<String> {
     None
 }
 
-fn unescape_xml(s: &str) -> String {
+pub(crate) fn unescape_xml(s: &str) -> String {
     s.replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
@@ -327,6 +330,7 @@ pub fn stop_code_name(code: u32) -> Option<&'static str> {
         0x124 => "WHEA_UNCORRECTABLE_ERROR",
         0x133 => "DPC_WATCHDOG_VIOLATION",
         0x139 => "KERNEL_SECURITY_CHECK_FAILURE",
+        0x141 => "VIDEO_ENGINE_TIMEOUT_DETECTED",
         0x154 => "UNEXPECTED_STORE_EXCEPTION",
         _ => return None,
     })
@@ -353,7 +357,7 @@ pub fn crash_cause(code: u32) -> CrashCause {
     match base_stop_code(code) {
         0x1A | 0x50 | 0x4E | 0x19 | 0xC2 | 0x0A | 0x109 => CrashCause::MemoryOrOverclock,
         0x124 | 0x101 => CrashCause::Hardware,
-        0x116 | 0x117 => CrashCause::Graphics,
+        0x116 | 0x117 | 0x141 => CrashCause::Graphics,
         0x7A | 0xF4 | 0x154 => CrashCause::Storage,
         0xD1 | 0x9F | 0x133 | 0x7E | 0x1E | 0x3B | 0x8E | 0x139 | 0xEF => CrashCause::Driver,
         _ => CrashCause::Unknown,

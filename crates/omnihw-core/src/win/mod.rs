@@ -9,6 +9,7 @@ pub(crate) mod disktest;
 mod dxgi;
 #[cfg(windows)]
 mod eventlog;
+pub mod events_viewer;
 #[cfg(windows)]
 pub(crate) mod memtest;
 #[cfg(windows)]

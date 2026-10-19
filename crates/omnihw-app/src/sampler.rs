@@ -5,6 +5,7 @@ use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::disktest::{self, DiskTestResult};
+use omnihw_core::eventlog::EventLog;
 use omnihw_core::lansec::{self, LanScan};
 use omnihw_core::memtest::{self, MemTestResult};
 use omnihw_core::minidump::DumpAnalysis;
@@ -103,6 +104,10 @@ pub struct Snapshot {
     pub dumps_busy: bool,
     /// Bumped whenever `dumps` or `dumps_busy` changes.
     pub dumps_rev: u64,
+    /// Event Log page: the last read with the time it finished (`None` until first read).
+    pub event_log: Option<(Arc<EventLog>, SystemTime)>,
+    /// The event log is being read.
+    pub event_log_busy: bool,
 }
 
 /// State of the LAN Security Report scan.
@@ -598,6 +603,29 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().mem_test.running = false;
+        }
+    }
+
+    /// Read the System and Application event logs for the Event Log page on a worker thread
+    /// (when the page is first opened and on Refresh).
+    pub fn read_event_log(&self) {
+        {
+            let mut snap = self.snapshot();
+            if snap.event_log_busy {
+                return;
+            }
+            snap.event_log_busy = true;
+        }
+        let ok = self.worker(
+            "omnihw-event-log",
+            omnihw_core::win::events_viewer::read,
+            |log, snap| {
+                snap.event_log_busy = false;
+                snap.event_log = Some((Arc::new(log), SystemTime::now()));
+            },
+        );
+        if !ok {
+            self.snapshot().event_log_busy = false;
         }
     }
 
