@@ -187,7 +187,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
             "Suggestion (blue, shown as Info): optional improvements.",
             "The tiles at the top show each category (Crashes (BSOD), System, CPU, Memory, GPU, Storage, Network, Power Management and Gaming): OK, not checked, or how many findings it has in the colour of the most serious one. Click a tile to list only that category, and click it again (or All) to show everything.",
-            "The list on the left groups findings into Fix these (critical issues and warnings), Suggestions and For gaming, most serious first. Click one to see its details, steps and buttons on the right.",
+            "The list on the left groups findings into Fix these (critical issues and warnings), Suggestions and For gaming, most serious first. Click one to see its details, steps and buttons on the right, or use the Up and Down arrow keys to move through the list.",
             "Passed checks lists each category's checks that found nothing: OK rows found nothing wrong (with what was measured) and dash rows don't apply to this PC (with the reason, e.g. no battery).",
         ],
     );

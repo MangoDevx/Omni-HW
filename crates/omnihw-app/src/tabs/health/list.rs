@@ -99,8 +99,9 @@ fn tile(
     .inner
 }
 
-/// The list pane. Clicking an entry selects it.
-pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>) {
+/// The list pane. Clicking an entry selects it; with `scroll` the selected entry is scrolled
+/// into view (after an arrow key moved it).
+pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>, scroll: bool) {
     ui.spacing_mut().item_spacing.y = 1.0;
     if view.fix.is_empty() && view.suggestions.is_empty() {
         let text = match view.filter {
@@ -119,13 +120,14 @@ pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>) {
         });
         ui.add_space(4.0);
     }
-    findings_group(ui, "Fix these", &view.fix, sel, None);
-    findings_group(ui, "Suggestions", &view.suggestions, sel, None);
+    findings_group(ui, "Fix these", &view.fix, sel, scroll, None);
+    findings_group(ui, "Suggestions", &view.suggestions, sel, scroll, None);
     findings_group(
         ui,
         "For gaming",
         &view.gaming,
         sel,
+        scroll,
         Some("Settings that mainly affect games: frame rates, latency and GPU features."),
     );
     if !view.passed.is_empty() {
@@ -141,6 +143,7 @@ pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>) {
             let r = ui.push_id(("health_passed", p.cat.name()), |ui| {
                 row(ui, sel == Some(&s), dot, p.cat.name(), &meta)
             });
+            reveal(&r.inner, scroll && sel == Some(&s));
             if r.inner.clicked() {
                 select(ui.ctx(), s);
             }
@@ -154,6 +157,7 @@ pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>) {
         let r = ui.push_id("health_dismissed_entry", |ui| {
             row(ui, selected, Color32::GRAY, &title, "")
         });
+        reveal(&r.inner, scroll && selected);
         if r.inner
             .on_hover_text("Findings you dismissed: read them again or restore them")
             .clicked()
@@ -165,7 +169,14 @@ pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>) {
 }
 
 /// A heading and one row per finding; nothing when there are none.
-fn findings_group(ui: &mut Ui, title: &str, items: &[Item], sel: Option<&Sel>, note: Option<&str>) {
+fn findings_group(
+    ui: &mut Ui,
+    title: &str,
+    items: &[Item],
+    sel: Option<&Sel>,
+    scroll: bool,
+    note: Option<&str>,
+) {
     if items.is_empty() {
         return;
     }
@@ -181,9 +192,17 @@ fn findings_group(ui: &mut Ui, title: &str, items: &[Item], sel: Option<&Sel>, n
                 i.f.category.name(),
             )
         });
+        reveal(&r.inner, scroll && sel == Some(&s));
         if r.inner.clicked() {
             select(ui.ctx(), s);
         }
+    }
+}
+
+/// Scrolls `row` into view when `on`.
+fn reveal(row: &egui::Response, on: bool) {
+    if on {
+        row.scroll_to_me(None);
     }
 }
 

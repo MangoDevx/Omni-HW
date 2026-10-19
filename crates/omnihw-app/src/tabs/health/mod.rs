@@ -302,6 +302,60 @@ impl<'a> View<'a> {
         }
         (!self.dismissed.is_empty()).then_some(Sel::Dismissed)
     }
+
+    /// Every list entry in list order: findings, passed-checks entries, then the dismissed list.
+    fn entries(&self) -> Vec<Sel> {
+        let mut entries: Vec<Sel> = self
+            .findings()
+            .map(|i| Sel::Finding(i.key.clone()))
+            .chain(self.passed.iter().map(|p| Sel::Passed(p.cat)))
+            .collect();
+        if !self.dismissed.is_empty() {
+            entries.push(Sel::Dismissed);
+        }
+        entries
+    }
+
+    /// The entry `delta` rows from `sel`, stopping at the ends. A dismissed finding counts as
+    /// the dismissed list it is opened from.
+    fn step(&self, sel: Option<&Sel>, delta: isize) -> Option<Sel> {
+        let entries = self.entries();
+        let sel = match sel {
+            Some(Sel::DismissedFinding(_)) => Some(&Sel::Dismissed),
+            s => s,
+        };
+        let i = match sel.and_then(|s| entries.iter().position(|e| e == s)) {
+            Some(i) => i
+                .saturating_add_signed(delta)
+                .min(entries.len().saturating_sub(1)),
+            None => 0,
+        };
+        entries.get(i).cloned()
+    }
+}
+
+/// Up/Down move the selection through the list, unless a widget has keyboard focus, a menu is
+/// open or a dialog is up. Returns the new selection when it moved.
+fn arrow_step(ctx: &egui::Context, view: &View, sel: Option<&Sel>) -> Option<Sel> {
+    if ctx.egui_wants_keyboard_input()
+        || egui::Popup::is_any_open(ctx)
+        || ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some())
+    {
+        return None;
+    }
+    let delta = ctx.input_mut(|i| {
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+            -1
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+            1
+        } else {
+            0
+        }
+    });
+    if delta == 0 {
+        return None;
+    }
+    view.step(sel, delta).filter(|s| Some(s) != sel)
 }
 
 fn sel_id() -> egui::Id {
@@ -334,7 +388,13 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, report: &Report) {
         .flatten()
         .filter(|&c| report.results.iter().any(|r| r.category == c));
     let view = View::new(report, filter);
-    let before = selection(&ctx, &view);
+    let mut before = selection(&ctx, &view);
+    let moved = arrow_step(&ctx, &view, before.as_ref());
+    if let Some(s) = &moved {
+        select(&ctx, s.clone());
+        before = moved.clone();
+    }
+    let moved = moved.is_some();
 
     if ui.available_width() < NARROW {
         egui::ScrollArea::vertical()
@@ -342,7 +402,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, report: &Report) {
             .auto_shrink(false)
             .show(ui, |ui| {
                 header(ui, report, filter);
-                list::list(ui, &view, before.as_ref());
+                list::list(ui, &view, before.as_ref(), moved);
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
@@ -366,7 +426,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, report: &Report) {
                     egui::ScrollArea::vertical()
                         .id_salt("health_list")
                         .auto_shrink(false)
-                        .show(ui, |ui| list::list(ui, &view, before.as_ref()));
+                        .show(ui, |ui| list::list(ui, &view, before.as_ref(), moved));
                 });
         });
         ui.add_space(8.0);
@@ -375,7 +435,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, report: &Report) {
             let mut area = egui::ScrollArea::vertical()
                 .id_salt("health_detail")
                 .auto_shrink(false);
-            if sel != before {
+            if sel != before || moved {
                 // A new selection starts at the top of its details.
                 area = area.vertical_scroll_offset(0.0);
             }

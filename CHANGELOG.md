@@ -14,6 +14,7 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 
 ### Improved
 - Health Check redesigned as a list of issues with a details pane, plus category tiles to filter it.
+- Up and Down arrow keys move through the Health Check list.
 
 ## 0.3.0
 
