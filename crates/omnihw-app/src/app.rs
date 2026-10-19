@@ -326,6 +326,21 @@ impl OmniApp {
         {
             self.tab = Tab::Settings;
         }
+        if crate::elevate::elevated() {
+            let ink = crate::heat::ink(ui.visuals(), crate::heat::YELLOW);
+            ui.add(
+                egui::Label::new(
+                    RichText::new("Running as administrator")
+                        .strong()
+                        .color(ink),
+                )
+                .selectable(false),
+            )
+            .on_hover_text(
+                "Omni-HW has administrator rights: you approved its UAC prompt or started it as \
+                 administrator.",
+            );
+        }
         if let Some(m) = msg {
             self.set_status(m);
         }

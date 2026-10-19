@@ -2,6 +2,11 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
+## Unreleased
+
+### Improved
+- The navigation bar shows "Running as administrator" in yellow while Omni-HW has administrator rights.
+
 ## 0.4.0
 
 > **BETA.** This release adds several large new features (extra sensors through PawnIO, the LAN Security Report, memory and disk speed tests). Please report anything that doesn't work right on your PC.

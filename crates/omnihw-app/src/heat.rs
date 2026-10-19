@@ -6,6 +6,7 @@
 use egui::Color32;
 
 pub const ORANGE: Color32 = Color32::from_rgb(255, 152, 0);
+pub const YELLOW: Color32 = Color32::from_rgb(255, 202, 40);
 pub const RED: Color32 = Color32::from_rgb(229, 57, 53);
 pub const GREEN: Color32 = Color32::from_rgb(76, 175, 80);
 /// Informational blue (suggestions, CPU accents).
