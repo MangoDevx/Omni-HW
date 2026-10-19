@@ -55,6 +55,7 @@ pub(super) fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context
         uptime_secs: Some(3600),
         power: None,
         network: None,
+        dumps: None,
     }
 }
 

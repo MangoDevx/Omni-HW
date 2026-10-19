@@ -6,7 +6,7 @@ mod list;
 
 use super::{page_title, plural, temp};
 use crate::heat::{BLUE, GREEN, ORANGE, RED};
-use crate::sampler::Snapshot;
+use crate::sampler::{Sampler, Snapshot};
 use detail::restart_dialog;
 use egui::{Color32, Ui, vec2};
 use omnihw_core::SystemInfo;
@@ -34,8 +34,28 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         uptime_secs: omnihw_core::win::uptime_secs(),
         power: snap.power.as_ref(),
         network: snap.network.as_ref(),
+        dumps: match &snap.dumps {
+            Some(Ok(d)) => Some(d.as_slice()),
+            _ => None,
+        },
     };
     diagnostics::run(&ctx)
+}
+
+/// Read crash dumps when the details pane's button asked for it. Call once per frame, outside
+/// the snapshot lock.
+pub fn dispatch(ctx: &egui::Context, sampler: &Sampler) {
+    if temp::take::<bool>(ctx, detail::read_dumps_id()).unwrap_or(false) {
+        sampler.read_dumps();
+    }
+}
+
+/// Crash dump analysis state, for the blue screen finding's details.
+#[derive(Default, Clone)]
+pub struct DumpStatus {
+    pub busy: bool,
+    /// Number of dumps analysed, or why they couldn't be read; None until asked.
+    pub result: Option<Result<usize, String>>,
 }
 
 /// Health Check results for the Health tab and the Overview banner. The checks only see data
@@ -43,8 +63,9 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
 /// than on every frame (hovering alone repaints at the display rate).
 #[derive(Default)]
 pub struct HealthCache {
-    /// (sample count, power revision, dismissed revision, show gaming) the report was built for.
-    key: Option<(u64, u64, u64, bool)>,
+    /// (sample count, power revision, dismissed revision, show gaming, dumps revision) the
+    /// report was built for.
+    key: Option<(u64, u64, u64, bool, u64)>,
     report: Report,
 }
 
@@ -57,6 +78,7 @@ impl HealthCache {
             snap.power_rev,
             crate::dismissed::revision(),
             show_gaming,
+            snap.dumps_rev,
         );
         if self.key != Some(key) {
             let mut all = run(info, snap);
@@ -64,6 +86,13 @@ impl HealthCache {
                 all.retain(|r| !is_gaming(r));
             }
             self.report = Report::new(all);
+            self.report.dumps = DumpStatus {
+                busy: snap.dumps_busy,
+                result: snap
+                    .dumps
+                    .as_ref()
+                    .map(|r| r.as_ref().map(Vec::len).map_err(Clone::clone)),
+            };
             self.key = Some(key);
         }
         &self.report
@@ -81,6 +110,8 @@ pub struct Report {
     pub summary: Option<(String, Color32)>,
     /// "2 gaming suggestions", if there are any.
     pub gaming_summary: Option<String>,
+    /// Crash dump analysis state.
+    pub dumps: DumpStatus,
 }
 
 impl Report {
@@ -92,6 +123,7 @@ impl Report {
             gaming_summary: (gaming > 0).then(|| plural(gaming, "gaming suggestion")),
             results,
             dismissed,
+            dumps: DumpStatus::default(),
         }
     }
 }
@@ -208,6 +240,7 @@ struct View<'a> {
     /// Dismissed findings (not filtered).
     dismissed: Vec<Item<'a>>,
     filter: Option<Category>,
+    dumps: &'a DumpStatus,
 }
 
 impl<'a> View<'a> {
@@ -261,6 +294,7 @@ impl<'a> View<'a> {
                 .map(|(check, f)| Item::new(check, f))
                 .collect(),
             filter,
+            dumps: &report.dumps,
         }
     }
 

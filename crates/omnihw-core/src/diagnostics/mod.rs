@@ -19,6 +19,7 @@ mod system;
 mod testutil;
 mod types;
 
+pub use crashes::{CRASHES_CHECK, is_blue_screen_finding};
 pub use memory::{channel_letter, rated_speed_from_part};
 pub use system::parse_bios_date;
 pub use types::{
@@ -138,11 +139,7 @@ const CHECKS: &[(&str, Category, Check)] = &[
         Category::Crashes,
         crashes::whea_errors,
     ),
-    (
-        "Blue screens and unexpected restarts",
-        Category::Crashes,
-        crashes::crashes,
-    ),
+    (crashes::CRASHES_CHECK, Category::Crashes, crashes::crashes),
     (
         "Ethernet link speed",
         Category::Network,

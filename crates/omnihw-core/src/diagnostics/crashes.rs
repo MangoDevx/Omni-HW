@@ -1,14 +1,96 @@
 //! Crash checks: WHEA hardware errors, blue screens and unexpected restarts from the System
-//! event log.
+//! event log, plus what the crash dumps point at once the user had them analysed.
 
 use super::helpers::{
     DDU_URL, board_drivers_step, count_text, format_date, guided, memory_test_steps, plural,
 };
-use super::{Category, Context, Level, Outcome, Step};
+use super::{Category, Context, Finding, Level, Link, Outcome, Step};
 use crate::bios_help::{self, BiosSetting};
 use crate::checkup::{
     CrashCause, EVENT_DAYS, Event, base_stop_code, crash_cause, stop_code_label, stop_code_name,
 };
+use crate::minidump::{DriverKind, DumpAnalysis};
+
+/// Name of the blue screen check.
+pub const CRASHES_CHECK: &str = "Blue screens and unexpected restarts";
+
+/// Whether `f` (from check `check`) is the blue screen finding, which offers crash dump
+/// analysis.
+pub fn is_blue_screen_finding(check: &str, f: &Finding) -> bool {
+    check == CRASHES_CHECK && f.title.contains("blue screen") && !f.title.contains("without")
+}
+
+/// "2026-10-12: DPC_WATCHDOG_VIOLATION (0x133), caused by nvlddmkm.sys (NVIDIA graphics
+/// driver). Parameters 0x0, ..."
+fn dump_line(d: &DumpAnalysis) -> String {
+    if let Some(e) = &d.error {
+        return format!("{}: couldn't be analysed ({e})", d.file);
+    }
+    let date = d.date.map(format_date).unwrap_or_else(|| d.file.clone());
+    let cause = match &d.culprit {
+        Some(c) if c.kind == DriverKind::Kernel => {
+            format!("in the Windows kernel ({}), no driver identified", c.module)
+        }
+        Some(c) => format!("caused by {}", c.label()),
+        None => "no driver identified".into(),
+    };
+    let p = d.params.map(|p| format!("0x{p:X}")).join(", ");
+    format!(
+        "{date}: {}, {cause}. Parameters {p}.",
+        stop_code_label(d.code)
+    )
+}
+
+/// Fix steps for the drivers the crash dumps point at, most specific first, and whether one
+/// is a graphics driver (its DDU step then replaces the generic one).
+fn culprit_steps(dumps: &[DumpAnalysis]) -> (Vec<Step>, bool) {
+    let mut steps = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let mut graphics = false;
+    for c in dumps.iter().filter_map(|d| d.culprit.as_ref()) {
+        let key = c.module.to_ascii_lowercase();
+        if c.kind == DriverKind::Kernel || seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
+        let name = c.friendly.unwrap_or(&c.module);
+        steps.push(match c.kind {
+            DriverKind::Graphics => {
+                graphics = true;
+                Step::url(
+                    format!(
+                        "Crash dumps point at {}: clean-reinstall the graphics driver with Display Driver Uninstaller (DDU) in Safe Mode, then install the latest driver.",
+                        c.label()
+                    ),
+                    DDU_URL,
+                )
+            }
+            DriverKind::WindowsStorage => Step::new(format!(
+                "Crash dumps point at the Windows storage stack ({}): check the drive health on the Storage tab, reseat or replace SATA cables, and update the SSD firmware and the chipset/storage drivers.",
+                c.module
+            )),
+            DriverKind::Windows => Step::search(
+                format!(
+                    "Crash dumps point at {}, part of Windows: a driver working with it is usually at fault, so update the chipset, network and graphics drivers.",
+                    c.label()
+                ),
+                format!("{} blue screen", c.module),
+            ),
+            DriverKind::Network
+            | DriverKind::Storage
+            | DriverKind::Audio
+            | DriverKind::Other
+            | DriverKind::Kernel => Step::search(
+                format!(
+                    "Crash dumps point at {}: update or reinstall the {name} from the manufacturer's website, or uninstall the program that installed it.",
+                    c.label()
+                ),
+                format!("{} blue screen", c.module),
+            ),
+        });
+    }
+    (steps, graphics)
+}
 
 /// Date of the most recent event, or "" when there are none.
 fn last_date<'a>(events: impl IntoIterator<Item = &'a Event>) -> String {
@@ -186,6 +268,24 @@ pub(super) fn crashes(ctx: &Context) -> Outcome {
                 q,
             ));
         }
+        let mut detail = format!(
+            "Windows crashed with a blue screen {} times (most recently on {}). Stop codes: {list}.",
+            count_text(ev.bugchecks.len()),
+            last_date(&ev.bugchecks)
+        );
+        if let Some(dumps) = ctx.dumps.filter(|d| !d.is_empty()) {
+            detail.push_str("\n\nCrash dumps (newest first):");
+            for d in dumps {
+                detail.push_str("\n• ");
+                detail.push_str(&dump_line(d));
+            }
+            let (mut first, graphics) = culprit_steps(dumps);
+            if graphics {
+                steps.retain(|s| s.link != Some(Link::Url(DDU_URL.into())));
+            }
+            first.append(&mut steps);
+            steps = first;
+        }
         let n = ev.bugchecks.len();
         let mut f = guided(
             if n >= 3 {
@@ -198,11 +298,7 @@ pub(super) fn crashes(ctx: &Context) -> Outcome {
                 "{} in the last {EVENT_DAYS} days",
                 plural(n, "blue screen", "blue screens")
             ),
-            format!(
-                "Windows crashed with a blue screen {} times (most recently on {}). Stop codes: {list}.",
-                count_text(n),
-                last_date(&ev.bugchecks)
-            ),
+            detail,
             steps,
         );
         f.bios = bios;
@@ -285,6 +381,66 @@ mod tests {
         assert!(f[0].detail.contains("MEMORY_MANAGEMENT (0x1A)"));
         assert!(f[0].steps.iter().any(|s| s.text.contains("DDU")));
         assert!(f[1].title.starts_with("2 unexpected restarts"));
+        assert!(is_blue_screen_finding(CRASHES_CHECK, &f[0]));
+        assert!(!is_blue_screen_finding(CRASHES_CHECK, &f[1]));
         assert_eq!(levels(&memory_diagnostic(&c)), vec![Level::Critical]);
+    }
+
+    #[test]
+    fn crash_dump_culprits() {
+        use crate::minidump::{DumpAnalysis, from_text, to_text};
+        let s = SensorTable::default();
+        let mut info = SystemInfo::default();
+        info.checkup.events = Some(Events {
+            bugchecks: vec![ev(1001, Some(0x133)), ev(1001, Some(0x116))],
+            ..Default::default()
+        });
+        // Encoded like the elevated helper writes them; the culprit is the 8th field.
+        let line = |code: u32, module: &str| {
+            format!("x.dmp\t2026-10-12\t{code:X}\t0\t501\t500\t0\t{module}\t\n")
+        };
+        let text = [
+            line(0x133, "nvlddmkm.sys"),
+            line(0x116, "nvlddmkm.sys"),
+            line(0xD1, "rt640x64.sys"),
+            line(0x1A, "ntoskrnl.exe"),
+        ]
+        .concat();
+        let mut dumps = from_text(&text);
+        dumps.push(DumpAnalysis {
+            file: "bad.dmp".into(),
+            error: Some("Crash dump is truncated".into()),
+            ..Default::default()
+        });
+        let dumps = from_text(&to_text(&dumps));
+        let mut c = ctx(&info, &s);
+        c.dumps = Some(&dumps);
+        let Outcome::Findings(f) = crashes(&c) else {
+            unreachable!()
+        };
+        let d = &f[0].detail;
+        assert!(d.contains(
+            "2026-10-12: DPC_WATCHDOG_VIOLATION (0x133), caused by nvlddmkm.sys (NVIDIA graphics driver). Parameters 0x0, 0x501, 0x500, 0x0."
+        ), "{d}");
+        assert!(d.contains("in the Windows kernel (ntoskrnl.exe)"));
+        assert!(d.contains("bad.dmp: couldn't be analysed"));
+        let steps = &f[0].steps;
+        assert!(
+            steps[0]
+                .text
+                .starts_with("Crash dumps point at nvlddmkm.sys")
+        );
+        assert!(
+            steps[1]
+                .text
+                .contains("Realtek network driver from the manufacturer")
+        );
+        assert!(!steps.iter().any(|s| s.text.contains("ntoskrnl")));
+        // One DDU step only: the culprit's replaces the generic one.
+        let ddu = steps
+            .iter()
+            .filter(|s| s.link == Some(Link::Url(DDU_URL.into())))
+            .count();
+        assert_eq!(ddu, 1);
     }
 }

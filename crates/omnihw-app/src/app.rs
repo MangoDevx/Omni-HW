@@ -499,6 +499,7 @@ impl eframe::App for OmniApp {
         tabs::lansec::dispatch(ui.ctx(), &self.sampler);
         tabs::storage::dispatch(ui.ctx(), &self.sampler);
         tabs::memory::dispatch(ui.ctx(), &self.sampler);
+        tabs::health::dispatch(ui.ctx(), &self.sampler);
 
         // Health Check dismissals changed this frame: keep them in the settings (saved to disk
         // only when "remember dismissed" is on).

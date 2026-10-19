@@ -4,6 +4,7 @@
 mod app;
 mod autostart;
 mod dismissed;
+mod dump_ops;
 mod elevate;
 mod export;
 mod folder_picker;
@@ -30,6 +31,10 @@ fn main() -> eframe::Result {
     }
     // Elevated helper for a network change.
     if let Some(code) = net_ops::run_helper() {
+        std::process::exit(code);
+    }
+    // Elevated helper that reads crash dumps.
+    if let Some(code) = dump_ops::run_helper() {
         std::process::exit(code);
     }
     // The sensor service (started by Windows), and the elevated helper that sets it up.

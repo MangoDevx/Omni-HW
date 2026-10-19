@@ -1,11 +1,11 @@
 //! The details pane (a finding with its fix steps checklist, Fix and firmware buttons; a
 //! category's passed checks; the dismissed list) and the "Restart into UEFI" confirmation.
 
-use super::{GREEN, Item, Passed, Sel, View, level_color, select};
+use super::{DumpStatus, GREEN, Item, Passed, Sel, View, level_color, select};
 use crate::heat::{ORANGE, RED};
 use crate::tabs::{pill, temp};
 use egui::{Color32, RichText, Sense, Ui, vec2};
-use omnihw_core::diagnostics::{Category, CheckResult, Finding, Outcome};
+use omnihw_core::diagnostics::{Category, CheckResult, Finding, Outcome, is_blue_screen_finding};
 
 /// Text in the details pane stops at this width, so lines stay easy to read.
 const MAX_WIDTH: f32 = 680.0;
@@ -16,7 +16,7 @@ pub(super) fn detail(ui: &mut Ui, view: &View, sel: Option<&Sel>, uefi: bool) {
     match sel {
         Some(Sel::Finding(k)) => {
             if let Some(i) = view.finding(k) {
-                finding_detail(ui, i, uefi, false);
+                finding_detail(ui, i, uefi, false, view.dumps);
             }
         }
         Some(Sel::DismissedFinding(k)) => {
@@ -29,7 +29,7 @@ pub(super) fn detail(ui: &mut Ui, view: &View, sel: Option<&Sel>, uefi: bool) {
             }
             ui.add_space(6.0);
             if let Some(i) = view.dismissed_finding(k) {
-                finding_detail(ui, i, uefi, true);
+                finding_detail(ui, i, uefi, true, view.dumps);
             }
         }
         Some(Sel::Passed(c)) => {
@@ -46,7 +46,7 @@ pub(super) fn detail(ui: &mut Ui, view: &View, sel: Option<&Sel>, uefi: bool) {
 
 /// A finding: title, level and category, what was measured, how to fix it, then Dismiss
 /// (or Restore for a dismissed one).
-fn finding_detail(ui: &mut Ui, item: &Item, uefi: bool, dismissed: bool) {
+fn finding_detail(ui: &mut Ui, item: &Item, uefi: bool, dismissed: bool, dumps: &DumpStatus) {
     let f = item.f;
     // Scope widget ids to the finding: otherwise, when one is dismissed, the next one's
     // buttons inherit its position-based ids and the same click.
@@ -65,6 +65,9 @@ fn finding_detail(ui: &mut Ui, item: &Item, uefi: bool, dismissed: bool) {
         });
         ui.add_space(10.0);
         finding_body(ui, f, uefi);
+        if is_blue_screen_finding(item.check, f) {
+            dump_button(ui, dumps);
+        }
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(4.0);
@@ -91,6 +94,55 @@ fn finding_detail(ui: &mut Ui, item: &Item, uefi: bool, dismissed: bool) {
                 }
                 ui.weak("Not relevant to you? Hide it.");
             });
+        }
+    });
+}
+
+/// Memory id of the "Analyze crash dumps" request, taken by [`super::dispatch`].
+pub(super) fn read_dumps_id() -> egui::Id {
+    egui::Id::new("health_read_dumps")
+}
+
+/// "Analyze crash dumps" with its state: a spinner while reading, then the error or a note
+/// when there were none (the results themselves show in the finding's details and steps).
+fn dump_button(ui: &mut Ui, dumps: &DumpStatus) {
+    ui.add_space(10.0);
+    ui.horizontal_wrapped(|ui| {
+        let label = if crate::elevate::elevated() {
+            "Analyze crash dumps"
+        } else {
+            "Analyze crash dumps (asks for administrator)"
+        };
+        if ui
+            .add_enabled(!dumps.busy, egui::Button::new(label))
+            .on_hover_text(
+                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps.",
+            )
+            .clicked()
+        {
+            temp::set(ui.ctx(), read_dumps_id(), true);
+        }
+        if dumps.busy {
+            ui.spinner();
+        }
+        match &dumps.result {
+            _ if dumps.busy => {}
+            Some(Err(e)) => {
+                ui.colored_label(
+                    crate::heat::ink(ui.visuals(), RED),
+                    format!("Couldn't read crash dumps: {e}"),
+                );
+            }
+            Some(Ok(0)) => {
+                ui.weak("No crash dumps found");
+            }
+            Some(Ok(n)) => {
+                ui.weak(format!(
+                    "{n} crash {} analysed (listed above)",
+                    if *n == 1 { "dump" } else { "dumps" }
+                ));
+            }
+            None => {}
         }
     });
 }

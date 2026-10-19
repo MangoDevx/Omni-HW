@@ -4,6 +4,7 @@
 use std::fmt::Write;
 
 use crate::SystemInfo;
+use crate::minidump::DumpAnalysis;
 use crate::network::NetworkInfo;
 use crate::power::{Action, PowerInfo};
 use crate::sensors::SensorTable;
@@ -248,6 +249,8 @@ pub struct Context<'a> {
     pub power: Option<&'a PowerInfo>,
     /// Network adapters, once gathered.
     pub network: Option<&'a NetworkInfo>,
+    /// Crash dumps, once the user had them analysed (newest first).
+    pub dumps: Option<&'a [DumpAnalysis]>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

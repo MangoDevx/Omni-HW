@@ -19,6 +19,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             uptime_secs: None,
             power: None,
             network: None,
+            dumps: None,
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -153,7 +154,7 @@ fn check_description(name: &str) -> &'static str {
             "CPU, memory and PCIe hardware errors logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock."
         }
         "Blue screens and unexpected restarts" => {
-            "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days."
+            "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days. On a blue screen finding, \"Analyze crash dumps\" reads C:\\Windows\\Minidump (Windows asks for administrator permission) to show each crash's parameters and the driver it points at."
         }
         "Ethernet link speed" => {
             "Wired network connected at 100 Mbps or less (a bad cable or port), or below the adapter's maximum (e.g. 1 Gbps on a 2.5 Gbps adapter, a suggestion)."
