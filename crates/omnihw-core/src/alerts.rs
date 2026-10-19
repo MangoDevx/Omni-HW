@@ -146,35 +146,6 @@ impl Alerts {
     }
 }
 
-fn unit_code(u: Unit) -> &'static str {
-    match u {
-        Unit::Mhz => "mhz",
-        Unit::Percent => "pct",
-        Unit::Celsius => "c",
-        Unit::Watt => "w",
-        Unit::Volt => "v",
-        Unit::Rpm => "rpm",
-        Unit::Megabytes => "mb",
-        Unit::MegabytesPerSec => "mbps",
-        Unit::None => "none",
-    }
-}
-
-fn unit_from_code(s: &str) -> Option<Unit> {
-    Some(match s {
-        "mhz" => Unit::Mhz,
-        "pct" => Unit::Percent,
-        "c" => Unit::Celsius,
-        "w" => Unit::Watt,
-        "v" => Unit::Volt,
-        "rpm" => Unit::Rpm,
-        "mb" => Unit::Megabytes,
-        "mbps" => Unit::MegabytesPerSec,
-        "none" => Unit::None,
-        _ => return None,
-    })
-}
-
 /// Serialize rules, one per line: `enabled\tid\tabove|below\tthreshold\tduration\tunit\tname`.
 pub fn to_config(rules: &[AlertRule]) -> String {
     let mut s = String::from("# Omni-HW alert rules\n");
@@ -189,7 +160,7 @@ pub fn to_config(rules: &[AlertRule]) -> String {
             r.sensor_id,
             r.threshold,
             r.duration_secs,
-            unit_code(r.unit),
+            Unit::code(r.unit),
             r.sensor_name.replace(['\t', '\n'], " ")
         ));
     }
@@ -217,7 +188,7 @@ pub fn from_config(text: &str) -> Vec<AlertRule> {
                 },
                 threshold: f[3].parse().ok()?,
                 duration_secs: f[4].parse().ok()?,
-                unit: unit_from_code(f[5])?,
+                unit: Unit::from_code(f[5])?,
                 sensor_name: f[6].to_string(),
             })
         })

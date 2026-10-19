@@ -9,6 +9,8 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 - **Memory test** (Memory page): measures memory bandwidth and latency in a few seconds (AIDA64-style streaming reads, on all cores and on a single core) and compares them with what your RAM speed and channel count should deliver.
 - **Network is its own category** in the grouped navigation bar, holding the Network page and the LAN Security Report.
 - **Disk speed test** (Storage page): measures sequential and 4K random read/write speed with a temporary file and compares it with what the drive and its link should deliver.
+- **Extra sensors** (optional, Settings → Extra sensors): per-core CPU temperatures, CPU voltage, per-core power on Ryzen, and motherboard fan speeds, temperatures and voltages, read through the signed PawnIO driver by a small read-only Omni-HW sensor service. Omni-HW itself doesn't need administrator rights for them, and works fully without them.
+- **CPU temperature** on the Overview and CPU pages, and a matching Health Check, when extra sensors are set up.
 
 ### Improved
 - Health Check redesigned as a list of issues with a details pane, plus category tiles to filter it.

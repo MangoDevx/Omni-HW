@@ -19,6 +19,11 @@ impl Handle {
     /// Open an existing file or device (`\\.\PhysicalDrive0`, `\\.\C:`, a device interface
     /// path) with the given access rights; 0 asks for metadata/IOCTL access only.
     pub(crate) fn open(path: &str, access: u32) -> Option<Handle> {
+        Self::try_open(path, access).ok()
+    }
+
+    /// [`Handle::open`] keeping the error, so callers can tell "missing" from "access denied".
+    pub(crate) fn try_open(path: &str, access: u32) -> windows::core::Result<Handle> {
         // SAFETY: the path is a NUL-terminated HSTRING that outlives the call; no security
         // attributes or template handle.
         let h = unsafe {
@@ -31,15 +36,24 @@ impl Handle {
                 FILE_FLAGS_AND_ATTRIBUTES(0),
                 None,
             )
-        }
-        .ok()?;
+        }?;
         // SAFETY: CreateFileW succeeded, so `h` is a fresh handle owned by nobody else.
-        Some(Handle(unsafe { Owned::new(h) }))
+        Ok(Handle(unsafe { Owned::new(h) }))
     }
 
     /// Synchronous `DeviceIoControl` with `input` sent as-is; returns the number of bytes
     /// written to `out`.
     pub(crate) fn ioctl<I: ?Sized>(&self, code: u32, input: &I, out: &mut [u8]) -> Option<usize> {
+        self.try_ioctl(code, input, out).ok()
+    }
+
+    /// [`Handle::ioctl`] keeping the error.
+    pub(crate) fn try_ioctl<I: ?Sized>(
+        &self,
+        code: u32,
+        input: &I,
+        out: &mut [u8],
+    ) -> windows::core::Result<usize> {
         let mut got = 0;
         // SAFETY: the input pointer/size describe `input` and the output pointer/size describe
         // `out`, both live for the (synchronous, non-overlapped) call.
@@ -54,9 +68,8 @@ impl Handle {
                 Some(&mut got),
                 None,
             )
-        }
-        .ok()?;
-        Some(got as usize)
+        }?;
+        Ok(got as usize)
     }
 }
 

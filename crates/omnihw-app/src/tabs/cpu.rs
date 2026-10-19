@@ -1,5 +1,6 @@
 use super::section;
 use crate::sampler::Snapshot;
+use omnihw_core::sensors::{CPU_PACKAGE_POWER, CPU_TEMP};
 use omnihw_core::{SystemInfo, format_bytes};
 
 pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
@@ -59,8 +60,14 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
             clocks.push(("Multiplier (avg)", format!("x {:.1}", v / b as f64)));
         }
     }
-    if let Some(p) = snap.table.get("power/RAPL_Package0_PKG") {
+    if let Some(p) = snap.table.first_of(&CPU_PACKAGE_POWER) {
         clocks.push(("Package Power", format!("{:.1} W", p.reading.value)));
+    }
+    if let Some(t) = snap.table.get(CPU_TEMP) {
+        clocks.push(("Temperature", format!("{:.0} °C", t.reading.value)));
+    }
+    if let Some(v) = snap.table.get("cpu/volt/vid") {
+        clocks.push(("Core Voltage (VID)", format!("{:.3} V", v.reading.value)));
     }
     section(ui, "Clocks", &clocks);
 

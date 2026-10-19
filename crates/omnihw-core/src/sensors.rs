@@ -5,6 +5,12 @@ use std::collections::{HashMap, VecDeque};
 /// Samples kept per sensor for sparklines.
 pub const HISTORY_LEN: usize = 120;
 
+/// CPU package power, in order of preference: Windows' Energy Meter (Intel and some AMD), then
+/// the AMD energy counters read through PawnIO.
+pub const CPU_PACKAGE_POWER: [&str; 2] = ["power/RAPL_Package0_PKG", "cpu/power/package"];
+/// CPU package / Tctl temperature (needs PawnIO).
+pub const CPU_TEMP: &str = "cpu/temp/package";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unit {
     Mhz,
@@ -32,6 +38,36 @@ impl Unit {
             Unit::MegabytesPerSec => "MB/s",
             Unit::None => "",
         }
+    }
+
+    /// Short stable code for files and the sensor-service protocol ("c", "rpm", ...).
+    pub fn code(self) -> &'static str {
+        match self {
+            Unit::Mhz => "mhz",
+            Unit::Percent => "pct",
+            Unit::Celsius => "c",
+            Unit::Watt => "w",
+            Unit::Volt => "v",
+            Unit::Rpm => "rpm",
+            Unit::Megabytes => "mb",
+            Unit::MegabytesPerSec => "mbps",
+            Unit::None => "none",
+        }
+    }
+
+    pub fn from_code(s: &str) -> Option<Unit> {
+        Some(match s {
+            "mhz" => Unit::Mhz,
+            "pct" => Unit::Percent,
+            "c" => Unit::Celsius,
+            "w" => Unit::Watt,
+            "v" => Unit::Volt,
+            "rpm" => Unit::Rpm,
+            "mb" => Unit::Megabytes,
+            "mbps" => Unit::MegabytesPerSec,
+            "none" => Unit::None,
+            _ => return None,
+        })
     }
 
     pub fn format(self, v: f64) -> String {
@@ -144,6 +180,23 @@ impl SensorTable {
     pub fn get(&self, id: &str) -> Option<&Tracked> {
         self.index.get(id).map(|&i| &self.entries[i])
     }
+
+    /// Drop sensors that fail `keep` (e.g. when their source goes away), so stale values
+    /// don't linger.
+    pub fn retain(&mut self, keep: impl Fn(&Tracked) -> bool) {
+        self.entries.retain(|t| keep(t));
+        self.index = self
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.reading.id.clone(), i))
+            .collect();
+    }
+
+    /// The first of `ids` that has a reading.
+    pub fn first_of(&self, ids: &[&str]) -> Option<&Tracked> {
+        ids.iter().find_map(|id| self.get(id))
+    }
 }
 
 #[cfg(test)]
@@ -177,6 +230,11 @@ mod tests {
         t.reset_stats();
         let a = t.get("a").unwrap();
         assert_eq!((a.min, a.max, a.avg()), (200.0, 200.0, 200.0));
+        t.retain(|e| e.reading.id != "a");
+        assert!(t.get("a").is_none());
+        assert_eq!(t.get("b").unwrap().reading.id, "b");
+        t.update([r("b", 2.0)]);
+        assert_eq!(t.get("b").unwrap().samples, 2);
     }
 
     #[test]

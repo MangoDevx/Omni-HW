@@ -7,6 +7,7 @@ use crate::heat::{self, GREEN, ORANGE, RED, Severity, lerp};
 use crate::sampler::Snapshot;
 use egui::{Align2, Color32, FontId, RichText, Sense, Ui, vec2};
 use omnihw_core::gpu::{GpuAdapter, ReBar};
+use omnihw_core::sensors::{CPU_PACKAGE_POWER, CPU_TEMP};
 use omnihw_core::{SystemInfo, format_bytes, format_uptime};
 use std::collections::VecDeque;
 use widgets::{Metric, bar, card, m, metrics, severity_icon, sparkline, sparkline_colored};
@@ -105,7 +106,11 @@ fn cpu_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
         sub.push(format!("base {}", ghz(b as f64)));
     }
     card(ui, CPU, "Processor", &sub.join("  ·  "), |ui| {
-        let power = val(snap, "power/RAPL_Package0_PKG").map(|w| format!("{w:.0} W"));
+        let power = snap
+            .table
+            .first_of(&CPU_PACKAGE_POWER)
+            .map(|t| format!("{:.0} W", t.reading.value));
+        let temp = val(snap, CPU_TEMP).map(|t| format!("{t:.0} °C"));
         let mut row = vec![
             m("Clock (avg)", or_wait(val(snap, "cpu/clock/avg").map(ghz))),
             m(
@@ -115,6 +120,9 @@ fn cpu_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
         ];
         if let Some(p) = power {
             row.push(m("Package Power", p));
+        }
+        if let Some(t) = temp {
+            row.push(m("Temperature", t));
         }
         let top = info.topology.as_ref().and_then(|t| {
             (0..t.cores.len())
@@ -147,6 +155,7 @@ fn core_tiles(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
                 .collect();
             let load = loads.iter().copied().fold(0.0, f64::max);
             let clock = val(snap, &format!("cpu/clock/core{i}"));
+            let temp = val(snap, &format!("cpu/temp/core{i}"));
             let (rect, resp) = ui.allocate_exact_size(vec2(58.0, 40.0), Sense::hover());
             let p = ui.painter();
             let sev = heat::CORE_LOAD.severity(load);
@@ -195,6 +204,9 @@ fn core_tiles(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
                         );
                     }
                     Severity::Normal => {}
+                }
+                if let Some(t) = temp {
+                    ui.label(format!("Temperature: {t:.0} °C"));
                 }
                 if let Some(c) = clock {
                     ui.label(format!("Clock: {c:.0} MHz"));
@@ -388,7 +400,10 @@ fn system_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
                 rows.push(("CPU Socket", p.socket.clone()));
             }
         }
-        let cpu_w = val(snap, "power/RAPL_Package0_PKG");
+        let cpu_w = snap
+            .table
+            .first_of(&CPU_PACKAGE_POWER)
+            .map(|t| t.reading.value);
         let gpu_w: Option<f64> = info
             .gpus
             .iter()

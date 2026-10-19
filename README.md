@@ -43,6 +43,8 @@ Every network adapter in one place, like Network Connections but with more detai
 ### 📈 Live sensors
 Live readings with current, min, max and average: per-core clocks and usage, CPU power, GPU load, temperature, clocks, power and fan, memory, and disk speed and temperature.
 
+Want more? Set up the optional **extra sensors** from **Settings → Extra sensors** to also see per-core CPU temperatures, CPU voltage, per-core power on Ryzen, and motherboard fan speeds, temperatures and voltages (Nuvoton and ITE sensor chips), read through the [PawnIO](https://pawnio.eu) driver. Omni-HW works fully without it.
+
 ### ⏺️ Recording & analysis
 - Record every sensor to a CSV with one click, from any page.
 - **Compare** two sessions side by side. Did that repaste actually help? 🤔
@@ -89,7 +91,8 @@ The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --w
 - 🌐 **Offline:** Omni-HW never connects to the internet on its own and works fully offline. Everything stays on your PC. The only exceptions run when you ask for them:
   - the update check (Settings > Updates), which runs only when you click it or turn on the check at start (off by default) and only asks GitHub for the latest version number;
   - the **internet tests** on the Network page, which run only when you click *Run internet tests*: a DNS lookup of `dns.msftncsi.com`, an HTTP request to `www.msftconnecttest.com/connecttest.txt` (Windows' own connectivity probes) and pings to the public DNS resolvers `1.1.1.1` and `8.8.8.8`. Nothing about your PC is sent.
-- 🔍 **Read-only:** Omni-HW reads your hardware through standard Windows APIs and your GPU driver's own monitoring library. It never changes clocks, fans or firmware settings, and nothing gets installed.
+- 🔍 **Read-only:** Omni-HW reads your hardware through standard Windows APIs and your GPU driver's own monitoring library. It never changes clocks, fans or firmware settings. It works without any driver, and nothing gets installed unless you choose to set up the optional extra sensors (see below).
+- 🌡️ **Optional extra sensors:** per-core CPU temperatures, voltages and motherboard fans need [PawnIO](https://pawnio.eu), a small signed open-source driver used by several hardware monitors. Clicking *Set up extra sensors* in **Settings → Extra sensors** (one administrator prompt) installs PawnIO from the bundled, unmodified official installer if it isn't installed yet, and adds the small **Omni-HW Sensor Service** (`C:\Program Files\Omni-HW\omnihw-sensors.exe`). Because PawnIO exposes powerful low-level access, only that service ever talks to it: it calls only the drivers' *read* functions, never changes a chip setting, and hands out finished readings over a local pipe that accepts no commands (other programs can only read from it). Omni-HW itself keeps running without administrator rights. *Remove extra sensors* takes it all out again (PawnIO too, if Omni-HW installed it).
 - 🛡️ **Admin only for SATA health:** reading SATA drive health needs administrator rights, so Omni-HW asks once at start if you have SATA drives. Say no and everything else still works, or turn the prompt off in Settings. NVMe drives don't need it.
 - 📁 **Where your files go:**
   - Settings: `%APPDATA%\OmniHW\settings.ini`
@@ -111,7 +114,6 @@ Assets/Brand/    logo, app icon and screenshots
 
 ## 🛣️ Roadmap
 
-- 🌡️ Per-core CPU temperatures, fans and voltages (optional signed-driver backend)
 - ⏱️ Quick memory and disk self-tests with "what's normal for your hardware" ranges
 
 ---
@@ -125,3 +127,5 @@ CPU-Z is a trademark of CPUID. GPU-Z is a trademark of TechPowerUp. HWiNFO is a 
 ## 📄 License
 
 [MIT](LICENSE). Use it, fork it, tinker with it. 🛠️
+
+The optional PawnIO driver is © namazso and is not part of Omni-HW's code. Omni-HW bundles its official signed installer ([2.2.0](https://github.com/namazso/PawnIO.Setup/releases/tag/2.2.0); driver source: [namazso/PawnIO](https://github.com/namazso/PawnIO/tree/2.2.0), GPL 2 with an exception for programs that use its device interface) and modules ([0.2.11](https://github.com/namazso/PawnIO.Modules/tree/0.2.11), LGPL 2.1), unmodified. Their licence texts are in [`crates/omnihw-app/pawnio`](crates/omnihw-app/pawnio) and [`crates/omnihw-core/pawnio`](crates/omnihw-core/pawnio), and in the app under Settings → Extra sensors.

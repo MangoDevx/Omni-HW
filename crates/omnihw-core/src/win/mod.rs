@@ -16,6 +16,8 @@ pub mod network;
 #[cfg(windows)]
 pub mod nvml;
 #[cfg(windows)]
+pub mod pawnio;
+#[cfg(windows)]
 mod pdh;
 pub mod perf;
 pub mod power;

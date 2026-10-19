@@ -36,6 +36,9 @@ fn check_description(name: &str) -> &'static str {
         "CPU clocks under load" => {
             "While the CPU is busy, its average clock should stay near base clock; lower means thermal or power throttling."
         }
+        "CPU temperature" => {
+            "CPU temperature averaged over the last couple of minutes (needs the optional extra sensors, Settings > Extra sensors)."
+        }
         "Memory speed (XMP / EXPO)" => {
             "Compares the speed your RAM runs at with the speed its part number is rated for (XMP/EXPO off is common)."
         }

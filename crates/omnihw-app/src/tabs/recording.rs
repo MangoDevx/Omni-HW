@@ -19,10 +19,12 @@ pub(super) const PALETTE: [Color32; 8] = [
 ];
 
 /// Sensors pre-selected when nothing has been chosen yet.
-const DEFAULT_SELECTION: [&str; 5] = [
+const DEFAULT_SELECTION: [&str; 7] = [
     "cpu/load/total",
     "cpu/clock/avg",
     "power/RAPL_Package0_PKG",
+    "cpu/power/package",
+    "cpu/temp/package",
     "mem/load",
     "/temp",
 ];

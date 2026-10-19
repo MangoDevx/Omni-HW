@@ -1,8 +1,8 @@
-//! CPU checks: Raptor Lake microcode and clocks under load.
+//! CPU checks: Raptor Lake microcode, clocks under load and (with PawnIO) temperature.
 
 use super::helpers::{bios_update_step, finding, guided};
 use super::types::MIN_SAMPLES;
-use super::{Category, Context, Level, Outcome, Step};
+use super::{Category, Context, Level, Outcome, RECENT, Step};
 use crate::cpuid::Vendor;
 
 /// Intel's fix for the 13th/14th Gen desktop "Vmin shift" instability ships in microcode 0x12B+.
@@ -100,6 +100,38 @@ pub(super) fn cpu_throttling(ctx: &Context) -> Outcome {
     )])
 }
 
+/// Sustained CPU temperature. Needs the optional PawnIO driver for the sensor.
+pub(super) fn cpu_temperature(ctx: &Context) -> Outcome {
+    let Some(t) = ctx.recent_avg(crate::sensors::CPU_TEMP, RECENT) else {
+        return Outcome::Skipped(
+            "Needs the CPU temperature sensor (set up extra sensors in Settings)".into(),
+        );
+    };
+    let level = match t {
+        t if t >= 95.0 => Level::Critical,
+        t if t >= 88.0 => Level::Warning,
+        _ => {
+            return Outcome::Pass(format!(
+                "{t:.0} °C on average over the last couple of minutes"
+            ));
+        }
+    };
+    Outcome::Findings(vec![finding(
+        level,
+        Category::Cpu,
+        "CPU is running hot",
+        format!(
+            "CPU temperature has averaged {t:.0} °C over the last couple of minutes. Most CPUs slow themselves down at 95-100 °C. (Some high-end desktop CPUs boost until they reach about 95 °C on purpose; if yours only does this under full load, it's expected.)"
+        ),
+        &[
+            "Check that the CPU cooler is seated properly and its fans or pump are running.",
+            "Clean dust from heatsinks, fans and case filters; improve case airflow.",
+            "If the cooler is a few years old, new thermal paste often lowers temperatures noticeably.",
+            "Check the BIOS for unlimited power limits or an aggressive overclock and set them back to defaults.",
+        ],
+    )])
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::testutil::*;
@@ -142,6 +174,23 @@ mod tests {
             intel_raptor_microcode(&ctx(&info, &s)),
             Outcome::Skipped(_)
         ));
+    }
+
+    #[test]
+    fn temperature_needs_sensor_and_flags_heat() {
+        let info = SystemInfo::default();
+        let mut s = SensorTable::default();
+        assert!(matches!(
+            cpu_temperature(&ctx(&info, &s)),
+            Outcome::Skipped(_)
+        ));
+        feed(&mut s, "cpu/temp/package", Unit::Celsius, &[60.0; 20]);
+        assert!(matches!(cpu_temperature(&ctx(&info, &s)), Outcome::Pass(_)));
+        feed(&mut s, "cpu/temp/package", Unit::Celsius, &[98.0; 200]);
+        assert_eq!(
+            levels(&cpu_temperature(&ctx(&info, &s))),
+            vec![Level::Critical]
+        );
     }
 
     #[test]

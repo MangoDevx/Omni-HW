@@ -14,7 +14,7 @@ pub(super) fn hardware(ui: &mut Ui) {
         &[
             "Name, code name, microarchitecture, manufacturing process and socket.",
             "Family / model / stepping and the instruction sets the CPU supports (AVX2, AVX-512 and so on).",
-            "Clocks: live average core speed, base clock, bus speed, multiplier and package power.",
+            "Clocks: live average core speed, base clock, bus speed, multiplier and package power (plus temperature and core voltage with the extra sensors).",
             "Caches and topology: cores (performance and efficiency cores on hybrid CPUs), threads, NUMA nodes.",
         ],
     );
@@ -224,7 +224,8 @@ pub(super) fn sensors(ui: &mut Ui) {
         "sensors",
         &[
             "CPU clock per core is the fastest of its threads. GPU 'Load (busiest engine)' is how Task Manager measures GPU usage; 'Core Load' (NVIDIA) is what GPU-Z shows.",
-            "Some sensors only exist on some systems: package power needs a CPU that reports it to Windows; battery sensors only appear on laptops.",
+            "Some sensors only exist on some systems: package power needs a CPU that reports it to Windows (or the extra sensors on AMD); battery sensors only appear on laptops.",
+            "With the optional extra sensors (Settings > Extra sensors: the PawnIO driver and Omni-HW's read-only sensor service) you also get per-core CPU temperatures, CPU voltage (VID), per-core power on AMD Ryzen, and motherboard fan speeds, temperatures and voltages on supported Nuvoton and ITE chips. Fan headers with nothing plugged in stay hidden.",
         ],
     );
 }

@@ -9,7 +9,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         &[
             ("Version", env!("CARGO_PKG_VERSION").into()),
             ("License", "MIT".into()),
-            ("Driver", "None (user-mode APIs only)".into()),
+            ("Driver", driver_line(snap)),
             ("Samples taken", snap.samples.to_string()),
             (
                 "Administrator",
@@ -27,5 +27,18 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         for p in problems {
             ui.label(p);
         }
+    }
+}
+
+/// Omni-HW uses no driver itself; with extra sensors set up, the sensor service uses PawnIO.
+fn driver_line(snap: &Snapshot) -> String {
+    use omnihw_core::sensor_service::ServiceState;
+    match snap.sensor_service.as_ref().map(|s| &s.state) {
+        Some(ServiceState::Ready { sources, .. }) if !sources.is_empty() => format!(
+            "None in Omni-HW itself; the sensor service reads {} through PawnIO",
+            sources.join(", ")
+        ),
+        _ => "None (user-mode APIs only; extra sensors through PawnIO are optional, see Settings)"
+            .into(),
     }
 }

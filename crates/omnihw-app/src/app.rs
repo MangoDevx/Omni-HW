@@ -119,6 +119,7 @@ pub struct OmniApp {
     /// In-app documentation window.
     help: crate::help::HelpState,
     updates: crate::update::UpdateChecker,
+    pawnio: crate::pawnio::Installer,
     /// Health Check results, shared by the Health tab and the Overview banner.
     health: tabs::health::HealthCache,
     /// Settings changed but not written to disk yet: they're saved once no mouse button is
@@ -137,7 +138,7 @@ impl OmniApp {
         crate::dismissed::load(&settings.dismissed);
         crate::tray::start(cc.egui_ctx.clone());
         crate::tray::set_icon_visible(settings.minimize_to_tray);
-        let sampler = Sampler::start(cc.egui_ctx.clone());
+        let sampler = Sampler::start(cc.egui_ctx.clone(), settings.use_pawnio);
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
         let updates = crate::update::UpdateChecker::default();
@@ -158,6 +159,7 @@ impl OmniApp {
             minimize_on_start: crate::autostart::launch_flags().1,
             help: Default::default(),
             updates,
+            pawnio: Default::default(),
             health: Default::default(),
             settings_unsaved: false,
         }
@@ -448,6 +450,7 @@ impl eframe::App for OmniApp {
                             &mut self.settings,
                             &self.sampler,
                             &self.updates,
+                            &self.pawnio,
                         ) {
                             crate::settings::apply_visuals(ui.ctx(), &self.settings);
                             self.settings_unsaved = true;

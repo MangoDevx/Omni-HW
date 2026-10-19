@@ -167,6 +167,29 @@ fn main() {
             Ok(b) => backends.push(Box::new(b)),
             Err(e) => println!("warning: {e}"),
         }
+        let pawnio = omnihw_core::win::pawnio::status();
+        println!("PawnIO: {pawnio:?}");
+        let service = omnihw_core::win::pawnio::service_status();
+        println!("Sensor service: {:?}", service.state);
+        if matches!(
+            service.state,
+            omnihw_core::sensor_service::ServiceState::Ready { .. }
+        ) {
+            backends.push(Box::new(omnihw_core::win::pawnio::ServiceBackend));
+        } else if pawnio.state == omnihw_core::lowlevel::PawnioState::Ready {
+            use omnihw_core::win::pawnio::{CpuMsrBackend, SuperIoBackend};
+            match CpuMsrBackend::new(&info.cpu, info.topology.as_ref()) {
+                Ok(b) => backends.push(Box::new(b)),
+                Err(e) => println!("warning: PawnIO CPU: {e}"),
+            }
+            match SuperIoBackend::new() {
+                Ok(b) => {
+                    println!("Super I/O: {}", b.chips().join(", "));
+                    backends.push(Box::new(b));
+                }
+                Err(e) => println!("warning: PawnIO Super I/O: {e}"),
+            }
+        }
         let mut table = SensorTable::default();
         for _ in 0..3 {
             std::thread::sleep(std::time::Duration::from_millis(1000));

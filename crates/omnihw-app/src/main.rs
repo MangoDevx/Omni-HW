@@ -13,9 +13,11 @@ mod icon;
 mod nav;
 mod net_ops;
 mod notify;
+mod pawnio;
 mod power_ops;
 mod retro;
 mod sampler;
+mod sensor_service;
 mod settings;
 mod tabs;
 mod tray;
@@ -28,6 +30,13 @@ fn main() -> eframe::Result {
     }
     // Elevated helper for a network change.
     if let Some(code) = net_ops::run_helper() {
+        std::process::exit(code);
+    }
+    // The sensor service (started by Windows), and the elevated helper that sets it up.
+    if let Some(code) = sensor_service::run_if_service() {
+        std::process::exit(code);
+    }
+    if let Some(code) = pawnio::run_helper() {
         std::process::exit(code);
     }
     if elevate::relaunch_elevated_if_useful() {

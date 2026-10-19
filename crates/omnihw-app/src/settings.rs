@@ -69,6 +69,9 @@ pub struct Settings {
     pub remember_dismissed: bool,
     /// Show the Gaming category and gaming suggestions in Health Check and on Overview.
     pub show_gaming: bool,
+    /// Show the extra sensors (per-core temperatures, fans, voltages) from the PawnIO sensor
+    /// service. Off until the user sets the service up (which turns it on).
+    pub use_pawnio: bool,
     /// Keys of dismissed Health Check findings (see `dismissed::key`). Only saved to disk when
     /// `remember_dismissed` is on.
     pub dismissed: Vec<String>,
@@ -91,6 +94,7 @@ impl Default for Settings {
             check_updates_at_start: false,
             remember_dismissed: true,
             show_gaming: true,
+            use_pawnio: false,
             dismissed: Vec::new(),
         }
     }
@@ -159,6 +163,7 @@ impl Settings {
              check_updates_at_start={}\n\
              remember_dismissed={}\n\
              show_gaming={}\n\
+             use_pawnio={}\n\
              {dismissed}",
             self.ui_scale,
             self.start_page,
@@ -171,6 +176,7 @@ impl Settings {
             bool_str(self.check_updates_at_start),
             bool_str(self.remember_dismissed),
             bool_str(self.show_gaming),
+            bool_str(self.use_pawnio),
         )
     }
 
@@ -239,6 +245,7 @@ impl Settings {
                     s.remember_dismissed = parse_bool(v).unwrap_or(s.remember_dismissed)
                 }
                 "show_gaming" => s.show_gaming = parse_bool(v).unwrap_or(s.show_gaming),
+                "use_pawnio" => s.use_pawnio = parse_bool(v).unwrap_or(s.use_pawnio),
                 "dismissed" if !v.is_empty() => s.dismissed.push(v.to_string()),
                 _ => {}
             }
@@ -308,6 +315,7 @@ mod tests {
             check_updates_at_start: true,
             remember_dismissed: true,
             show_gaming: false,
+            use_pawnio: true,
             dismissed: vec!["Uptime|Info|Windows has been running for  days".into()],
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);

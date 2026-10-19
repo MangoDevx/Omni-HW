@@ -35,6 +35,7 @@ const CHECKS: &[(&str, Category, Check)] = &[
         cpu::intel_raptor_microcode,
     ),
     ("CPU clocks under load", Category::Cpu, cpu::cpu_throttling),
+    ("CPU temperature", Category::Cpu, cpu::cpu_temperature),
     (
         "Memory speed (XMP / EXPO)",
         Category::Memory,

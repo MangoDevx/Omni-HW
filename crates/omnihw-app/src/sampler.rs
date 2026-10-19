@@ -10,6 +10,7 @@ use omnihw_core::memtest::{self, MemTestResult};
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
+use omnihw_core::sensor_service::ServiceStatus;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
 use std::collections::HashMap;
 use std::fs::File;
@@ -31,6 +32,10 @@ const NETWORK_EVERY_CLOSED: Duration = Duration::from_secs(60);
 /// Full re-reads including WMI details (driver, duplex, advanced properties).
 const NETWORK_DETAILS_EVERY_OPEN: Duration = Duration::from_secs(30);
 const NETWORK_DETAILS_EVERY_CLOSED: Duration = Duration::from_secs(300);
+/// [`SensorBackend::name`] of the sensor-service backend.
+const SERVICE_BACKEND: &str = "Sensor service";
+/// How often to re-check a sensor service that is set up but not answering.
+const SERVICE_RECHECK: Duration = Duration::from_secs(10);
 
 /// Test results grouped under headings (adapter names; empty for the internet tests).
 pub type TestGroups = Vec<(String, Vec<TestLine>)>;
@@ -79,6 +84,8 @@ pub struct Snapshot {
     pub disk_test: DiskTestState,
     /// Memory page quick test: progress and last result.
     pub mem_test: MemTestState,
+    /// The optional sensor service (PawnIO): `None` until checked, or off Windows.
+    pub sensor_service: Option<ServiceStatus>,
 }
 
 /// State of the LAN Security Report scan.
@@ -150,6 +157,10 @@ struct Shared {
     network_refresh: AtomicBool,
     /// A network read is running on its worker thread; the sampler schedules no second one.
     network_reading: AtomicBool,
+    /// Read the sensor service's readings (the "Use extra sensors" setting).
+    use_pawnio: AtomicBool,
+    /// Re-check the sensor service (after setup or a settings change) on the next sample.
+    service_refresh: AtomicBool,
 }
 
 /// Where alert rules are saved: `%APPDATA%/OmniHW/alerts.tsv`.
@@ -176,7 +187,8 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn start(ctx: egui::Context) -> Self {
+    /// `use_pawnio`: read the extra sensors from the sensor service if it is set up.
+    pub fn start(ctx: egui::Context, use_pawnio: bool) -> Self {
         let shared = Arc::new(Shared {
             info: OnceLock::new(),
             snapshot: Mutex::new(Snapshot {
@@ -192,6 +204,8 @@ impl Sampler {
             network_page: AtomicBool::new(false),
             network_refresh: AtomicBool::new(false),
             network_reading: AtomicBool::new(false),
+            use_pawnio: AtomicBool::new(use_pawnio),
+            service_refresh: AtomicBool::new(false),
         });
         let (stop, stop_rx) = mpsc::channel::<()>();
         let s = shared.clone();
@@ -205,6 +219,19 @@ impl Sampler {
             ctx,
             _stop: stop,
         }
+    }
+
+    /// Turn the sensor-service readings on or off (takes effect on the next sample).
+    pub fn set_use_pawnio(&self, on: bool) {
+        if self.shared.use_pawnio.swap(on, Ordering::Relaxed) != on {
+            self.refresh_sensor_service();
+        }
+    }
+
+    /// Re-check the sensor service on the next sample (e.g. after setting it up).
+    pub fn refresh_sensor_service(&self) {
+        self.shared.service_refresh.store(true, Ordering::Relaxed);
+        self.ctx.request_repaint();
     }
 
     /// Re-read power settings, devices and wake history on the next sample.
@@ -654,11 +681,74 @@ fn backends(info: &SystemInfo) -> (Vec<Box<dyn SensorBackend>>, Vec<String>) {
     (list, errors)
 }
 
+/// Check the sensor service and add (or drop) its backend to match it and the setting. The
+/// service backend sits right after the CPU counters so CPU temperatures lead with the CPU.
+#[cfg(windows)]
+fn refresh_sensor_service(shared: &Shared, backends: &mut Vec<Box<dyn SensorBackend>>) {
+    use omnihw_core::sensor_service::ServiceState;
+    use omnihw_core::win::pawnio::{ServiceBackend, service_status};
+    backends.retain(|b| b.name() != SERVICE_BACKEND);
+    let status = service_status();
+    let on = shared.use_pawnio.load(Ordering::Relaxed)
+        && matches!(status.state, ServiceState::Ready { .. });
+    if on {
+        backends.insert(backends.len().min(1), Box::new(ServiceBackend));
+    }
+    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    if !on {
+        clear_service_readings(&mut snap);
+    }
+    snap.sensor_service = Some(status);
+}
+
+/// Drop the sensor service's readings so turned-off or lost sensors don't show frozen values.
+fn clear_service_readings(snap: &mut Snapshot) {
+    snap.table
+        .retain(|t| !omnihw_core::sensor_service::is_service_reading(&t.reading.id));
+}
+
+/// The service stopped answering mid-session: drop its backend and readings and mark it not
+/// running, so the periodic re-check brings it back when it returns.
+#[cfg(windows)]
+fn sensor_service_lost(shared: &Shared, backends: &mut Vec<Box<dyn SensorBackend>>, e: String) {
+    use omnihw_core::sensor_service::ServiceState;
+    backends.retain(|b| b.name() != SERVICE_BACKEND);
+    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+    clear_service_readings(&mut snap);
+    if let Some(s) = &mut snap.sensor_service {
+        s.state = ServiceState::NotRunning(e);
+    }
+}
+
+#[cfg(not(windows))]
+fn sensor_service_lost(_: &Shared, _: &mut Vec<Box<dyn SensorBackend>>, _: String) {}
+
+#[cfg(not(windows))]
+fn refresh_sensor_service(_: &Shared, _: &mut Vec<Box<dyn SensorBackend>>) {}
+
+/// The sensor service is set up and wanted but wasn't answering at the last check.
+fn service_pending(shared: &Shared) -> bool {
+    use omnihw_core::sensor_service::ServiceState;
+    shared.use_pawnio.load(Ordering::Relaxed)
+        && matches!(
+            shared
+                .snapshot
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .sensor_service
+                .as_ref()
+                .map(|s| &s.state),
+            Some(ServiceState::NotRunning(_))
+        )
+}
+
 fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
     let info = shared.info.get_or_init(SystemInfo::gather);
     ctx.request_repaint();
 
     let (mut backends, init_errors) = backends(info);
+    refresh_sensor_service(&shared, &mut backends);
+    let mut service_check = Instant::now();
     let mut readings = Vec::new();
     let started = Instant::now();
     let mut notifier: Option<Notifier> = None;
@@ -671,12 +761,28 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
             _ => return,
         }
 
+        // Also re-check now and then while a set-up service isn't answering (e.g. still
+        // starting after setup or at boot).
+        if shared.service_refresh.swap(false, Ordering::Relaxed)
+            || (service_check.elapsed() >= SERVICE_RECHECK && service_pending(&shared))
+        {
+            refresh_sensor_service(&shared, &mut backends);
+            service_check = Instant::now();
+        }
         readings.clear();
         let mut errors = init_errors.clone();
+        let mut service_lost = None;
         for b in &mut backends {
+            let before = readings.len();
             if let Err(e) = b.poll(&mut readings) {
+                if b.name() == SERVICE_BACKEND && readings.len() == before {
+                    service_lost = Some(e.clone());
+                }
                 errors.push(format!("{}: {e}", b.name()));
             }
+        }
+        if let Some(e) = service_lost {
+            sensor_service_lost(&shared, &mut backends, e);
         }
 
         let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
@@ -828,5 +934,18 @@ impl Recorder {
         if let Err(e) = res {
             self.write_error = Some(e.to_string());
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use omnihw_core::sensors::SensorBackend;
+
+    #[test]
+    fn service_backend_name_matches() {
+        assert_eq!(
+            omnihw_core::win::pawnio::ServiceBackend.name(),
+            super::SERVICE_BACKEND
+        );
     }
 }
