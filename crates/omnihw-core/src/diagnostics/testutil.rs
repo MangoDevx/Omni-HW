@@ -56,6 +56,7 @@ pub(super) fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context
         power: None,
         network: None,
         whea_live: &[],
+        dumps: None,
     }
 }
 

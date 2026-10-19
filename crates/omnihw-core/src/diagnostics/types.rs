@@ -4,6 +4,7 @@
 use std::fmt::Write;
 
 use crate::SystemInfo;
+use crate::minidump::DumpAnalysis;
 use crate::network::NetworkInfo;
 use crate::power::{Action, PowerInfo};
 use crate::sensors::SensorTable;
@@ -251,6 +252,8 @@ pub struct Context<'a> {
     pub network: Option<&'a NetworkInfo>,
     /// WHEA hardware errors logged while the app runs (the event log query covers earlier ones).
     pub whea_live: &'a [WheaEvent],
+    /// Crash dumps, once the user had them analysed (newest first).
+    pub dumps: Option<&'a [DumpAnalysis]>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

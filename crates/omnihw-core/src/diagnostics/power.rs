@@ -608,6 +608,7 @@ mod tests {
             power: Some(p),
             network: None,
             whea_live: &[],
+            dumps: None,
         }
     }
 
@@ -647,6 +648,7 @@ mod tests {
             power: None,
             network: None,
             whea_live: &[],
+            dumps: None,
         };
         for (_, _, check) in CHECKS {
             assert!(matches!(check(&c), Outcome::Skipped(_)));

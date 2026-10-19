@@ -7,6 +7,7 @@ use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::disktest::{self, DiskTestResult};
 use omnihw_core::lansec::{self, LanScan};
 use omnihw_core::memtest::{self, MemTestResult};
+use omnihw_core::minidump::DumpAnalysis;
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
@@ -95,6 +96,13 @@ pub struct Snapshot {
     pub whea_live: Vec<WheaEvent>,
     /// Bumped whenever `whea_live` gains events.
     pub whea_rev: u64,
+    /// Analysed crash dumps (newest first), or why they couldn't be read; None until the user
+    /// asks for them.
+    pub dumps: Option<Result<Vec<DumpAnalysis>, String>>,
+    /// Crash dumps are being read.
+    pub dumps_busy: bool,
+    /// Bumped whenever `dumps` or `dumps_busy` changes.
+    pub dumps_rev: u64,
 }
 
 /// State of the LAN Security Report scan.
@@ -460,6 +468,31 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().net_internet.running = false;
+        }
+    }
+
+    /// Analyse the newest crash dumps (asks for administrator rights unless elevated). Only on
+    /// the user's click.
+    pub fn read_dumps(&self) {
+        {
+            let mut snap = self.snapshot();
+            if snap.dumps_busy {
+                return;
+            }
+            snap.dumps_busy = true;
+            snap.dumps_rev += 1;
+        }
+        // Show the spinner now, not only after the (possibly long) UAC prompt.
+        self.ctx.request_repaint();
+        let ok = self.worker("omnihw-dumps", crate::dump_ops::read_dumps, |r, snap| {
+            snap.dumps = Some(r);
+            snap.dumps_busy = false;
+            snap.dumps_rev += 1;
+        });
+        if !ok {
+            let mut snap = self.snapshot();
+            snap.dumps_busy = false;
+            snap.dumps_rev += 1;
         }
     }
 

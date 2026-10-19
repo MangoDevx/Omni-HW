@@ -17,6 +17,7 @@ pub mod lansec;
 mod le;
 pub mod lowlevel;
 pub mod memtest;
+pub mod minidump;
 pub mod network;
 pub mod power;
 pub mod recording;
