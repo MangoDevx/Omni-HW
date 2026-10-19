@@ -4,6 +4,12 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 
 ## Unreleased
 
+### New
+- **Event Log** page (Monitoring → Event Log): critical System and Application events from the last 30 days, such as unexpected shutdowns, blue screens, hardware errors, GPU driver timeouts and disk problems, explained in plain English, with filters, search and copy.
+- **Crash dump analysis** (Health Check → blue screen finding): reads Windows crash dumps to show each crash's stop code and the driver it points at, with a fix step for that driver. Windows asks for administrator permission only when you click the button.
+- **Live hardware error (WHEA) detection**: hardware errors logged while Omni-HW runs show up right away in the Health Check, and as a warning on the memory test and disk speed test results when they happen during a test.
+- Health Check: new check for GPU driver timeouts (TDR).
+
 ### Improved
 - The navigation bar shows "Running as administrator" in yellow while Omni-HW has administrator rights.
 

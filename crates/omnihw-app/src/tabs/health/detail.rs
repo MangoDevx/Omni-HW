@@ -115,9 +115,11 @@ fn dump_button(ui: &mut Ui, dumps: &DumpStatus) {
         };
         if ui
             .add_enabled(!dumps.busy, egui::Button::new(label))
-            .on_hover_text(
-                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps.",
-            )
+            .on_hover_text(if crate::elevate::elevated() {
+                "Reads C:\\Windows\\Minidump."
+            } else {
+                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps."
+            })
             .clicked()
         {
             temp::set(ui.ctx(), read_dumps_id(), true);
