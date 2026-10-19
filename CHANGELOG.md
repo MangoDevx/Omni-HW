@@ -2,7 +2,9 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
-## Unreleased
+## 0.4.0
+
+> **BETA.** This release adds several large new features (extra sensors through PawnIO, the LAN Security Report, memory and disk speed tests). Please report anything that doesn't work right on your PC.
 
 ### New
 - **LAN Security Report** (Network → LAN Security Report): scans your own local network for devices and common security problems — clear-text logins (Telnet, FTP), exposed admin pages, unauthenticated databases, remote-desktop ports and more — and lists ranked findings with plain explanations and links to fix steps. It stays on your local network, runs only when you click, and changes nothing.
