@@ -19,6 +19,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             uptime_secs: None,
             power: None,
             network: None,
+            whea_live: &[],
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -150,7 +151,7 @@ fn check_description(name: &str) -> &'static str {
             "Devices with a problem in Device Manager, usually missing chipset, network or audio drivers."
         }
         "Hardware errors (WHEA)" => {
-            "CPU, memory and PCIe hardware errors logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock."
+            "CPU, memory and PCIe hardware errors logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock. New ones are picked up live while Omni-HW runs, with the CPU core (APIC ID) or PCIe device they came from."
         }
         "Blue screens and unexpected restarts" => {
             "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days."

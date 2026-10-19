@@ -103,6 +103,30 @@ pub fn ago(t: std::time::SystemTime) -> String {
     }
 }
 
+/// Warning under a memory or disk test when WHEA hardware errors were logged during it: red if
+/// any was fatal, else orange. Shows nothing when there were none.
+pub fn whea_warning(ui: &mut Ui, events: &[omnihw_core::whea::WheaEvent]) {
+    let Some(text) = omnihw_core::whea::during_test_text(events) else {
+        return;
+    };
+    let color = if events.iter().any(|e| e.fatal) {
+        crate::heat::RED
+    } else {
+        crate::heat::ORANGE
+    };
+    let hover = events
+        .iter()
+        .rev()
+        .take(10)
+        .map(|e| e.summary.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    ui.add(
+        egui::Label::new(RichText::new(text).color(crate::heat::ink(ui.visuals(), color))).wrap(),
+    )
+    .on_hover_text(hover);
+}
+
 /// Per-page values kept in egui's temporary memory (dialog flags, edit buffers, last errors).
 pub mod temp {
     use egui::{Context, Id};
