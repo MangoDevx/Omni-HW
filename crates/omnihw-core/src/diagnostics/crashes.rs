@@ -1,5 +1,5 @@
 //! Crash checks: WHEA hardware errors, blue screens and unexpected restarts from the System
-//! event log.
+//! event log, plus WHEA errors logged while the app runs.
 
 use super::helpers::{
     DDU_URL, board_drivers_step, count_text, format_date, guided, memory_test_steps, plural,
@@ -9,6 +9,9 @@ use crate::bios_help::{self, BiosSetting};
 use crate::checkup::{
     CrashCause, EVENT_DAYS, Event, base_stop_code, crash_cause, stop_code_label, stop_code_name,
 };
+use crate::civil_from_days;
+use crate::whea::{WheaEvent, most_common_location};
+use std::time::UNIX_EPOCH;
 
 /// Date of the most recent event, or "" when there are none.
 fn last_date<'a>(events: impl IntoIterator<Item = &'a Event>) -> String {
@@ -34,17 +37,65 @@ fn stability_steps(ctx: &Context) -> Vec<Step> {
     steps
 }
 
+/// A live WHEA event as an event log entry, for counting alongside the startup query.
+fn live_event(e: &WheaEvent) -> Event {
+    let days = e
+        .time
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |d| (d.as_secs() / 86_400) as i64);
+    Event {
+        id: e.id,
+        date: civil_from_days(days),
+        code: None,
+    }
+}
+
+/// " 2 of them were logged while Omni-HW was running. Most errors came from CPU APIC ID 5."
+/// for the live events with these IDs, or "".
+fn live_text(live: &[WheaEvent], ids: &[u32]) -> String {
+    let live: Vec<WheaEvent> = live
+        .iter()
+        .filter(|e| ids.contains(&e.id))
+        .cloned()
+        .collect();
+    let mut s = String::new();
+    if !live.is_empty() {
+        s += &format!(
+            " {} logged while Omni-HW was running.",
+            if live.len() == 1 {
+                "1 of them was".to_string()
+            } else {
+                format!("{} of them were", live.len())
+            }
+        );
+    }
+    if let Some((loc, _)) = most_common_location(&live) {
+        s += &format!(" Most errors came from {loc}.");
+    }
+    s
+}
+
 pub(super) fn whea_errors(ctx: &Context) -> Outcome {
-    let Some(ev) = &ctx.info.checkup.events else {
-        return Outcome::Skipped("System event log not readable".into());
+    let none = Vec::new();
+    let past = match &ctx.info.checkup.events {
+        Some(ev) => &ev.whea,
+        None if ctx.whea_live.is_empty() => {
+            return Outcome::Skipped("System event log not readable".into());
+        }
+        None => &none,
     };
-    if ev.whea.is_empty() {
+    let live: Vec<Event> = ctx.whea_live.iter().map(live_event).collect();
+    if past.is_empty() && live.is_empty() {
         return Outcome::Pass(format!(
             "No hardware errors logged in the last {EVENT_DAYS} days"
         ));
     }
-    let by =
-        |ids: &[u32]| -> Vec<&Event> { ev.whea.iter().filter(|e| ids.contains(&e.id)).collect() };
+    let by = |ids: &[u32]| -> Vec<&Event> {
+        past.iter()
+            .chain(&live)
+            .filter(|e| ids.contains(&e.id))
+            .collect()
+    };
     let fatal = by(&[18]);
     let corrected_cpu_mem = by(&[19, 47]);
     let pcie = by(&[17]);
@@ -61,14 +112,15 @@ pub(super) fn whea_errors(ctx: &Context) -> Outcome {
                 Category::System,
                 format!("{} hardware errors in the last {EVENT_DAYS} days", count_text(n)),
                 format!(
-                    "Windows logged {} CPU/memory hardware errors (WHEA-Logger{}), most recently on {}. On a new build this almost always means an unstable memory profile (XMP/EXPO), CPU overclock (PBO) or undervolt.",
+                    "Windows logged {} CPU/memory hardware errors (WHEA-Logger{}), most recently on {}.{} On a new build this almost always means an unstable memory profile (XMP/EXPO), CPU overclock (PBO) or undervolt.",
                     count_text(n),
                     if fatal.is_empty() {
                         String::new()
                     } else {
                         format!(", {} of them fatal", fatal.len())
                     },
-                    last_date(fatal.iter().chain(&corrected_cpu_mem).copied())
+                    last_date(fatal.iter().chain(&corrected_cpu_mem).copied()),
+                    live_text(ctx.whea_live, &[18, 19, 47])
                 ),
                 stability_steps(ctx),
             )
@@ -81,9 +133,10 @@ pub(super) fn whea_errors(ctx: &Context) -> Outcome {
             Category::System,
             format!("{} corrected PCIe errors in the last {EVENT_DAYS} days", count_text(pcie.len())),
             format!(
-                "Windows corrected {} PCI Express errors (WHEA-Logger event 17), most recently on {}. They are fixed automatically, but frequent ones point at a device (often the graphics card or an NVMe drive) that isn't seated well or a link that's marginal.",
+                "Windows corrected {} PCI Express errors (WHEA-Logger event 17), most recently on {}.{} They are fixed automatically, but frequent ones point at a device (often the graphics card or an NVMe drive) that isn't seated well or a link that's marginal.",
                 count_text(pcie.len()),
-                last_date(pcie.iter().copied())
+                last_date(pcie.iter().copied()),
+                live_text(ctx.whea_live, &[17])
             ),
             vec![
                 Step::new("Reseat the graphics card and M.2 drives, and check any riser cable."),
@@ -244,6 +297,8 @@ mod tests {
     use crate::SystemInfo;
     use crate::checkup::Events;
     use crate::sensors::SensorTable;
+    use crate::whea::{PciAddr, WheaKind};
+    use std::time::Duration;
 
     fn ev(id: u32, code: Option<u32>) -> Event {
         Event {
@@ -286,5 +341,81 @@ mod tests {
         assert!(f[0].steps.iter().any(|s| s.text.contains("DDU")));
         assert!(f[1].title.starts_with("2 unexpected restarts"));
         assert_eq!(levels(&memory_diagnostic(&c)), vec![Level::Critical]);
+    }
+
+    fn live(id: u32, apic_id: Option<u32>, pcie: Option<PciAddr>) -> WheaEvent {
+        WheaEvent {
+            record_id: 1,
+            id,
+            // 2026-10-12 00:00:10 UTC.
+            time: Some(UNIX_EPOCH + Duration::from_secs(20_738 * 86_400 + 10)),
+            fatal: id == 18,
+            kind: if id == 17 {
+                WheaKind::Pcie
+            } else {
+                WheaKind::Cache
+            },
+            source: String::new(),
+            apic_id,
+            mca_bank: None,
+            pcie,
+            device: None,
+            summary: String::new(),
+        }
+    }
+
+    #[test]
+    fn live_whea_events() {
+        let s = SensorTable::default();
+        let mut info = SystemInfo::default();
+        let gpu = PciAddr {
+            bus: 1,
+            device: 0,
+            function: 0,
+        };
+        let events = [
+            live(19, Some(5), None),
+            live(19, Some(5), None),
+            live(19, Some(2), None),
+            live(17, None, Some(gpu)),
+        ];
+        // Counted even when the startup query failed.
+        let c = Context {
+            whea_live: &events,
+            ..ctx(&info, &s)
+        };
+        let o = whea_errors(&c);
+        assert_eq!(levels(&o), vec![Level::Warning, Level::Info]);
+        let Outcome::Findings(f) = o else {
+            unreachable!()
+        };
+        assert!(f[0].title.starts_with("3 hardware errors"));
+        assert!(f[0].detail.contains("most recently on 2026-10-12"));
+        assert!(
+            f[0].detail
+                .contains("3 of them were logged while Omni-HW was running")
+        );
+        assert!(f[0].detail.contains("Most errors came from CPU APIC ID 5."));
+        assert!(f[1].detail.contains("1 of them was logged"));
+        assert!(f[1].detail.contains("from PCIe device 01:00.0"));
+
+        // Added to the startup query's events; a live fatal error makes it critical.
+        info.checkup.events = Some(Events {
+            whea: vec![ev(19, None), ev(47, None)],
+            ..Default::default()
+        });
+        let events = [live(18, None, None)];
+        let c = Context {
+            whea_live: &events,
+            ..ctx(&info, &s)
+        };
+        let o = whea_errors(&c);
+        assert_eq!(levels(&o), vec![Level::Critical]);
+        let Outcome::Findings(f) = o else {
+            unreachable!()
+        };
+        assert!(f[0].title.starts_with("3 hardware errors"));
+        assert!(f[0].detail.contains("1 of them fatal"));
+        assert!(!f[0].detail.contains("Most errors came from"));
     }
 }

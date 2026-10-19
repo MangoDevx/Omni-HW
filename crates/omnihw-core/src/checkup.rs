@@ -227,7 +227,7 @@ pub struct Event {
 }
 
 /// Text between `<tag ...>` and `</tag>`, first occurrence.
-fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+pub(crate) fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     let start = xml.find(&format!("<{tag}"))?;
     let rest = &xml[start..];
     let open_end = rest.find('>')?;

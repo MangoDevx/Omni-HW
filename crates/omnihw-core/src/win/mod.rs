@@ -29,6 +29,8 @@ pub mod storage;
 #[cfg(windows)]
 mod system;
 #[cfg(windows)]
+pub mod whea;
+#[cfg(windows)]
 pub(crate) mod wide;
 #[cfg(windows)]
 mod wmi;

@@ -12,6 +12,7 @@ use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
 use omnihw_core::sensor_service::ServiceStatus;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
+use omnihw_core::whea::WheaEvent;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -24,6 +25,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 /// Fired alerts kept for the log.
 const ALERT_LOG_LEN: usize = 200;
+/// Live WHEA events kept.
+const WHEA_LIVE_LEN: usize = 200;
+/// Event log times are whole seconds, so a run's start and end get this much slack.
+const WHEA_SLACK: Duration = Duration::from_secs(1);
 /// How often power plan settings are re-read (devices and wake history only on request).
 const POWER_SETTINGS_EVERY: Duration = Duration::from_secs(30);
 /// Network adapter re-reads (addresses, link, Wi-Fi) while the Network page is open / closed.
@@ -86,6 +91,10 @@ pub struct Snapshot {
     pub mem_test: MemTestState,
     /// The optional sensor service (PawnIO): `None` until checked, or off Windows.
     pub sensor_service: Option<ServiceStatus>,
+    /// WHEA hardware errors logged since the app started, newest last.
+    pub whea_live: Vec<WheaEvent>,
+    /// Bumped whenever `whea_live` gains events.
+    pub whea_rev: u64,
 }
 
 /// State of the LAN Security Report scan.
@@ -107,6 +116,8 @@ pub struct DiskTestState {
     pub progress: Arc<disktest::Progress>,
     /// The last result per drive index, with the time it finished.
     pub results: HashMap<u32, (Result<DiskTestResult, String>, SystemTime)>,
+    /// Per drive index: when its last run started and the WHEA errors logged during it.
+    pub whea: HashMap<u32, (SystemTime, Vec<WheaEvent>)>,
 }
 
 /// State of the Memory page's quick bandwidth/latency test.
@@ -117,6 +128,10 @@ pub struct MemTestState {
     pub progress: Arc<memtest::Progress>,
     /// The last finished test (or why it failed), with the time it ran.
     pub result: Option<(Result<MemTestResult, String>, SystemTime)>,
+    /// When the last run started.
+    pub started: Option<SystemTime>,
+    /// WHEA errors logged during the last (or running) test.
+    pub whea_during: Vec<WheaEvent>,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -493,6 +508,9 @@ impl Sampler {
                 return;
             }
             snap.disk_test.running = Some(drive_index);
+            snap.disk_test
+                .whea
+                .insert(drive_index, (SystemTime::now(), Vec::new()));
             snap.disk_test.progress = Arc::new(disktest::Progress::default());
             snap.disk_test.progress.clone()
         };
@@ -524,6 +542,8 @@ impl Sampler {
                 running: true,
                 progress: Arc::new(memtest::Progress::default()),
                 result: snap.mem_test.result.take(),
+                started: Some(SystemTime::now()),
+                whea_during: Vec::new(),
             };
             snap.mem_test.progress.clone()
         };
@@ -747,6 +767,9 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
     ctx.request_repaint();
 
     let (mut backends, init_errors) = backends(info);
+    // Past WHEA errors come from the startup query; this sees only new ones.
+    #[cfg(windows)]
+    let mut whea = omnihw_core::win::whea::WheaWatcher::new();
     refresh_sensor_service(&shared, &mut backends);
     let mut service_check = Instant::now();
     let mut readings = Vec::new();
@@ -785,8 +808,16 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
             sensor_service_lost(&shared, &mut backends, e);
         }
 
+        #[cfg(windows)]
+        let new_whea = whea.as_mut().map(|w| w.poll()).unwrap_or_default();
+        #[cfg(not(windows))]
+        let new_whea: Vec<WheaEvent> = Vec::new();
+
         let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         snap.table.update(readings.drain(..));
+        if !new_whea.is_empty() {
+            record_whea(&mut snap, new_whea);
+        }
         if shared.reset.swap(false, Ordering::Relaxed) {
             snap.table.reset_stats();
         }
@@ -830,6 +861,55 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
         update_network(&shared, &ctx, &mut network_read);
         ctx.request_repaint();
     }
+}
+
+/// Whether an event logged at `t` falls in a test run from `start` to `end` (None: running).
+fn during(t: Option<SystemTime>, start: SystemTime, end: Option<SystemTime>) -> bool {
+    // Without a time it can only have been seen now, so it counts while the test runs.
+    let Some(t) = t else { return end.is_none() };
+    t + WHEA_SLACK >= start && end.is_none_or(|e| t <= e + WHEA_SLACK)
+}
+
+/// Add newly logged WHEA events to the live list, and to a memory or disk test that was
+/// running when they were logged (they can be read a moment after the test ends).
+fn record_whea(snap: &mut Snapshot, events: Vec<WheaEvent>) {
+    let mem = &mut snap.mem_test;
+    if let Some(start) = mem.started {
+        let end = if mem.running {
+            None
+        } else {
+            mem.result.as_ref().map(|r| r.1)
+        };
+        if mem.running || end.is_some() {
+            mem.whea_during.extend(
+                events
+                    .iter()
+                    .filter(|e| during(e.time, start, end))
+                    .cloned(),
+            );
+        }
+    }
+    let disk = &mut snap.disk_test;
+    for (index, (start, list)) in &mut disk.whea {
+        let end = if disk.running == Some(*index) {
+            None
+        } else {
+            match disk.results.get(index) {
+                Some((_, at)) => Some(*at),
+                None => continue,
+            }
+        };
+        list.extend(
+            events
+                .iter()
+                .filter(|e| during(e.time, *start, end))
+                .cloned(),
+        );
+    }
+    snap.whea_live.extend(events);
+    let excess = snap.whea_live.len().saturating_sub(WHEA_LIVE_LEN);
+    snap.whea_live.drain(..excess);
+    snap.whea_rev += 1;
 }
 
 /// Read power info outside the snapshot lock: everything at startup and on request, plan
@@ -947,5 +1027,74 @@ mod tests {
             omnihw_core::win::pawnio::ServiceBackend.name(),
             super::SERVICE_BACKEND
         );
+    }
+}
+
+#[cfg(test)]
+mod whea_tests {
+    use super::*;
+    use omnihw_core::whea::WheaKind;
+
+    fn event(time: SystemTime) -> WheaEvent {
+        WheaEvent {
+            record_id: 1,
+            id: 19,
+            time: Some(time),
+            fatal: false,
+            kind: WheaKind::Interconnect,
+            source: String::new(),
+            apic_id: Some(5),
+            mca_bank: None,
+            pcie: None,
+            device: None,
+            summary: String::new(),
+        }
+    }
+
+    #[test]
+    fn events_during_a_run() {
+        let start = UNIX_EPOCH + Duration::from_secs(1_000);
+        let end = start + Duration::from_secs(10);
+        let at = |s: u64| Some(UNIX_EPOCH + Duration::from_secs(s));
+        assert!(during(at(1_000), start, None));
+        assert!(during(at(999), start, None));
+        assert!(!during(at(990), start, None));
+        assert!(during(at(1_010), start, Some(end)));
+        assert!(!during(at(1_020), start, Some(end)));
+        assert!(during(None, start, None));
+        assert!(!during(None, start, Some(end)));
+    }
+
+    #[test]
+    fn record_attributes_to_running_and_just_finished_tests() {
+        let mut snap = Snapshot::default();
+        let start = SystemTime::now() - Duration::from_secs(30);
+        // Memory test running; drive 0 finished 10 s ago; drive 1 never finished.
+        snap.mem_test.running = true;
+        snap.mem_test.started = Some(start);
+        snap.disk_test.whea.insert(0, (start, Vec::new()));
+        snap.disk_test.results.insert(
+            0,
+            (Err("x".into()), SystemTime::now() - Duration::from_secs(10)),
+        );
+        snap.disk_test.whea.insert(1, (start, Vec::new()));
+        // Logged 15 s ago (during both runs), then now (after the disk test ended).
+        record_whea(
+            &mut snap,
+            vec![
+                event(SystemTime::now() - Duration::from_secs(15)),
+                event(SystemTime::now()),
+            ],
+        );
+        assert_eq!(snap.whea_live.len(), 2);
+        assert_eq!(snap.whea_rev, 1);
+        assert_eq!(snap.mem_test.whea_during.len(), 2);
+        assert_eq!(snap.disk_test.whea[&0].1.len(), 1);
+        assert!(snap.disk_test.whea[&1].1.is_empty());
+
+        // The live list is capped, oldest dropped.
+        record_whea(&mut snap, vec![event(SystemTime::now()); WHEA_LIVE_LEN + 5]);
+        assert_eq!(snap.whea_live.len(), WHEA_LIVE_LEN);
+        assert_eq!(snap.whea_rev, 2);
     }
 }

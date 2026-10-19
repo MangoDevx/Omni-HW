@@ -39,7 +39,7 @@ pub(super) fn hardware(ui: &mut Ui) {
     h(ui, "Memory");
     p(
         ui,
-        "Memory type, installed and usable size, slots used, configured speed and live load, plus a table of every module with its size, rated and configured speed, ranks, maker and part number.",
+        "Memory type, installed and usable size, slots used, configured speed and live load, plus a table of every module with its size, rated and configured speed, ranks, maker and part number. The quick memory test measures bandwidth and latency; any hardware errors (WHEA) Windows logs while it runs are shown under the result, since they mean the memory or CPU is unstable.",
     );
     h(ui, "GPU");
     bullets(
@@ -71,6 +71,7 @@ pub(super) fn hardware(ui: &mut Ui) {
             "NVMe health: health %, spare capacity, temperature, data written and read, power-on hours, power cycles, unsafe shutdowns, media errors and warnings.",
             "SATA health (SMART): reallocated, pending and uncorrectable sectors, SSD life left, temperature and the full attribute table. Needs administrator rights.",
             "Live sensors: temperature, activity and read/write speed.",
+            "Speed test: sequential and 4K random read/write speed; any hardware errors (WHEA, e.g. PCIe errors) Windows logs while it runs are shown under the result.",
         ],
     );
 }

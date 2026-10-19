@@ -14,13 +14,13 @@ const BATCH: usize = 32;
 const NEXT_TIMEOUT_MS: u32 = 5000;
 
 /// Take ownership of an event log handle so it is closed with `EvtClose` on drop.
-fn own(h: EVT_HANDLE) -> Owned<EVT_HANDLE> {
+pub(crate) fn own(h: EVT_HANDLE) -> Owned<EVT_HANDLE> {
     // SAFETY: callers pass a handle freshly returned by EvtQuery/EvtNext, owned by nobody else.
     unsafe { Owned::new(h) }
 }
 
 /// One event rendered as XML.
-fn render_xml(ev: EVT_HANDLE) -> Option<String> {
+pub(crate) fn render_xml(ev: EVT_HANDLE) -> Option<String> {
     let (mut used, mut count) = (0u32, 0u32);
     // SAFETY: size query without a buffer (fails with ERROR_INSUFFICIENT_BUFFER, filling
     // `used` with the size in bytes).

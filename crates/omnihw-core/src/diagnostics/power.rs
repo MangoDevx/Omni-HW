@@ -607,6 +607,7 @@ mod tests {
             uptime_secs: Some(3600),
             power: Some(p),
             network: None,
+            whea_live: &[],
         }
     }
 
@@ -645,6 +646,7 @@ mod tests {
             uptime_secs: None,
             power: None,
             network: None,
+            whea_live: &[],
         };
         for (_, _, check) in CHECKS {
             assert!(matches!(check(&c), Outcome::Skipped(_)));

@@ -7,6 +7,7 @@ use crate::SystemInfo;
 use crate::network::NetworkInfo;
 use crate::power::{Action, PowerInfo};
 use crate::sensors::SensorTable;
+use crate::whea::WheaEvent;
 
 /// How serious a finding is; ordered so the most severe sorts last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -248,6 +249,8 @@ pub struct Context<'a> {
     pub power: Option<&'a PowerInfo>,
     /// Network adapters, once gathered.
     pub network: Option<&'a NetworkInfo>,
+    /// WHEA hardware errors logged while the app runs (the event log query covers earlier ones).
+    pub whea_live: &'a [WheaEvent],
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

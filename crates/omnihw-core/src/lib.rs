@@ -27,6 +27,7 @@ pub mod smart;
 pub mod smbios;
 pub mod storage;
 pub mod topology;
+pub mod whea;
 pub mod win;
 
 use codename::Codename;

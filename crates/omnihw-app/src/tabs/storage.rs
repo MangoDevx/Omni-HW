@@ -246,6 +246,9 @@ fn speed_test(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, link: Option<&PcieL
             }
             None => {}
         }
+        if let Some((_, events)) = state.whea.get(&d.index) {
+            super::whea_warning(ui, events);
+        }
     });
 }
 

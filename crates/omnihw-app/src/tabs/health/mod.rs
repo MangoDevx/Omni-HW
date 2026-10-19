@@ -34,17 +34,19 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         uptime_secs: omnihw_core::win::uptime_secs(),
         power: snap.power.as_ref(),
         network: snap.network.as_ref(),
+        whea_live: &snap.whea_live,
     };
     diagnostics::run(&ctx)
 }
 
 /// Health Check results for the Health tab and the Overview banner. The checks only see data
-/// that changes with a new sample, new power info or a (un)dismissal, so they run then rather
-/// than on every frame (hovering alone repaints at the display rate).
+/// that changes with a new sample, new power info, new WHEA errors or a (un)dismissal, so they
+/// run then rather than on every frame (hovering alone repaints at the display rate).
 #[derive(Default)]
 pub struct HealthCache {
-    /// (sample count, power revision, dismissed revision, show gaming) the report was built for.
-    key: Option<(u64, u64, u64, bool)>,
+    /// (sample count, power revision, live WHEA revision, dismissed revision, show gaming) the
+    /// report was built for.
+    key: Option<(u64, u64, u64, u64, bool)>,
     report: Report,
 }
 
@@ -55,6 +57,7 @@ impl HealthCache {
         let key = (
             snap.samples,
             snap.power_rev,
+            snap.whea_rev,
             crate::dismissed::revision(),
             show_gaming,
         );
