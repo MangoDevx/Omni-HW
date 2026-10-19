@@ -24,7 +24,10 @@ pub const GROUPS: [(&str, &[Tab]); 3] = [
         ],
     ),
     ("Network", &[Tab::Network, Tab::LanSecurity]),
-    ("Monitoring", &[Tab::Sensors, Tab::Recording, Tab::Alerts]),
+    (
+        "Monitoring",
+        &[Tab::Sensors, Tab::Recording, Tab::Alerts, Tab::EventLog],
+    ),
 ];
 
 /// Top-level entries of the grouped bar that hold pages, left to right. Record and Report are
@@ -142,6 +145,8 @@ mod tests {
         let c = NavStyle::Classic;
         assert_eq!(go(c, Tab::Overview, Arrow::Right), Some(Tab::Health));
         assert_eq!(go(c, Tab::Power, Arrow::Right), Some(Tab::Sensors));
+        assert_eq!(go(c, Tab::Alerts, Arrow::Right), Some(Tab::EventLog));
+        assert_eq!(go(c, Tab::EventLog, Arrow::Right), Some(Tab::About));
         assert_eq!(go(c, Tab::About, Arrow::Right), Some(Tab::Settings));
         assert_eq!(go(c, Tab::Settings, Arrow::Right), Some(Tab::Overview));
         assert_eq!(go(c, Tab::Overview, Arrow::Left), Some(Tab::Settings));
@@ -160,6 +165,7 @@ mod tests {
         assert_eq!(go(g, Tab::Gpu, Arrow::Right), Some(Tab::Network));
         assert_eq!(go(g, Tab::Network, Arrow::Right), Some(Tab::Sensors));
         assert_eq!(go(g, Tab::Alerts, Arrow::Right), Some(Tab::About));
+        assert_eq!(go(g, Tab::EventLog, Arrow::Right), Some(Tab::About));
         assert_eq!(go(g, Tab::Settings, Arrow::Right), Some(Tab::Overview));
         assert_eq!(go(g, Tab::Overview, Arrow::Left), Some(Tab::Settings));
         assert_eq!(go(g, Tab::Sensors, Arrow::Left), Some(Tab::Network));
@@ -187,6 +193,12 @@ mod tests {
         assert_eq!(go(g, Tab::Network, Arrow::Down), Some(Tab::LanSecurity));
         assert_eq!(go(g, Tab::LanSecurity, Arrow::Up), Some(Tab::Network));
         assert_eq!(go(g, Tab::Sensors, Arrow::Down), Some(Tab::Recording));
+        assert_eq!(go(g, Tab::Alerts, Arrow::Down), Some(Tab::EventLog));
+        assert_eq!(
+            go(g, Tab::EventLog, Arrow::Down),
+            None,
+            "stops at the bottom"
+        );
         assert_eq!(
             go(g, Tab::Overview, Arrow::Down),
             None,

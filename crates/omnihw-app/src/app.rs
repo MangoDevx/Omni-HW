@@ -21,12 +21,13 @@ pub enum Tab {
     Sensors,
     Recording,
     Alerts,
+    EventLog,
     About,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 15] = [
+    pub const ALL: [Tab; 16] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -41,6 +42,7 @@ impl Tab {
         Tab::Sensors,
         Tab::Recording,
         Tab::Alerts,
+        Tab::EventLog,
         Tab::About,
     ];
 
@@ -60,6 +62,7 @@ impl Tab {
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
             Tab::Alerts => "Alerts",
+            Tab::EventLog => "Event Log",
             Tab::About => "About",
             Tab::Settings => "Settings",
         }
@@ -82,6 +85,7 @@ impl Tab {
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
             Tab::Alerts => "alerts",
+            Tab::EventLog => "eventlog",
             Tab::About => "about",
             Tab::Settings => "settings",
         }
@@ -112,6 +116,7 @@ pub struct OmniApp {
     status: Option<(String, Instant)>,
     rec_view: tabs::recording::ViewState,
     alerts_view: tabs::alerts::ViewState,
+    event_log_view: tabs::eventlog::ViewState,
     /// Window handle passed to the sampler for notifications.
     hwnd_sent: bool,
     /// Started with `--minimized` (launch at startup); minimize on the first frame.
@@ -155,6 +160,7 @@ impl OmniApp {
             status: None,
             rec_view: Default::default(),
             alerts_view: Default::default(),
+            event_log_view: Default::default(),
             hwnd_sent: false,
             minimize_on_start: crate::autostart::launch_flags().1,
             help: Default::default(),
@@ -407,6 +413,16 @@ impl eframe::App for OmniApp {
         if on_network && self.last_tab != Some(Tab::Network) {
             self.sampler.refresh_network();
         }
+        // Read the event logs the first time the Event Log page is opened (Refresh re-reads).
+        if self.tab == Tab::EventLog && self.last_tab != Some(Tab::EventLog) {
+            let unread = {
+                let snap = self.sampler.snapshot();
+                snap.event_log.is_none() && !snap.event_log_busy
+            };
+            if unread {
+                self.sampler.read_event_log();
+            }
+        }
         self.last_tab = Some(self.tab);
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -439,6 +455,10 @@ impl eframe::App for OmniApp {
                     if self.tab == Tab::Alerts {
                         // Takes the snapshot lock itself.
                         return tabs::alerts::show(ui, info, &self.sampler, &mut self.alerts_view);
+                    }
+                    if self.tab == Tab::EventLog {
+                        // Takes the snapshot lock itself, briefly.
+                        return tabs::eventlog::show(ui, &self.sampler, &mut self.event_log_view);
                     }
                     if self.tab == Tab::Sensors {
                         // Takes the snapshot lock itself.
@@ -478,6 +498,7 @@ impl eframe::App for OmniApp {
                         Tab::Sensors
                         | Tab::Recording
                         | Tab::Alerts
+                        | Tab::EventLog
                         | Tab::Settings
                         | Tab::Health => {
                             unreachable!()

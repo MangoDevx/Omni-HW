@@ -155,6 +155,9 @@ fn check_description(name: &str) -> &'static str {
         "Blue screens and unexpected restarts" => {
             "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days."
         }
+        "GPU driver timeouts (TDR)" => {
+            "Times Windows reset a graphics driver that stopped responding in the last 30 days (Display 4101, LiveKernelEvent 141/117): one is a note, two or more a warning."
+        }
         "Ethernet link speed" => {
             "Wired network connected at 100 Mbps or less (a bad cable or port), or below the adapter's maximum (e.g. 1 Gbps on a 2.5 Gbps adapter, a suggestion)."
         }

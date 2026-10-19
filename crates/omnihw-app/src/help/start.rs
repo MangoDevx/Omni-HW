@@ -18,7 +18,7 @@ pub(super) fn getting_started(ui: &mut Ui) {
             "Overview: a one-page dashboard of CPU, GPU, memory, storage and system, with live numbers and graphs.",
             "Health Check: automatic checks that flag common problems and explain how to fix them.",
             "Hardware menu: CPU, Caches, Mainboard, Memory, GPU, Storage, Power - detailed hardware information, like CPU-Z and GPU-Z. The button shows the open page, e.g. \"Hardware: GPU\".",
-            "Monitoring menu: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis) and Alerts (Windows notifications when a sensor crosses a limit).",
+            "Monitoring menu: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis), Alerts (Windows notifications when a sensor crosses a limit) and Event Log (crashes, hardware errors and driver timeouts Windows logged, in plain English).",
             "On the right: Record (start/stop a recording from any tab), Report (save an HTML report or copy a text one), Info (this guide and About) and Settings.",
             "Prefer every page as its own tab? Settings > Navigation bar > Classic.",
         ],
