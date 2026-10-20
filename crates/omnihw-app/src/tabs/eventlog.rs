@@ -49,6 +49,54 @@ fn now_unix() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
+/// "Analyze crash dumps" for the logged blue screens, and what the dumps point at. The same
+/// results feed the Health Check's blue screen finding.
+fn crash_dumps(ui: &mut Ui, sampler: &Sampler) {
+    let (dumps, busy) = {
+        let snap = sampler.snapshot();
+        (snap.dumps.clone(), snap.dumps_busy)
+    };
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        let (label, hover) = if crate::elevate::elevated() {
+            ("Analyze crash dumps", "Reads C:\\Windows\\Minidump.")
+        } else {
+            (
+                "Analyze crash dumps (asks for administrator)",
+                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps.",
+            )
+        };
+        if ui
+            .add_enabled(!busy, Button::new(label))
+            .on_hover_text(hover)
+            .clicked()
+        {
+            sampler.read_dumps();
+        }
+        if busy {
+            ui.spinner();
+        }
+    });
+    match dumps {
+        _ if busy => {}
+        Some(Err(e)) => {
+            ui.colored_label(
+                ink(ui.visuals(), RED),
+                format!("Couldn't read crash dumps: {e}"),
+            );
+        }
+        Some(Ok(d)) if d.is_empty() => {
+            ui.weak("No crash dumps found");
+        }
+        Some(Ok(d)) => {
+            for line in d.iter().map(omnihw_core::diagnostics::dump_line) {
+                ui.label(format!("• {line}"));
+            }
+        }
+        None => {}
+    }
+}
+
 pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
     // Only an Arc clone under the lock.
     let (log, busy) = {
@@ -85,6 +133,13 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
     }
     for e in &log.errors {
         ui.colored_label(ink(ui.visuals(), ORANGE), format!("Couldn't read the {e}"));
+    }
+    if log
+        .entries
+        .iter()
+        .any(|e| e.category == EventCategory::BlueScreen)
+    {
+        crash_dumps(ui, sampler);
     }
     ui.add_space(4.0);
 

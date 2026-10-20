@@ -19,7 +19,7 @@ mod system;
 mod testutil;
 mod types;
 
-pub use crashes::{CRASHES_CHECK, is_blue_screen_finding};
+pub use crashes::{CRASHES_CHECK, dump_line, is_blue_screen_finding};
 pub use memory::{channel_letter, rated_speed_from_part};
 pub use system::parse_bios_date;
 pub use types::{

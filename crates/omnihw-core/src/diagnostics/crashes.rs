@@ -26,7 +26,7 @@ pub fn is_blue_screen_finding(check: &str, f: &Finding) -> bool {
 
 /// "2026-10-12: DPC_WATCHDOG_VIOLATION (0x133), caused by nvlddmkm.sys (NVIDIA graphics
 /// driver). Parameters 0x0, ..."
-fn dump_line(d: &DumpAnalysis) -> String {
+pub fn dump_line(d: &DumpAnalysis) -> String {
     if let Some(e) = &d.error {
         return format!("{}: couldn't be analysed ({e})", d.file);
     }
