@@ -1,15 +1,15 @@
-//! Navigation bar layout and arrow-key page navigation.
+//! Navigation layout and arrow-key page navigation.
 //!
 //! - Classic bar (one tab per page): Left/Right step through the pages in bar order, wrapping
 //!   at the ends. Up/Down are left alone so pages can use them.
-//! - Grouped bar: Left/Right step through the top-level categories (wrapping), opening the page
-//!   last used in a drop-down category; Up/Down step through the pages inside the current
-//!   category, stopping at the ends.
+//! - Sidebar (`NavStyle::Grouped`): Left/Right step through the top-level categories
+//!   (wrapping), opening the page last used in a category; Up/Down step through the pages
+//!   inside the current category, stopping at the ends.
 
 use crate::app::Tab;
 use crate::settings::NavStyle;
 
-/// Drop-down menus in the grouped navigation bar: (label, pages).
+/// Categories in the sidebar, each listed under its heading: (label, pages).
 pub const GROUPS: [(&str, &[Tab]); 3] = [
     (
         "Hardware",
@@ -27,8 +27,8 @@ pub const GROUPS: [(&str, &[Tab]); 3] = [
     ("Monitoring", &[Tab::Sensors, Tab::Recording, Tab::Alerts]),
 ];
 
-/// Top-level entries of the grouped bar that hold pages, left to right. Record and Report are
-/// actions rather than pages, so the arrows skip them; Info leads to About.
+/// Top-level entries of the sidebar that hold pages, in arrow-key order. Record and Report are
+/// actions rather than pages, so the arrows skip them.
 pub const CATEGORIES: [&[Tab]; 7] = [
     &[Tab::Overview],
     &[Tab::Health],

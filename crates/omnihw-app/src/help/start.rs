@@ -11,15 +11,17 @@ pub(super) fn getting_started(ui: &mut Ui) {
         "Omni-HW combines what CPU-Z, GPU-Z and HWiNFO do in one app: it identifies your hardware, shows live sensors, \
          and goes further by explaining what it finds (Health Check), alerting you, recording sessions and analyzing them.",
     );
-    h(ui, "The navigation bar");
+    h(ui, "The sidebar");
     bullets(
         ui,
         &[
             "Overview: a one-page dashboard of CPU, GPU, memory, storage and system, with live numbers and graphs.",
             "Health Check: automatic checks that flag common problems and explain how to fix them.",
-            "Hardware menu: CPU, Caches, Mainboard, Memory, GPU, Storage, Power - detailed hardware information, like CPU-Z and GPU-Z. The button shows the open page, e.g. \"Hardware: GPU\".",
-            "Monitoring menu: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis) and Alerts (Windows notifications when a sensor crosses a limit).",
-            "On the right: Record (start/stop a recording from any tab), Report (save an HTML report or copy a text one), Info (this guide and About) and Settings.",
+            "Hardware: CPU, Caches, Mainboard, Memory, GPU, Storage, Power - detailed hardware information, like CPU-Z and GPU-Z.",
+            "Network: the Network and LAN Security pages.",
+            "Monitoring: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis) and Alerts (Windows notifications when a sensor crosses a limit).",
+            "At the bottom of the sidebar: Feature guide (this guide), About and Settings.",
+            "In the bar above the page: the alerts badge (while alerts fire), Record (start/stop a recording from any page) and Report (save an HTML report or copy a text one).",
             "Prefer every page as its own tab? Settings > Navigation bar > Classic.",
         ],
     );
@@ -27,9 +29,9 @@ pub(super) fn getting_started(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Grouped navigation bar: Left and Right move between the top-level entries (Overview, Health Check, Hardware, \
-             Monitoring, About, Settings), returning to the page you last used in Hardware or Monitoring. Up and Down move \
-             through the pages inside Hardware or Monitoring and stop at the first and last page.",
+            "Sidebar: Left and Right move between the top-level entries (Overview, Health Check, Hardware, Network, \
+             Monitoring, About, Settings), returning to the page you last used in a category. Up and Down move \
+             through the pages inside the current category and stop at the first and last page.",
             "Classic navigation bar: Left and Right move to the previous or next tab, wrapping around at the ends.",
             "The arrows are left alone while you're typing in a text field, adjusting a slider, moving between controls \
              with Tab, or a menu is open.",
@@ -146,7 +148,7 @@ pub(super) fn settings(ui: &mut Ui) {
         &[
             "Theme: Match Windows (follows your light/dark mode), Dark, Light or Retro (2000s), a classic beveled desktop look with square buttons and sunken fields.",
             "UI scale: makes everything larger or smaller (75 % to 200 %). Reset returns to 100 %.",
-            "Navigation bar: Grouped sorts pages into categories with dropdown menus so the bar fits on one line; Classic shows every page as its own tab (it may wrap onto two lines in small windows).",
+            "Navigation bar: Sidebar lists every page down the left side, sorted into categories; Classic shows every page as its own tab (it may wrap onto two lines in small windows).",
         ],
     );
     h(ui, "Startup");
