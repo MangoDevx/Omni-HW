@@ -659,8 +659,10 @@ impl OmniApp {
             } else {
                 "\u{2190} \u{2192} sections"
             };
+            // Monospace: the proportional UI font has no arrow glyphs.
             let hint = RichText::new(hint)
                 .small()
+                .family(egui::FontFamily::Monospace)
                 .color(ui.visuals().weak_text_color());
             let hint_width = egui::WidgetText::from(hint.clone())
                 .into_galley(
