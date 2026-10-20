@@ -104,9 +104,14 @@ pub fn show(
 
                 ui.label("Navigation bar");
                 ui.vertical(|ui| {
-                    ui.radio_value(&mut s.nav_style, NavStyle::Grouped, "Sidebar");
+                    ui.radio_value(&mut s.nav_style, NavStyle::Sidebar, "Sidebar")
+                        .on_hover_text("The default. Arrow keys: Left/Right categories, Up/Down pages.");
                     ui.weak("Every page listed down the left side, sorted into categories.");
-                    ui.radio_value(&mut s.nav_style, NavStyle::Classic, "Classic");
+                    ui.radio_value(&mut s.nav_style, NavStyle::Tabs, "Tabs")
+                        .on_hover_text("Two rows at the top. Arrow keys: Left/Right categories, Up/Down pages.");
+                    ui.weak("Category tabs, with the open category's pages on a second row.");
+                    ui.radio_value(&mut s.nav_style, NavStyle::Classic, "Classic")
+                        .on_hover_text("One row of tabs. Arrow keys: Left/Right step through every page.");
                     ui.weak(
                         "Every page as its own tab (may wrap onto two lines in small windows).",
                     );

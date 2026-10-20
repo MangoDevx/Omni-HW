@@ -2,7 +2,7 @@ use crate::nav::{self, GROUPS};
 use crate::sampler::Sampler;
 use crate::settings::{NavStyle, Settings};
 use crate::{export, tabs};
-use egui::{Button, RichText};
+use egui::{Button, RichText, TextStyle};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -210,6 +210,118 @@ fn nav_row(ui: &mut egui::Ui, selected: bool, icon: &str, label: &str) -> egui::
     response
 }
 
+/// Gap between the Tabs bar's category tabs.
+const TAB_GAP: f32 = 2.0;
+/// Thickness of the active category tab's underline.
+const TAB_UNDERLINE: f32 = 3.0;
+const TAB_PADDING: egui::Vec2 = egui::vec2(12.0, 7.0);
+const CHIP_PADDING: egui::Vec2 = egui::vec2(11.0, 3.0);
+
+fn tab_galley(ui: &egui::Ui, label: &str, size_delta: f32) -> std::sync::Arc<egui::Galley> {
+    let size = TextStyle::Button.resolve(ui.style()).size + size_delta;
+    egui::WidgetText::from(RichText::new(label).size(size)).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        TextStyle::Button,
+    )
+}
+
+fn underline_tab_size(ui: &egui::Ui, label: &str) -> egui::Vec2 {
+    tab_galley(ui, label, 1.0).size() + 2.0 * TAB_PADDING + egui::vec2(0.0, TAB_UNDERLINE)
+}
+
+/// A category tab: frameless text, tinted on hover, with an accent underline when selected.
+fn underline_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let galley = tab_galley(ui, label, 1.0);
+    let size = galley.size() + 2.0 * TAB_PADDING + egui::vec2(0.0, TAB_UNDERLINE);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let hovered = response.hovered() || response.has_focus();
+        if hovered && !selected {
+            let top = egui::CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            };
+            ui.painter().rect_filled(
+                rect,
+                top,
+                v.widgets.hovered.weak_bg_fill.gamma_multiply(0.6),
+            );
+        }
+        let color = if selected {
+            v.strong_text_color()
+        } else if hovered {
+            v.widgets.hovered.text_color()
+        } else {
+            v.widgets.inactive.text_color()
+        };
+        let line = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 4.0, rect.bottom() - TAB_UNDERLINE),
+            egui::pos2(rect.right() - 4.0, rect.bottom()),
+        );
+        if selected {
+            ui.painter().rect_filled(line, 1.5, v.hyperlink_color);
+        } else if hovered {
+            let faint = v.hyperlink_color.gamma_multiply(0.35);
+            ui.painter()
+                .rect_filled(line.shrink2(egui::vec2(0.0, 0.5)), 1.0, faint);
+        }
+        let pos = rect.min + TAB_PADDING;
+        ui.painter().galley(pos, galley, color);
+    }
+    response
+}
+
+fn page_chip_size(ui: &egui::Ui, label: &str) -> egui::Vec2 {
+    tab_galley(ui, label, -0.5).size() + 2.0 * CHIP_PADDING
+}
+
+/// A page chip on the Tabs bar's second row: a pill, filled with the selection colour when
+/// selected and outlined otherwise.
+fn page_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let galley = tab_galley(ui, label, -0.5);
+    let size = galley.size() + 2.0 * CHIP_PADDING;
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let hovered = response.hovered() || response.has_focus();
+        let (fill, stroke, text) = if selected {
+            (
+                v.selection.bg_fill,
+                egui::Stroke::NONE,
+                v.selection.stroke.color,
+            )
+        } else if hovered {
+            (
+                v.widgets.hovered.weak_bg_fill,
+                v.widgets.hovered.bg_stroke,
+                v.widgets.hovered.text_color(),
+            )
+        } else {
+            (
+                egui::Color32::TRANSPARENT,
+                egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
+                v.widgets.inactive.text_color(),
+            )
+        };
+        let radius = rect.height() / 2.0;
+        ui.painter()
+            .rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
+        ui.painter().galley(rect.min + CHIP_PADDING, galley, text);
+    }
+    response
+}
+
 pub struct OmniApp {
     tab: Tab,
     /// Page shown last frame, to notice when the Power page is opened.
@@ -236,6 +348,8 @@ pub struct OmniApp {
     pawnio: crate::pawnio::Installer,
     /// Health Check results, shared by the Health tab and the Overview banner.
     health: tabs::health::HealthCache,
+    /// Width of the Tabs bar's actions last frame, to right-align them.
+    actions_width: f32,
     /// Settings changed but not written to disk yet: they're saved once no mouse button is
     /// held, so dragging the UI scale slider doesn't rewrite the file on every frame.
     settings_unsaved: bool,
@@ -276,6 +390,7 @@ impl OmniApp {
             updates,
             pawnio: Default::default(),
             health: Default::default(),
+            actions_width: 0.0,
             settings_unsaved: false,
         }
     }
@@ -409,11 +524,13 @@ impl OmniApp {
         }
     }
 
-    /// Classic bar's right-hand actions: alerts indicator, record, report and info menus.
+    /// Right-hand actions of the Classic and Tabs bars: alerts indicator, record, report and info
+    /// menus, Settings, then the administrator indicator.
     fn actions(&mut self, ui: &mut egui::Ui) {
         if self.sampler.info().is_none() {
             return;
         }
+        let tabbed = self.settings.nav_style == NavStyle::Tabs;
         // One short lock for what the bar shows.
         let (firing, elapsed) = self.bar_state();
         self.alerts_badge(ui, firing);
@@ -422,7 +539,10 @@ impl OmniApp {
         self.update_button(ui);
 
         let mut open_about = false;
-        egui::containers::menu::MenuButton::new("Info  ⏷").ui(ui, |ui| {
+        // In the Tabs bar, highlighted while About is open, like a selected category tab (the
+        // classic bar has its own About tab).
+        let info_button = Button::new("Info  ⏷").selected(tabbed && self.tab == Tab::About);
+        egui::containers::menu::MenuButton::from_button(info_button).ui(ui, |ui| {
             if ui.button("Feature guide").clicked() {
                 self.help.open = true;
                 ui.close();
@@ -442,7 +562,20 @@ impl OmniApp {
         {
             self.tab = Tab::Settings;
         }
-        if crate::elevate::elevated() {
+        if !crate::elevate::elevated() {
+            return;
+        }
+        if tabbed {
+            // A compact badge, so the actions still fit beside the category tabs.
+            let ink = crate::heat::ink(ui.visuals(), crate::heat::GREEN);
+            let badge = Button::new(RichText::new("ADMIN").small().strong().color(ink))
+                .fill(ink.gamma_multiply(0.12))
+                .stroke(egui::Stroke::new(1.0, ink.gamma_multiply(0.6)))
+                .corner_radius(8.0)
+                .frame_when_inactive(true)
+                .sense(egui::Sense::hover());
+            ui.add(badge).on_hover_text(ADMIN_HOVER);
+        } else {
             let ink = crate::heat::ink(ui.visuals(), crate::heat::YELLOW);
             ui.add(
                 egui::Label::new(
@@ -454,6 +587,99 @@ impl OmniApp {
             )
             .on_hover_text(ADMIN_HOVER);
         }
+    }
+
+    /// Tabs bar, top row: category tabs on the left, actions right-aligned. The actions are
+    /// placed using their width from the last frame; when they don't fit beside the tabs (narrow
+    /// window) they get their own line above the tabs, so the tabs stay on the page strip.
+    fn primary_row(&mut self, ui: &mut egui::Ui) {
+        let tabs_width: f32 = (0..nav::TAB_CATEGORIES)
+            .map(|c| underline_tab_size(ui, nav::category_label(c)).x + TAB_GAP)
+            .sum();
+        let fits = tabs_width + 24.0 + self.actions_width <= ui.available_width();
+        if !fits {
+            ui.horizontal_wrapped(|ui| self.actions(ui));
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = TAB_GAP;
+            let current = nav::category_of(self.tab);
+            for c in 0..nav::TAB_CATEGORIES {
+                let label = nav::category_label(c);
+                if underline_tab(ui, label, current == Some(c)).clicked()
+                    && current != Some(c)
+                    && let Some(page) = self.nav_memory.page_in(c)
+                {
+                    self.tab = page;
+                }
+            }
+            if fits {
+                let row = ui.min_rect();
+                let right = ui.max_rect().right();
+                let rect = egui::Rect::from_min_max(
+                    egui::pos2(right - self.actions_width, row.top()),
+                    egui::pos2(right, row.bottom() - TAB_UNDERLINE),
+                );
+                let builder = egui::UiBuilder::new()
+                    .max_rect(rect)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center));
+                let width = ui
+                    .scope_builder(builder, |ui| self.actions(ui))
+                    .response
+                    .rect
+                    .width();
+                if (width - self.actions_width).abs() > 0.5 {
+                    self.actions_width = width;
+                    ui.ctx().request_discard("navigation actions resized");
+                }
+            }
+        });
+    }
+
+    /// Tabs bar, second row: the open category's pages as chips, or the page name for a
+    /// single-page category. Always shown (same height either way) so switching categories
+    /// doesn't make the page below jump.
+    fn page_strip(&mut self, ui: &mut egui::Ui) {
+        let chip_height = page_chip_size(ui, "Ag").y;
+        let pages = nav::category_of(self.tab).map_or(&[][..], |c| nav::CATEGORIES[c]);
+        ui.horizontal_wrapped(|ui| {
+            ui.set_min_height(chip_height);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if pages.len() > 1 {
+                for &t in pages {
+                    if page_chip(ui, t.name(), self.tab == t).clicked() {
+                        self.tab = t;
+                    }
+                }
+            } else {
+                ui.add_space(4.0);
+                ui.label(RichText::new(self.tab.name()).color(ui.visuals().weak_text_color()));
+            }
+            let hint = if pages.len() > 1 {
+                "\u{2190} \u{2192} sections    \u{2191} \u{2193} pages"
+            } else {
+                "\u{2190} \u{2192} sections"
+            };
+            let hint = RichText::new(hint)
+                .small()
+                .color(ui.visuals().weak_text_color());
+            let hint_width = egui::WidgetText::from(hint.clone())
+                .into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Extend),
+                    f32::INFINITY,
+                    TextStyle::Small,
+                )
+                .size()
+                .x;
+            // Only when there's room, so it never pushes the chips onto another line.
+            if ui.available_width() > hint_width + 24.0 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(4.0);
+                    ui.label(hint)
+                        .on_hover_text("Arrow keys switch pages when no text field is focused");
+                });
+            }
+        });
     }
 
     /// Sidebar navigation: every page listed under its category, with Feature guide, About and
@@ -626,19 +852,42 @@ impl eframe::App for OmniApp {
                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
         self.arrow_navigation(ui.ctx());
-        if self.settings.nav_style == NavStyle::Classic {
-            egui::Panel::top("tabs").show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal_wrapped(|ui| {
-                    self.page_nav(ui);
-                    ui.separator();
-                    self.actions(ui);
+        match self.settings.nav_style {
+            NavStyle::Sidebar => {
+                self.sidebar(ui);
+                self.top_bar(ui);
+            }
+            NavStyle::Tabs => {
+                // No bottom margin: the active tab's underline sits on the line between the rows.
+                let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin {
+                    left: 8,
+                    right: 8,
+                    top: 6,
+                    bottom: 0,
                 });
-                ui.add_space(2.0);
-            });
-        } else {
-            self.sidebar(ui);
-            self.top_bar(ui);
+                egui::Panel::top("tabs")
+                    .frame(frame)
+                    .show(ui, |ui| self.primary_row(ui));
+                let v = ui.visuals();
+                let band = crate::heat::lerp(v.panel_fill, v.extreme_bg_color, 0.45);
+                let frame = egui::Frame::side_top_panel(ui.style())
+                    .fill(band)
+                    .inner_margin(egui::Margin::symmetric(8, 5));
+                egui::Panel::top("pages")
+                    .frame(frame)
+                    .show(ui, |ui| self.page_strip(ui));
+            }
+            NavStyle::Classic => {
+                egui::Panel::top("tabs").show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        self.page_nav(ui);
+                        ui.separator();
+                        self.actions(ui);
+                    });
+                    ui.add_space(2.0);
+                });
+            }
         }
         self.status_bar(ui);
 

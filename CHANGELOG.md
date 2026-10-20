@@ -9,9 +9,11 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 - **Crash dump analysis** (Health Check → blue screen finding): reads Windows crash dumps to show each crash's stop code and the driver it points at, with a fix step for that driver. Windows asks for administrator permission only when you click the button.
 - **Live hardware error (WHEA) detection**: hardware errors logged while Omni-HW runs show up right away in the Health Check, and as a warning on the memory test and disk speed test results when they happen during a test.
 - Health Check: new check for GPU driver timeouts (TDR).
+- **Sidebar navigation**, now the default: every page listed down the left side under its category, with Record and Report in a slim bar above the page.
+- **Tabs navigation**: category tabs along the top with the open category's pages on a second row. Pick Sidebar, Tabs or Classic in Settings → Navigation bar; the old drop-down bar is replaced by the sidebar.
 
 ### Improved
-- The navigation bar shows "Running as administrator" in yellow while Omni-HW has administrator rights.
+- Omni-HW shows when it's running with administrator rights (at the bottom of the sidebar, or in the navigation bar).
 
 ## 0.4.0
 

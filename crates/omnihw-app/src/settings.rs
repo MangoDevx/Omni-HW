@@ -15,8 +15,10 @@ pub enum Theme {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavStyle {
-    /// Sidebar listing every page under its category (saved as "grouped").
-    Grouped,
+    /// Sidebar down the left side listing every page under its category.
+    Sidebar,
+    /// Category tabs, with the open category's pages on a second row.
+    Tabs,
     /// Every page as its own tab in one row.
     Classic,
 }
@@ -82,7 +84,7 @@ impl Default for Settings {
         Settings {
             theme: Theme::System,
             ui_scale: 1.0,
-            nav_style: NavStyle::Grouped,
+            nav_style: NavStyle::Sidebar,
             start_page: "overview".into(),
             sample_interval_ms: 1000,
             launch_at_startup: false,
@@ -130,7 +132,8 @@ impl Settings {
             Theme::Retro => "retro",
         };
         let nav = match self.nav_style {
-            NavStyle::Grouped => "grouped",
+            NavStyle::Sidebar => "sidebar",
+            NavStyle::Tabs => "tabs",
             NavStyle::Classic => "classic",
         };
         let data_dir = self
@@ -208,7 +211,9 @@ impl Settings {
                     }
                 }
                 "nav_style" => match v {
-                    "grouped" => s.nav_style = NavStyle::Grouped,
+                    // "grouped" is the drop-down bar of older versions, replaced by the sidebar.
+                    "sidebar" | "grouped" => s.nav_style = NavStyle::Sidebar,
+                    "tabs" => s.nav_style = NavStyle::Tabs,
                     "classic" => s.nav_style = NavStyle::Classic,
                     _ => {}
                 },
@@ -323,6 +328,22 @@ mod tests {
             let t = Settings { theme, ..s.clone() };
             assert_eq!(Settings::from_ini(&t.to_ini()).theme, theme);
         }
+        for nav_style in [NavStyle::Sidebar, NavStyle::Tabs, NavStyle::Classic] {
+            let n = Settings {
+                nav_style,
+                ..s.clone()
+            };
+            assert_eq!(Settings::from_ini(&n.to_ini()).nav_style, nav_style);
+        }
+        // The old drop-down bar's setting opens the sidebar.
+        assert_eq!(
+            Settings::from_ini("nav_style=grouped").nav_style,
+            NavStyle::Sidebar
+        );
+        assert_eq!(
+            Settings::from_ini("nav_style=classic").nav_style,
+            NavStyle::Classic
+        );
         // With remembering off, dismissals are kept for the session only.
         let session_only = Settings {
             remember_dismissed: false,

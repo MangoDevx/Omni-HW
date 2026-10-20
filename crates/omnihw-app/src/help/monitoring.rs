@@ -113,7 +113,7 @@ pub(super) fn event_log(ui: &mut Ui) {
     h(ui, "What it shows");
     p(
         ui,
-        "The Event Log page (Monitoring menu) lists the problems Windows recorded in its event logs over the last 30 days, \
+        "The Event Log page (under Monitoring) lists the problems Windows recorded in its event logs over the last 30 days, \
          each with a plain-English meaning, so you don't have to dig through Event Viewer. It reads the logs when you \
          first open the page and when you click Refresh; no administrator rights are needed.",
     );
