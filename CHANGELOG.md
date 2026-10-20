@@ -2,7 +2,7 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
-## Unreleased
+## 0.5.0
 
 ### New
 - **Event Log** page (Monitoring → Event Log): critical System and Application events from the last 30 days, such as unexpected shutdowns, blue screens, hardware errors, GPU driver timeouts and disk problems, explained in plain English, with filters, search and copy.
