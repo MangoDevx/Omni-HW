@@ -15,7 +15,7 @@ pub enum Theme {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavStyle {
-    /// Pages grouped into categories with dropdown menus.
+    /// Sidebar listing every page under its category (saved as "grouped").
     Grouped,
     /// Every page as its own tab in one row.
     Classic,

@@ -104,8 +104,8 @@ pub fn show(
 
                 ui.label("Navigation bar");
                 ui.vertical(|ui| {
-                    ui.radio_value(&mut s.nav_style, NavStyle::Grouped, "Grouped");
-                    ui.weak("Pages sorted into categories with dropdown menus; fits on one line.");
+                    ui.radio_value(&mut s.nav_style, NavStyle::Grouped, "Sidebar");
+                    ui.weak("Every page listed down the left side, sorted into categories.");
                     ui.radio_value(&mut s.nav_style, NavStyle::Classic, "Classic");
                     ui.weak(
                         "Every page as its own tab (may wrap onto two lines in small windows).",

@@ -68,6 +68,29 @@ impl Tab {
         }
     }
 
+    /// Leading glyph in the sidebar (all present in egui's built-in fonts).
+    pub fn icon(self) -> &'static str {
+        match self {
+            Tab::Overview => "🏠",
+            Tab::Health => "❤",
+            Tab::Cpu => "🔲",
+            Tab::Caches => "⚡",
+            Tab::Mainboard => "🔧",
+            Tab::Memory => "💾",
+            Tab::Gpu => "🖵",
+            Tab::Storage => "🖴",
+            Tab::Network => "🌐",
+            Tab::LanSecurity => "🛡",
+            Tab::Power => "🔌",
+            Tab::Sensors => "📈",
+            Tab::Recording => "⏺",
+            Tab::Alerts => "🔔",
+            Tab::EventLog => "📋",
+            Tab::About => "ℹ",
+            Tab::Settings => "⚙",
+        }
+    }
+
     /// Stable key used in settings (e.g. the start page).
     pub fn key(self) -> &'static str {
         match self {
@@ -100,6 +123,92 @@ impl Tab {
 }
 
 const STATUS_DURATION: Duration = Duration::from_secs(6);
+/// Hover text of the "running as administrator" indicator, in every navigation style.
+const ADMIN_HOVER: &str = "Omni-HW has administrator rights: you approved its UAC prompt or \
+                           started it as administrator.";
+/// Width of the navigation sidebar.
+const SIDEBAR_WIDTH: f32 = 190.0;
+/// Height of one sidebar row.
+const ROW_HEIGHT: f32 = 26.0;
+
+/// Sidebar background: a shade darker than the page, so it reads as its own surface.
+fn sidebar_fill(v: &egui::Visuals) -> egui::Color32 {
+    let t = if v.dark_mode { 0.3 } else { 0.035 };
+    v.panel_fill.lerp_to_gamma(egui::Color32::BLACK, t)
+}
+
+/// Small uppercase category heading in the sidebar.
+fn nav_section(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        ui.add_space(10.0);
+        let color = ui.visuals().weak_text_color();
+        ui.add(
+            egui::Label::new(
+                RichText::new(title.to_uppercase())
+                    .small()
+                    .strong()
+                    .extra_letter_spacing(1.0)
+                    .color(color),
+            )
+            .selectable(false),
+        );
+    });
+    ui.add_space(2.0);
+}
+
+/// A full-width sidebar row: glyph and label; when selected, filled with an accent bar on the
+/// left edge.
+fn nav_row(ui: &mut egui::Ui, selected: bool, icon: &str, label: &str) -> egui::Response {
+    let size = egui::vec2(ui.available_width(), ROW_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
+    });
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+    let v = ui.visuals();
+    let radius = v.widgets.hovered.corner_radius;
+    let painter = ui.painter();
+    let text_color = if selected {
+        painter.rect_filled(rect, radius, v.selection.bg_fill.gamma_multiply(0.6));
+        let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
+        painter.rect_filled(
+            bar.shrink2(egui::vec2(0.0, 4.0)),
+            2.0,
+            v.selection.stroke.color,
+        );
+        v.selection.stroke.color
+    } else if response.hovered() {
+        painter.rect_filled(rect, radius, v.widgets.hovered.weak_bg_fill);
+        v.widgets.hovered.text_color()
+    } else {
+        v.text_color()
+    };
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let y = rect.center().y;
+    let icon_color = if selected {
+        text_color
+    } else {
+        text_color.gamma_multiply(0.7)
+    };
+    painter.text(
+        egui::pos2(rect.left() + 20.0, y),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        font.clone(),
+        icon_color,
+    );
+    painter.text(
+        egui::pos2(rect.left() + 36.0, y),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        text_color,
+    );
+    response
+}
 
 pub struct OmniApp {
     tab: Tab,
@@ -204,55 +313,35 @@ impl OmniApp {
         self.status = Some((msg, Instant::now()));
     }
 
-    /// Page buttons: grouped drop-downs (one compact row) or every page in a row.
+    /// Classic bar: every page as its own tab in one row.
     fn page_nav(&mut self, ui: &mut egui::Ui) {
-        if self.settings.nav_style == NavStyle::Classic {
-            for tab in Tab::ALL {
-                ui.selectable_value(&mut self.tab, tab, tab.name());
-            }
-            return;
-        }
-        for tab in [Tab::Overview, Tab::Health] {
+        for tab in Tab::ALL {
             ui.selectable_value(&mut self.tab, tab, tab.name());
-        }
-        for (group, pages) in GROUPS {
-            let current = pages.iter().find(|&&t| t == self.tab);
-            // The button names the open page, e.g. "Hardware: GPU".
-            let label = match current {
-                Some(t) => format!("{group}: {}  ⏷", t.name()),
-                None => format!("{group}  ⏷"),
-            };
-            let button = Button::new(label).selected(current.is_some());
-            egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
-                for &t in pages {
-                    if ui.selectable_label(self.tab == t, t.name()).clicked() {
-                        self.tab = t;
-                        ui.close();
-                    }
-                }
-            });
         }
     }
 
-    /// Right-hand actions: alerts indicator, record, report and info menus.
-    fn actions(&mut self, ui: &mut egui::Ui) {
-        let Some(info) = self.sampler.info() else {
+    /// Firing alert count and recording time, read in one short lock.
+    fn bar_state(&self) -> (usize, Option<f64>) {
+        let snap = self.sampler.snapshot();
+        let elapsed = snap.recording.as_ref().map(|r| r.rec.duration_secs());
+        (tabs::alerts::firing_count(&snap), elapsed)
+    }
+
+    /// Red "N ALERTS" badge, shown only while alerts fire.
+    fn alerts_badge(&mut self, ui: &mut egui::Ui, firing: usize) {
+        if firing == 0 {
             return;
-        };
-        // One short lock for what the bar shows.
-        let (firing, elapsed) = {
-            let snap = self.sampler.snapshot();
-            let elapsed = snap.recording.as_ref().map(|r| r.rec.duration_secs());
-            (tabs::alerts::firing_count(&snap), elapsed)
-        };
-        if firing > 0 {
-            let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
-            let b = Button::new(RichText::new(text).strong().color(egui::Color32::WHITE))
-                .fill(crate::heat::RED);
-            if ui.add(b).on_hover_text("Open the Alerts tab").clicked() {
-                self.tab = Tab::Alerts;
-            }
         }
+        let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
+        let b = Button::new(RichText::new(text).strong().color(egui::Color32::WHITE))
+            .fill(crate::heat::RED);
+        if ui.add(b).on_hover_text("Open the Alerts tab").clicked() {
+            self.tab = Tab::Alerts;
+        }
+    }
+
+    /// Record / Stop button.
+    fn record_button(&mut self, ui: &mut egui::Ui, elapsed: Option<f64>) {
         let rec_button = match elapsed {
             Some(t) => Button::new(
                 RichText::new(format!(
@@ -272,7 +361,13 @@ impl OmniApp {
         if ui.add(rec_button).on_hover_text(hover).clicked() {
             self.status = Some((tabs::recording::toggle(&self.sampler), Instant::now()));
         }
+    }
 
+    /// "Report" menu: save an HTML report or copy a text one.
+    fn report_menu(&mut self, ui: &mut egui::Ui) {
+        let Some(info) = self.sampler.info() else {
+            return;
+        };
         let mut msg = None;
         egui::containers::menu::MenuButton::new("Report  ⏷").ui(ui, |ui| {
             if ui
@@ -297,7 +392,13 @@ impl OmniApp {
                 ui.close();
             }
         });
+        if let Some(m) = msg {
+            self.set_status(m);
+        }
+    }
 
+    /// "Update available" button, shown only when a newer version was found.
+    fn update_button(&mut self, ui: &mut egui::Ui) {
         if let crate::update::Status::Available(v) = self.updates.status()
             && ui
                 .button(format!("Update {v} available"))
@@ -306,13 +407,22 @@ impl OmniApp {
         {
             self.tab = Tab::Settings;
         }
+    }
+
+    /// Classic bar's right-hand actions: alerts indicator, record, report and info menus.
+    fn actions(&mut self, ui: &mut egui::Ui) {
+        if self.sampler.info().is_none() {
+            return;
+        }
+        // One short lock for what the bar shows.
+        let (firing, elapsed) = self.bar_state();
+        self.alerts_badge(ui, firing);
+        self.record_button(ui, elapsed);
+        self.report_menu(ui);
+        self.update_button(ui);
 
         let mut open_about = false;
-        // In the grouped bar, highlighted while About is open, like the Hardware and Monitoring
-        // menus (the classic bar has its own About tab).
-        let info_button = Button::new("Info  ⏷")
-            .selected(self.tab == Tab::About && self.settings.nav_style == NavStyle::Grouped);
-        egui::containers::menu::MenuButton::from_button(info_button).ui(ui, |ui| {
+        egui::containers::menu::MenuButton::new("Info  ⏷").ui(ui, |ui| {
             if ui.button("Feature guide").clicked() {
                 self.help.open = true;
                 ui.close();
@@ -342,14 +452,125 @@ impl OmniApp {
                 )
                 .selectable(false),
             )
-            .on_hover_text(
-                "Omni-HW has administrator rights: you approved its UAC prompt or started it as \
-                 administrator.",
-            );
+            .on_hover_text(ADMIN_HOVER);
         }
-        if let Some(m) = msg {
-            self.set_status(m);
-        }
+    }
+
+    /// Sidebar navigation: every page listed under its category, with Feature guide, About and
+    /// Settings pinned to the bottom.
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        let fill = sidebar_fill(ui.visuals());
+        let frame = egui::Frame::side_top_panel(ui.style())
+            .fill(fill)
+            .inner_margin(egui::Margin::symmetric(8, 10));
+        egui::Panel::left("nav")
+            .resizable(false)
+            .exact_size(SIDEBAR_WIDTH)
+            .frame(frame)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add_space(6.0);
+                    ui.add(
+                        egui::Label::new(RichText::new("Omni-HW").size(20.0).strong())
+                            .selectable(false),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
+                                .small()
+                                .weak(),
+                        )
+                        .selectable(false),
+                    );
+                });
+                ui.add_space(8.0);
+
+                egui::Panel::bottom("nav_footer")
+                    .frame(egui::Frame::NONE)
+                    .resizable(false)
+                    .show_separator_line(false)
+                    .show(ui, |ui| {
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(2.0);
+                        if nav_row(ui, self.help.open, "📖", "Feature guide")
+                            .on_hover_text("What every page shows and how to use it")
+                            .clicked()
+                        {
+                            self.help.open = !self.help.open;
+                        }
+                        for tab in [Tab::About, Tab::Settings] {
+                            if nav_row(ui, self.tab == tab, tab.icon(), tab.name()).clicked() {
+                                self.tab = tab;
+                            }
+                        }
+                        if crate::elevate::elevated() {
+                            ui.add_space(6.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(8.0);
+                                let ink = crate::heat::ink(ui.visuals(), crate::heat::GREEN);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new("● Running as administrator")
+                                            .small()
+                                            .color(ink),
+                                    )
+                                    .selectable(false),
+                                )
+                                .on_hover_text(ADMIN_HOVER);
+                            });
+                        }
+                    });
+
+                egui::CentralPanel::no_frame().show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            for tab in [Tab::Overview, Tab::Health] {
+                                if nav_row(ui, self.tab == tab, tab.icon(), tab.name()).clicked() {
+                                    self.tab = tab;
+                                }
+                            }
+                            for (group, pages) in GROUPS {
+                                nav_section(ui, group);
+                                for &tab in pages {
+                                    if nav_row(ui, self.tab == tab, tab.icon(), tab.name())
+                                        .clicked()
+                                    {
+                                        self.tab = tab;
+                                    }
+                                }
+                            }
+                        });
+                });
+            });
+    }
+
+    /// Slim bar above the page (sidebar style): where you are on the left, actions on the right.
+    fn top_bar(&mut self, ui: &mut egui::Ui) {
+        egui::Panel::top("actions").show(ui, |ui| {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.add_space(4.0);
+                if let Some((group, _)) = GROUPS.iter().find(|(_, p)| p.contains(&self.tab)) {
+                    ui.weak(*group);
+                    ui.weak("›");
+                }
+                ui.label(RichText::new(self.tab.name()).size(16.0).strong());
+                if self.sampler.info().is_none() {
+                    return;
+                }
+                let (firing, elapsed) = self.bar_state();
+                // Right to left, so added in reverse of how they read.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    self.report_menu(ui);
+                    self.record_button(ui, elapsed);
+                    self.update_button(ui);
+                    self.alerts_badge(ui, firing);
+                });
+            });
+            ui.add_space(2.0);
+        });
     }
 
     /// Thin bottom bar for transient messages, so they don't push the navigation onto two rows.
@@ -405,15 +626,20 @@ impl eframe::App for OmniApp {
                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
         self.arrow_navigation(ui.ctx());
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                self.page_nav(ui);
-                ui.separator();
-                self.actions(ui);
+        if self.settings.nav_style == NavStyle::Classic {
+            egui::Panel::top("tabs").show(ui, |ui| {
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    self.page_nav(ui);
+                    ui.separator();
+                    self.actions(ui);
+                });
+                ui.add_space(2.0);
             });
-            ui.add_space(2.0);
-        });
+        } else {
+            self.sidebar(ui);
+            self.top_bar(ui);
+        }
         self.status_bar(ui);
 
         crate::help::show(ui.ctx(), &mut self.help);
