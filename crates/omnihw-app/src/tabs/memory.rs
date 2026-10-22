@@ -57,6 +57,12 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
     quick_test(ui, snap);
 
     if dimms.is_empty() {
+        if cfg!(target_os = "linux") && !crate::elevate::elevated() {
+            ui.weak(
+                "Module details come from the SMBIOS tables, which only root can read on Linux. \
+                 Run Omni-HW as root (sudo -E omnihw) to see them.",
+            );
+        }
         return;
     }
     ui.label(egui::RichText::new("Modules (SMBIOS)").strong());

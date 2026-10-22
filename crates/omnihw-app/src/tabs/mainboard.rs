@@ -40,7 +40,12 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
             ],
         );
     }
-    let mut misc = vec![("SMBIOS Version", format!("{}.{}", s.version.0, s.version.1))];
+    // Linux without root reads only /sys/class/dmi/id, which has no table version.
+    let version = match s.version {
+        (0, 0) => String::new(),
+        (major, minor) => format!("{major}.{minor}"),
+    };
+    let mut misc = vec![("SMBIOS Version", version)];
     if let Some(p) = s.processors.first() {
         misc.push(("CPU Socket", p.socket.clone()));
     }
