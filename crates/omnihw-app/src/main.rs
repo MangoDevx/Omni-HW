@@ -49,6 +49,8 @@ fn main() -> eframe::Result {
     }
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Omni-HW")
+        // Wayland app id / X11 WM_CLASS, matching packaging/linux/omnihw.desktop.
+        .with_app_id("omnihw")
         .with_inner_size(initial_size())
         .with_min_inner_size([440.0, 400.0]);
     if let Some(icon) = icon::window_icon() {

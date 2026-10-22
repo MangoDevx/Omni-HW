@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Omni-HW
+GenericName=Hardware Information
+Comment=Hardware information, sensors and health checks
+Exec=omnihw
+Icon=omnihw
+Terminal=false
+Categories=System;Monitor;HardwareSettings;
+Keywords=hardware;cpu;gpu;sensors;temperature;smart;
+StartupWMClass=omnihw
