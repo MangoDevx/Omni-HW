@@ -1,5 +1,4 @@
-//! Storage checks: free space, SMART health, temperature, partitioning, the Windows drive
-//! type and link speeds.
+//! Storage checks: free space, SMART health, temperature, partitioning and link speeds.
 
 use super::helpers::{board_query, finding, guided, plural, summarize};
 use super::{Category, Context, Level, Outcome, RECENT, Step};
@@ -21,7 +20,7 @@ pub(super) fn drive_free_space(ctx: &Context) -> Outcome {
             f if f < 0.10 => Level::Warning,
             _ => continue,
         };
-        let system = v.mount.eq_ignore_ascii_case("C:");
+        let system = v.mount == "/";
         out.push(guided(
             level,
             Category::Storage,
@@ -32,15 +31,17 @@ pub(super) fn drive_free_space(ctx: &Context) -> Outcome {
                 format_bytes(v.total_bytes),
                 free * 100.0,
                 if system {
-                    " A full system drive can block Windows updates and slow the PC."
+                    " A full root file system can break updates and even logging in."
                 } else {
                     ""
                 }
             ),
             vec![
-                Step::settings(
-                    "Run Disk Cleanup or Settings > System > Storage > Temporary files.",
-                    "ms-settings:storagesense",
+                Step::new(
+                    "See what uses the space with Disk Usage Analyzer (baobab), or \"du -xh --max-depth=1 <folder> | sort -h\".",
+                ),
+                Step::new(
+                    "Clear the package cache (\"sudo apt clean\" on Ubuntu) and remove old snaps, flatpaks and kernels you no longer use.",
                 ),
                 Step::new("Uninstall unused games/apps or move them to another drive."),
                 Step::new("SSDs also slow down when nearly full; keep 10-20 % free."),
@@ -123,7 +124,7 @@ pub(super) fn drive_health(ctx: &Context) -> Outcome {
         out,
         &seen,
         if has_nvme {
-            "NVMe health log unavailable (try running as administrator)"
+            "The NVMe health log needs root (Read as root on the Storage page)"
         } else {
             "No NVMe drives (SATA drives are covered by the SATA SMART check)"
         },
@@ -223,7 +224,7 @@ pub(super) fn sata_smart(ctx: &Context) -> Outcome {
         out,
         &seen,
         if has_sata {
-            "SATA SMART data unavailable (try running as administrator)"
+            "SATA SMART data needs root (Read as root on the Storage page)"
         } else {
             "No SATA drives"
         },
@@ -278,19 +279,15 @@ pub(super) fn drive_setup(ctx: &Context) -> Outcome {
                 Category::Storage,
                 format!("{name} isn't set up yet"),
                 format!(
-                    "This {} drive has never been initialized, so Windows can't use it and it doesn't appear in File Explorer. This is normal for a brand-new drive.",
+                    "This {} drive has no partition table or file system yet, so nothing can be stored on it. This is normal for a brand-new drive.",
                     format_bytes(d.size_bytes)
                 ),
                 vec![
-                    Step::settings(
-                        "Open Settings > System > Storage > Advanced storage settings > Disks & volumes.",
-                        "ms-settings:disksandvolumes",
-                    ),
                     Step::new(format!(
-                        "Select {name} and choose Initialize, with GPT as the partition style. Only do this for a new or empty drive."
+                        "Open Disks (gnome-disks) or GParted, select {name} and create a GPT partition table. Only do this for a new or empty drive."
                     )),
                     Step::new(
-                        "Choose Create volume, pick a drive letter and format it as NTFS. It then shows up in File Explorer.",
+                        "Create a partition on it, formatted as ext4 (or exFAT/NTFS to share it with Windows), and mount it.",
                     ),
                 ],
             ));
@@ -311,15 +308,9 @@ pub(super) fn drive_setup(ctx: &Context) -> Outcome {
                     format_bytes(l.unallocated_bytes),
                     format_bytes(d.size_bytes)
                 ),
-                vec![
-                    Step::settings(
-                        "Open Settings > System > Storage > Advanced storage settings > Disks & volumes.",
-                        "ms-settings:disksandvolumes",
-                    ),
-                    Step::new(
-                        "Select the unallocated space and choose Create volume (or extend the neighbouring volume in Disk Management).",
-                    ),
-                ],
+                vec![Step::new(
+                    "Open Disks (gnome-disks) or GParted, select the free space and create a partition, or grow the neighbouring one into it.",
+                )],
             ));
         }
     }
@@ -330,66 +321,6 @@ pub(super) fn drive_setup(ctx: &Context) -> Outcome {
         ));
     }
     Outcome::Findings(out)
-}
-
-pub(super) fn system_drive_type(ctx: &Context) -> Outcome {
-    let drives = &ctx.info.drives;
-    let Some(sys) = drives
-        .iter()
-        .find(|d| d.volumes.iter().any(|v| v.mount.eq_ignore_ascii_case("C:")))
-    else {
-        return Outcome::Skipped("System drive not found".into());
-    };
-    match sys.ssd {
-        None => Outcome::Skipped("Drive type not reported".into()),
-        Some(true) => Outcome::Pass(format!("Windows is on {} ({})", sys.name(), sys.kind())),
-        Some(false) => {
-            let ssd = drives
-                .iter()
-                .find(|d| d.index != sys.index && d.ssd == Some(true) && !d.removable);
-            let mut steps = Vec::new();
-            let detail = match ssd {
-                Some(s) => {
-                    steps.push(Step::search(
-                        format!(
-                            "Move Windows to {}: clone the system drive with the SSD maker's migration tool, or do a clean install onto the SSD.",
-                            s.name()
-                        ),
-                        format!("clone Windows to {}", s.name()),
-                    ));
-                    steps.extend(bios_help::bios_steps(
-                        ctx.info,
-                        BiosSetting::BootOrder,
-                        "Make the SSD the first boot drive.",
-                        "",
-                    ));
-                    format!(
-                        "Windows runs from {}, a hard drive, while {} (an SSD) is installed. Hard drives start Windows and apps several times slower.",
-                        sys.name(),
-                        s.name()
-                    )
-                }
-                None => {
-                    steps.push(Step::new(
-                        "Replace it with an SSD (even a small, inexpensive one makes Windows several times faster) and clone or reinstall Windows onto it.",
-                    ));
-                    format!(
-                        "Windows runs from {}, a hard drive. Hard drives start Windows and apps several times slower than SSDs.",
-                        sys.name()
-                    )
-                }
-            };
-            let mut f = guided(
-                Level::Warning,
-                Category::Storage,
-                "Windows is installed on a hard drive",
-                detail,
-                steps,
-            );
-            f.bios = ssd.is_some();
-            Outcome::Findings(vec![f])
-        }
-    }
 }
 
 pub(super) fn storage_link(ctx: &Context) -> Outcome {
@@ -479,7 +410,7 @@ pub(super) fn storage_link(ctx: &Context) -> Outcome {
     summarize(
         out,
         &seen,
-        "No NVMe link data, and SATA link speed needs administrator rights",
+        "No NVMe link data, and SATA link speed needs root (Read as root on the Storage page)",
     )
 }
 
@@ -583,7 +514,7 @@ mod tests {
         let Outcome::Skipped(why) = sata_smart(&ctx(&info, &s)) else {
             panic!("expected skip")
         };
-        assert!(why.contains("administrator"));
+        assert!(why.contains("root"));
         info.drives[0].bus = BusType::Nvme;
         assert!(
             matches!(sata_smart(&ctx(&info, &s)), Outcome::Skipped(w) if w == "No SATA drives")
@@ -591,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn drive_setup_and_type() {
+    fn drive_setup_checks() {
         const G: u64 = 1 << 30;
         let s = SensorTable::default();
         let mut info = SystemInfo {
@@ -634,12 +565,6 @@ mod tests {
             unreachable!()
         };
         assert!(f[0].title.contains("New SSD"));
-        let o = system_drive_type(&c);
-        assert_eq!(levels(&o), vec![Level::Warning]);
-        let Outcome::Findings(f) = o else {
-            unreachable!()
-        };
-        assert!(f[0].bios && f[0].detail.contains("New SSD"));
 
         info.drives[1].layout = Some(DiskLayout {
             style: PartitionStyle::Gpt,
@@ -649,6 +574,5 @@ mod tests {
         info.drives[0].ssd = Some(true);
         let c = ctx(&info, &s);
         assert_eq!(levels(&drive_setup(&c)), vec![Level::Info]);
-        assert!(matches!(system_drive_type(&c), Outcome::Pass(_)));
     }
 }

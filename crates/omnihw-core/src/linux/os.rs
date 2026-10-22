@@ -24,7 +24,6 @@ pub fn os_info(root: &Root) -> Option<OsInfo> {
         product,
         kernel,
         computer_name,
-        ..Default::default()
     })
 }
 

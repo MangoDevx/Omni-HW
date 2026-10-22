@@ -3,11 +3,7 @@
 
 use super::{Category, Context, Finding, Level, Outcome, Step};
 use crate::bios_help::Board;
-use crate::checkup::EVENT_CAP;
-use crate::gpu::{VENDOR_AMD, VENDOR_INTEL, VENDOR_NVIDIA};
 
-pub(super) const DDU_URL: &str = "https://www.wagnardsoft.com/display-driver-uninstaller-ddu-";
-pub(super) const MBR2GPT_URL: &str = "https://learn.microsoft.com/windows/deployment/mbr-to-gpt";
 const MEMTEST_URL: &str = "https://www.memtest86.com/";
 
 /// A finding whose steps are plain text.
@@ -27,7 +23,7 @@ pub(super) fn finding(
     )
 }
 
-/// A finding with guided steps (links to searches, Settings pages or websites).
+/// A finding with guided steps (links to searches or websites).
 pub(super) fn guided(
     level: Level,
     category: Category,
@@ -43,7 +39,6 @@ pub(super) fn guided(
         steps,
         security: false,
         bios: false,
-        fix: None,
     }
 }
 
@@ -62,15 +57,6 @@ pub(super) fn summarize(out: Vec<Finding>, seen: &[String], skipped: impl Into<S
 /// "1 device", "3 devices".
 pub(super) fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
-}
-
-/// "200 or more" when a capped event list is full.
-pub(super) fn count_text(n: usize) -> String {
-    if n >= EVENT_CAP {
-        format!("{n} or more")
-    } else {
-        n.to_string()
-    }
 }
 
 /// "2026-10-01".
@@ -103,53 +89,10 @@ pub(super) fn bios_update_step(ctx: &Context, text: &str) -> Step {
     )
 }
 
-/// Search step for the board vendor's driver downloads.
-pub(super) fn board_drivers_step(ctx: &Context, text: &str) -> Step {
-    Step::search(
-        text,
-        board_query(
-            ctx,
-            "drivers download",
-            "motherboard chipset drivers download",
-        ),
-    )
-}
-
-/// Official driver download page for a GPU vendor.
-pub(super) fn driver_step(vendor: u32, what: &str) -> Step {
-    match vendor {
-        VENDOR_NVIDIA => Step::url(
-            format!("Download {what} from NVIDIA (or install the NVIDIA App)."),
-            "https://www.nvidia.com/en-us/drivers/",
-        ),
-        VENDOR_AMD => Step::url(
-            format!("Download {what} from AMD (AMD Software: Adrenalin Edition)."),
-            "https://www.amd.com/en/support/download/drivers.html",
-        ),
-        VENDOR_INTEL => Step::url(
-            format!("Download {what} from Intel (Intel Driver & Support Assistant)."),
-            "https://www.intel.com/content/www/us/en/support/detect.html",
-        ),
-        _ => Step::new(format!(
-            "Download {what} from the graphics card or PC maker's website."
-        )),
-    }
-}
-
 /// Run MemTest86 for a thorough memory test.
 pub(super) fn memtest86_step() -> Step {
     Step::url(
         "For a more thorough test, run MemTest86 from a USB stick for a few passes.",
         MEMTEST_URL,
     )
-}
-
-/// Windows Memory Diagnostic, then MemTest86.
-pub(super) fn memory_test_steps() -> [Step; 2] {
-    [
-        Step::new(
-            "Test the memory: press Start, type \"Windows Memory Diagnostic\" and choose Restart now and check for problems.",
-        ),
-        memtest86_step(),
-    ]
 }

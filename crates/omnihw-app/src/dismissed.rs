@@ -120,7 +120,6 @@ mod tests {
             steps: Vec::new(),
             security: false,
             bios: false,
-            fix: None,
         }
     }
 

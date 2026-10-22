@@ -1,5 +1,5 @@
-//! Event Log page: crashes, hardware errors, GPU driver timeouts and disk problems from the
-//! System and Application logs, in plain English, with filters. The logs are read on a worker
+//! Event Log page: kernel crashes, hardware errors, GPU hangs, disk problems and app crashes
+//! from the systemd journal, in plain English, with filters. The journal is read on a worker
 //! thread (see [`Sampler::read_event_log`]); this page only draws the last read.
 
 use crate::heat::{ORANGE, RED, YELLOW, ink};
@@ -49,54 +49,6 @@ fn now_unix() -> i64 {
         .map_or(0, |d| d.as_secs() as i64)
 }
 
-/// "Analyze crash dumps" for the logged blue screens, and what the dumps point at. The same
-/// results feed the Health Check's blue screen finding.
-fn crash_dumps(ui: &mut Ui, sampler: &Sampler) {
-    let (dumps, busy) = {
-        let snap = sampler.snapshot();
-        (snap.dumps.clone(), snap.dumps_busy)
-    };
-    ui.add_space(4.0);
-    ui.horizontal_wrapped(|ui| {
-        let (label, hover) = if crate::elevate::elevated() {
-            ("Analyze crash dumps", "Reads C:\\Windows\\Minidump.")
-        } else {
-            (
-                "Analyze crash dumps (asks for administrator)",
-                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps.",
-            )
-        };
-        if ui
-            .add_enabled(!busy, Button::new(label))
-            .on_hover_text(hover)
-            .clicked()
-        {
-            sampler.read_dumps();
-        }
-        if busy {
-            ui.spinner();
-        }
-    });
-    match dumps {
-        _ if busy => {}
-        Some(Err(e)) => {
-            ui.colored_label(
-                ink(ui.visuals(), RED),
-                format!("Couldn't read crash dumps: {e}"),
-            );
-        }
-        Some(Ok(d)) if d.is_empty() => {
-            ui.weak("No crash dumps found");
-        }
-        Some(Ok(d)) => {
-            for line in d.iter().map(omnihw_core::diagnostics::dump_line) {
-                ui.label(format!("• {line}"));
-            }
-        }
-        None => {}
-    }
-}
-
 pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
     // Only an Arc clone under the lock.
     let (log, busy) = {
@@ -106,20 +58,20 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
 
     super::page_title(ui, "Event Log");
     ui.weak(format!(
-        "Crashes, hardware errors, graphics driver timeouts and disk problems Windows logged in the last {VIEW_DAYS} days, in plain English. Click an event's meaning for its details."
+        "Kernel crashes, hardware errors, graphics hangs, disk problems and app crashes from the system journal in the last {VIEW_DAYS} days, in plain English. Click an event's meaning for the logged message."
     ));
     ui.add_space(6.0);
     ui.horizontal(|ui| {
         if ui
             .add_enabled(!busy, Button::new("Refresh"))
-            .on_hover_text("Read the System and Application event logs again")
+            .on_hover_text("Read the system journal again")
             .clicked()
         {
             sampler.read_event_log();
         }
         if busy {
             ui.spinner();
-            ui.weak("Reading the event logs...");
+            ui.weak("Reading the journal...");
         } else if let Some((_, at)) = &log {
             ui.weak(format!("Read {}", super::ago(*at)));
         }
@@ -133,13 +85,6 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
     }
     for e in &log.errors {
         ui.colored_label(ink(ui.visuals(), ORANGE), format!("Couldn't read the {e}"));
-    }
-    if log
-        .entries
-        .iter()
-        .any(|e| e.category == EventCategory::BlueScreen)
-    {
-        crash_dumps(ui, sampler);
     }
     ui.add_space(4.0);
 
@@ -217,7 +162,7 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) {
                 ui.label(e.time_text());
                 level_cell(ui, e.level);
                 ui.label(e.category.name());
-                ui.label(format!("{} ({})", e.source(), e.channel.name()));
+                ui.label(e.source.as_str());
                 ui.vertical(|ui| {
                     let open = state.expanded.contains(&i);
                     let text = if e.detail.is_empty() {

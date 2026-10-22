@@ -3,7 +3,6 @@
 use super::helpers::{finding, format_date, guided, memtest86_step};
 use super::{Category, Context, Level, Outcome, RECENT, Step};
 use crate::bios_help::{self, BiosSetting};
-use crate::checkup::{MEMDIAG_DAYS, MEMDIAG_FAILED};
 use crate::cpuid::Vendor;
 
 /// Speed rating embedded in common part numbers (e.g. "CMW32GX4M2C3200C16" -> 3200,
@@ -182,11 +181,11 @@ pub(super) fn memory_pressure(ctx: &Context) -> Outcome {
         Category::Memory,
         "Memory is nearly full",
         format!(
-            "Physical memory has averaged {load:.0} % used over the last couple of minutes. Windows is likely paging to disk, which causes stutters."
+            "Physical memory has averaged {load:.0} % used over the last couple of minutes. The system is likely swapping to disk, which causes stutters."
         ),
         &[
             "Close unused applications and browser tabs.",
-            "Check Task Manager > Processes (sort by Memory) for anything using an unusual amount.",
+            "Check System Monitor (or \"top\", sorted by memory with Shift+M) for anything using an unusual amount.",
             "If this is normal for your workload, consider adding more RAM.",
         ],
     )])
@@ -207,40 +206,6 @@ pub(super) fn memory_capacity(ctx: &Context) -> Outcome {
         "Modern games and browsers commonly use more than 8 GB; 16 GB or more is recommended.",
         &["Consider upgrading to at least 16 GB (2 x 8 GB for dual-channel)."],
     )])
-}
-
-pub(super) fn memory_diagnostic(ctx: &Context) -> Outcome {
-    let Some(ev) = &ctx.info.checkup.events else {
-        return Outcome::Skipped("System event log not readable".into());
-    };
-    let Some(e) = &ev.memory_diagnostic else {
-        return Outcome::Skipped(format!(
-            "No Windows Memory Diagnostic run in the last {MEMDIAG_DAYS} days"
-        ));
-    };
-    if !MEMDIAG_FAILED.contains(&e.id) {
-        return Outcome::Pass(format!("Last test passed ({})", format_date(e.date)));
-    }
-    let steps = vec![
-        Step::new(
-            "If memory overclocking (XMP/EXPO) is on, turn it off and test again: an unstable profile also shows up as errors.",
-        ),
-        Step::new(
-            "Test one module at a time (power off before swapping) to find the bad one, then replace it under warranty.",
-        ),
-        memtest86_step(),
-    ];
-    Outcome::Findings(vec![guided(
-        Level::Critical,
-        Category::Memory,
-        "Windows Memory Diagnostic found errors",
-        format!(
-            "The memory test on {} reported hardware errors. Faulty or unstable memory causes crashes, corrupted files and failed installs.",
-            format_date(e.date)
-        ),
-        steps,
-    )
-    .bios()])
 }
 
 #[cfg(test)]

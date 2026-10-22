@@ -18,10 +18,8 @@ pub mod lansec;
 mod le;
 pub mod linux;
 pub mod memtest;
-pub mod minidump;
 pub mod network;
 pub mod platform;
-pub mod power;
 pub mod recording;
 pub mod report;
 pub mod sensors;
@@ -29,12 +27,11 @@ pub mod smart;
 pub mod smbios;
 pub mod storage;
 pub mod topology;
-pub mod whea;
 
 use codename::Codename;
 use cpuid::CpuInfo;
 use gpu::GpuAdapter;
-use platform::{Battery, MemoryStatus, OsInfo, PowerPlan};
+use platform::{Battery, MemoryStatus, OsInfo};
 use smbios::Smbios;
 use storage::Drive;
 use topology::Topology;
@@ -55,11 +52,8 @@ pub struct SystemInfo {
     pub battery: Option<Battery>,
     /// Battery wear (design vs full-charge capacity), laptops only.
     pub battery_health: Option<battery::BatteryHealth>,
-    /// CPU microcode revision loaded by Windows.
+    /// CPU microcode revision the kernel loaded.
     pub microcode: Option<u32>,
-    pub power_plan: Option<PowerPlan>,
-    /// Windows settings that affect performance and stability.
-    pub windows: platform::settings::WindowsSettings,
     /// Firmware, device, event-log and setup data for the Health Check.
     pub checkup: checkup::Checkup,
     /// Non-fatal problems encountered while gathering.
@@ -111,20 +105,9 @@ impl SystemInfo {
             battery: platform::battery(),
             battery_health: platform::battery_health(),
             microcode: platform::microcode_revision(),
-            power_plan: platform::power_plan(),
-            windows: platform::settings::windows_settings(),
             checkup: checkup::Checkup::default(),
             warnings,
         }
-    }
-}
-
-/// The registry `ProductName` still says "Windows 10" on Windows 11; fix it up by build number.
-pub fn windows_product_name(product: &str, build: u32) -> String {
-    if build >= 22000 && product.starts_with("Windows 10") {
-        product.replacen("Windows 10", "Windows 11", 1)
-    } else {
-        product.to_string()
     }
 }
 
@@ -153,18 +136,6 @@ pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(m <= 2), m, d)
 }
 
-/// The `Update Revision` registry value: 4 bytes on current Windows, 8 bytes (revision in
-/// the high DWORD) on older builds.
-pub fn parse_microcode(b: &[u8]) -> Option<u32> {
-    let dw = |o: usize| le::u32_at(b, o);
-    match b.len() {
-        8 => dw(4).filter(|&v| v != 0).or_else(|| dw(0)),
-        4 => dw(0),
-        _ => None,
-    }
-    .filter(|&v| v != 0)
-}
-
 /// "48 KB", "2 MB", "1.25 MB"...
 pub fn format_bytes(b: u64) -> String {
     const KB: u64 = 1024;
@@ -188,37 +159,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn product_names() {
-        assert_eq!(
-            windows_product_name("Windows 10 Pro", 26300),
-            "Windows 11 Pro"
-        );
-        assert_eq!(
-            windows_product_name("Windows 10 Pro", 19045),
-            "Windows 10 Pro"
-        );
-        assert_eq!(
-            windows_product_name("Windows Server 2022", 20348),
-            "Windows Server 2022"
-        );
-    }
-
-    #[test]
     fn civil_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(20_373), (2025, 10, 12));
         assert_eq!(civil_from_days(11_016), (2000, 2, 29));
-    }
-
-    #[test]
-    fn microcode() {
-        assert_eq!(parse_microcode(&[0x2B, 0x01, 0, 0]), Some(0x12B));
-        assert_eq!(
-            parse_microcode(&[0, 0, 0, 0, 0x29, 0x01, 0, 0]),
-            Some(0x129)
-        );
-        assert_eq!(parse_microcode(&[0, 0, 0, 0]), None);
-        assert_eq!(parse_microcode(&[1, 2]), None);
     }
 
     #[test]

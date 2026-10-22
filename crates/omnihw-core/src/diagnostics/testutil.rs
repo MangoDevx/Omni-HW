@@ -52,11 +52,7 @@ pub(super) fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context
         info,
         sensors,
         today: (2026, 10, 12),
-        uptime_secs: Some(3600),
-        power: None,
         network: None,
-        whea_live: &[],
-        dumps: None,
     }
 }
 

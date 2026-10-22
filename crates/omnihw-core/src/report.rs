@@ -465,11 +465,10 @@ mod tests {
             detail: "D".into(),
             steps: vec![
                 Step::new("First"),
-                Step::settings("Second", "ms-settings:display"),
+                Step::url("Second", "https://example.com/"),
             ],
             security: false,
             bios: false,
-            fix: None,
         };
         assert_eq!(
             finding_rows(&f),
@@ -478,7 +477,7 @@ mod tests {
                 ("  Step 1".to_string(), "First".to_string()),
                 (
                     "  Step 2".to_string(),
-                    "Second ms-settings:display".to_string()
+                    "Second https://example.com/".to_string()
                 ),
             ]
         );

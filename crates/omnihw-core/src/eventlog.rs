@@ -1,58 +1,25 @@
-//! Event Log page model: the System/Application events that matter for PC health, sorted into
-//! plain-English categories, plus the XPath filters that select them.
+//! Event Log page model: the kernel and system messages that matter for PC health, from the
+//! systemd journal, sorted into plain-English categories.
 //!
-//! Platform-neutral and unit-tested; the query runs in [`crate::platform::events_viewer`] on a
-//! worker thread.
-//!
-//! Event ids (Microsoft Learn and the event manifests on Windows 11):
-//! - Kernel-Power 41: rebooted without cleanly shutting down first.
-//! - BugCheck / WER-SystemErrorReporting 1001: rebooted from a bugcheck (blue screen).
-//! - WHEA-Logger 17 (corrected PCIe), 18 (fatal), 19 (corrected CPU/bus), 47 (corrected memory).
-//! - Display 4101: "Display driver ... stopped responding and has successfully recovered".
-//! - Windows Error Reporting 1001 with `EventName` LiveKernelEvent in the Application log: a
-//!   live kernel dump, `P1` holding the code in hex without "0x" (0x141
-//!   VIDEO_ENGINE_TIMEOUT_DETECTED, 0x117 VIDEO_TDR_TIMEOUT_DETECTED). Sample report:
-//!   <https://learn.microsoft.com/en-us/answers/questions/897557/livekernelevent141-causing-computer-to-freeze-rand>;
-//!   codes: <https://learn.microsoft.com/windows-hardware/drivers/debugger/bug-check-code-reference2>.
-//!   These are logged at Information level, so they're selected by data, not level.
-//! - disk 7 (bad block), 11 (controller error), 51 (paging error), 52 (drive predicts failure),
-//!   153 (I/O retried); Ntfs 55 (file system corruption), 98 (volume needs a disk check).
-//! - EventLog 6008: the previous system shutdown was unexpected.
+//! The journal is read with `journalctl --output=json` on a worker thread
+//! ([`crate::platform::events_viewer`]); this module turns its entries into [`LogEntry`]s.
+//! Kernel messages carry no event ids, so they're recognized by their text. The patterns follow
+//! the kernel's own wording: `mce` / `EDAC` / `AER` for hardware errors, `amdgpu` / `i915` /
+//! `NVRM: Xid` for GPU hangs, the block layer, libata, NVMe and file system drivers for disk
+//! problems, the OOM killer, and the x86 thermal throttling notices.
 
-use crate::checkup::{base_stop_code, event_data, parse_event_xml, stop_code_label, unescape_xml};
-
-/// Days of event log the page can show.
+/// Days of journal the page can show.
 pub const VIEW_DAYS: u32 = 30;
-/// Most named (categorized) System events read.
-pub const NAMED_CAP: usize = 300;
-/// Most "other" critical/error System events read.
+/// Most kernel messages read (newest first).
+pub const KERNEL_CAP: usize = 5000;
+/// Most crash and out-of-memory records read from systemd-coredump and systemd-oomd.
+pub const SERVICE_CAP: usize = 500;
+/// Most uncategorized entries kept.
 pub const OTHER_CAP: usize = 150;
-/// Most LiveKernelEvent reports read from the Application log.
-pub const LIVE_KERNEL_CAP: usize = 50;
 /// Most entries kept in total.
 pub const TOTAL_CAP: usize = 500;
 
-/// LiveKernelEvent codes that are GPU timeouts.
-pub const GPU_LIVE_KERNEL_CODES: [u32; 2] = [0x141, 0x117];
-
-/// Which event log an entry came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Channel {
-    System,
-    Application,
-}
-
-impl Channel {
-    pub fn name(self) -> &'static str {
-        match self {
-            Channel::System => "System",
-            Channel::Application => "Application",
-        }
-    }
-}
-
-/// Severity as Windows logged it (LiveKernelEvent reports, logged as Information, count as
-/// errors).
+/// Severity, from the journal priority (crit and above, err, warning).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EventLevel {
     Warning,
@@ -71,12 +38,12 @@ impl EventLevel {
         }
     }
 
-    /// From the `<Level>` value (1 critical, 2 error, 3 warning).
-    fn from_xml(v: u32) -> Option<EventLevel> {
-        match v {
-            1 => Some(EventLevel::Critical),
-            2 => Some(EventLevel::Error),
-            3 => Some(EventLevel::Warning),
+    /// From a syslog priority: 0-2 (emerg, alert, crit), 3 (err), 4 (warning).
+    pub fn from_priority(p: u8) -> Option<EventLevel> {
+        match p {
+            0..=2 => Some(EventLevel::Critical),
+            3 => Some(EventLevel::Error),
+            4 => Some(EventLevel::Warning),
             _ => None,
         }
     }
@@ -85,150 +52,321 @@ impl EventLevel {
 /// Plain-English group of an event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EventCategory {
-    UnexpectedShutdown,
-    BlueScreen,
+    KernelCrash,
     HardwareError,
     GpuTimeout,
     Disk,
-    DirtyShutdown,
+    OutOfMemory,
+    AppCrash,
+    Overheating,
     Other,
 }
 
 impl EventCategory {
-    pub const ALL: [EventCategory; 7] = [
-        EventCategory::UnexpectedShutdown,
-        EventCategory::BlueScreen,
+    pub const ALL: [EventCategory; 8] = [
+        EventCategory::KernelCrash,
         EventCategory::HardwareError,
         EventCategory::GpuTimeout,
         EventCategory::Disk,
-        EventCategory::DirtyShutdown,
+        EventCategory::OutOfMemory,
+        EventCategory::AppCrash,
+        EventCategory::Overheating,
         EventCategory::Other,
     ];
 
     pub fn name(self) -> &'static str {
         match self {
-            EventCategory::UnexpectedShutdown => "Unexpected shutdown",
-            EventCategory::BlueScreen => "Blue screen",
+            EventCategory::KernelCrash => "Kernel crash or hang",
             EventCategory::HardwareError => "Hardware error",
-            EventCategory::GpuTimeout => "GPU driver timeout",
+            EventCategory::GpuTimeout => "GPU hang or reset",
             EventCategory::Disk => "Disk problem",
-            EventCategory::DirtyShutdown => "Unexpected restart",
+            EventCategory::OutOfMemory => "Out of memory",
+            EventCategory::AppCrash => "App crash",
+            EventCategory::Overheating => "Overheating",
             EventCategory::Other => "Other critical/error",
         }
     }
 }
 
-/// A known event: provider names, the ids it covers and what it means.
+/// A known message: every pattern must occur in the lower-cased text.
 struct Rule {
-    providers: &'static [&'static str],
-    id: u32,
+    /// `None` matches any sender; else the journal's `SYSLOG_IDENTIFIER`.
+    source: Option<&'static str>,
+    patterns: &'static [&'static str],
     category: EventCategory,
+    /// Overrides the logged priority (some hardware errors are logged as warnings or info).
+    level: Option<EventLevel>,
     title: &'static str,
 }
 
-const KERNEL_POWER: &[&str] = &["Microsoft-Windows-Kernel-Power"];
-const BUGCHECK: &[&str] = &["BugCheck", "Microsoft-Windows-WER-SystemErrorReporting"];
-const WHEA: &[&str] = &["Microsoft-Windows-WHEA-Logger"];
-const DISPLAY: &[&str] = &["Display"];
-const DISK: &[&str] = &["disk"];
-const NTFS: &[&str] = &["Ntfs", "Microsoft-Windows-Ntfs"];
-const EVENTLOG: &[&str] = &["EventLog"];
-/// Provider of LiveKernelEvent reports in the Application log.
-pub const WER: &str = "Windows Error Reporting";
+const fn kernel(
+    patterns: &'static [&'static str],
+    category: EventCategory,
+    level: Option<EventLevel>,
+    title: &'static str,
+) -> Rule {
+    Rule {
+        source: Some("kernel"),
+        patterns,
+        category,
+        level,
+        title,
+    }
+}
 
-/// The categorized System events, most important first.
+use EventCategory as C;
+use EventLevel as L;
+
+/// First match wins, so the specific patterns come before the general ones.
 const RULES: &[Rule] = &[
+    // Kernel crashes and hangs.
+    kernel(
+        &["kernel panic"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "Kernel panic",
+    ),
+    kernel(
+        &["bug: unable to handle"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "Kernel error (bad memory access)",
+    ),
+    kernel(
+        &["general protection fault"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "Kernel error (general protection fault)",
+    ),
+    kernel(
+        &["kernel bug at"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "Kernel bug",
+    ),
+    kernel(
+        &["oops:"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "Kernel error (oops)",
+    ),
+    kernel(
+        &["soft lockup"],
+        C::KernelCrash,
+        Some(L::Error),
+        "A CPU got stuck (soft lockup)",
+    ),
+    kernel(
+        &["hard lockup"],
+        C::KernelCrash,
+        Some(L::Critical),
+        "A CPU got stuck (hard lockup)",
+    ),
+    kernel(
+        &["rcu", "stall"],
+        C::KernelCrash,
+        Some(L::Error),
+        "The kernel stalled (RCU stall)",
+    ),
+    kernel(
+        &["blocked for more than"],
+        C::KernelCrash,
+        Some(L::Warning),
+        "A task hung for over two minutes",
+    ),
+    // Hardware errors.
+    kernel(
+        &["edac", " ue "],
+        C::HardwareError,
+        Some(L::Critical),
+        "Uncorrected memory error",
+    ),
+    kernel(
+        &["edac", " ce "],
+        C::HardwareError,
+        Some(L::Warning),
+        "Corrected memory error",
+    ),
+    kernel(
+        &["[hardware error]"],
+        C::HardwareError,
+        Some(L::Error),
+        "Machine check (CPU, cache or memory hardware error)",
+    ),
+    kernel(
+        &["machine check"],
+        C::HardwareError,
+        Some(L::Error),
+        "Machine check (CPU, cache or memory hardware error)",
+    ),
+    kernel(
+        &["pcie bus error", "severity=corrected"],
+        C::HardwareError,
+        Some(L::Warning),
+        "Corrected PCI Express error",
+    ),
+    kernel(
+        &["pcie bus error"],
+        C::HardwareError,
+        Some(L::Error),
+        "Uncorrected PCI Express error",
+    ),
+    // GPU hangs and resets.
+    kernel(
+        &["fallen off the bus"],
+        C::GpuTimeout,
+        Some(L::Critical),
+        "The graphics card dropped off the PCIe bus",
+    ),
+    kernel(
+        &["nvrm: xid"],
+        C::GpuTimeout,
+        Some(L::Error),
+        "NVIDIA graphics error (Xid)",
+    ),
+    kernel(
+        &["amdgpu", "timeout"],
+        C::GpuTimeout,
+        Some(L::Error),
+        "AMD graphics stopped responding",
+    ),
+    kernel(
+        &["amdgpu", "gpu reset"],
+        C::GpuTimeout,
+        Some(L::Error),
+        "AMD graphics was reset",
+    ),
+    kernel(
+        &["i915", "gpu hang"],
+        C::GpuTimeout,
+        Some(L::Error),
+        "Intel graphics hung",
+    ),
+    kernel(
+        &["i915", "resetting"],
+        C::GpuTimeout,
+        Some(L::Warning),
+        "Intel graphics was reset",
+    ),
+    kernel(
+        &["xe ", "gt", "reset"],
+        C::GpuTimeout,
+        Some(L::Warning),
+        "Intel graphics was reset",
+    ),
+    kernel(
+        &["nouveau", "fifo"],
+        C::GpuTimeout,
+        Some(L::Error),
+        "Nouveau graphics error",
+    ),
+    // Drives and file systems.
+    kernel(
+        &["nvme", "controller is down"],
+        C::Disk,
+        Some(L::Critical),
+        "NVMe drive dropped out",
+    ),
+    kernel(
+        &["nvme", "timeout"],
+        C::Disk,
+        Some(L::Error),
+        "NVMe drive stopped responding",
+    ),
+    kernel(
+        &["medium error"],
+        C::Disk,
+        Some(L::Error),
+        "Bad sector on a drive",
+    ),
+    kernel(
+        &["unrecovered read error"],
+        C::Disk,
+        Some(L::Error),
+        "Bad sector on a drive",
+    ),
+    kernel(
+        &["i/o error"],
+        C::Disk,
+        Some(L::Error),
+        "Drive read/write error",
+    ),
+    kernel(
+        &["ata", "failed command"],
+        C::Disk,
+        Some(L::Error),
+        "SATA command failed",
+    ),
+    kernel(
+        &["ata", "hard resetting link"],
+        C::Disk,
+        Some(L::Warning),
+        "SATA link was reset",
+    ),
+    kernel(
+        &["ext4-fs error"],
+        C::Disk,
+        Some(L::Error),
+        "File system error",
+    ),
+    kernel(
+        &["btrfs", "error"],
+        C::Disk,
+        Some(L::Error),
+        "File system error",
+    ),
+    kernel(
+        &["xfs", "corruption"],
+        C::Disk,
+        Some(L::Error),
+        "File system error",
+    ),
+    kernel(
+        &["fat-fs", "error"],
+        C::Disk,
+        Some(L::Error),
+        "File system error",
+    ),
+    // Memory and temperature.
+    kernel(
+        &["out of memory: killed process"],
+        C::OutOfMemory,
+        Some(L::Error),
+        "Ran out of memory; a process was killed",
+    ),
+    kernel(
+        &["temperature above threshold"],
+        C::Overheating,
+        Some(L::Warning),
+        "CPU overheated and slowed down",
+    ),
+    kernel(
+        &["critical temperature reached"],
+        C::Overheating,
+        Some(L::Critical),
+        "Critical temperature: the system shut down",
+    ),
+    // Services.
     Rule {
-        providers: KERNEL_POWER,
-        id: 41,
-        category: EventCategory::UnexpectedShutdown,
-        title: "Restarted without shutting down cleanly",
+        source: Some("systemd-coredump"),
+        patterns: &["dumped core"],
+        category: C::AppCrash,
+        level: Some(L::Error),
+        title: "An app crashed",
     },
     Rule {
-        providers: BUGCHECK,
-        id: 1001,
-        category: EventCategory::BlueScreen,
-        title: "Restarted after a blue screen",
-    },
-    Rule {
-        providers: WHEA,
-        id: 18,
-        category: EventCategory::HardwareError,
-        title: "Fatal hardware error (CPU, memory or PCIe)",
-    },
-    Rule {
-        providers: WHEA,
-        id: 19,
-        category: EventCategory::HardwareError,
-        title: "Corrected CPU or bus hardware error",
-    },
-    Rule {
-        providers: WHEA,
-        id: 47,
-        category: EventCategory::HardwareError,
-        title: "Corrected memory error",
-    },
-    Rule {
-        providers: WHEA,
-        id: 17,
-        category: EventCategory::HardwareError,
-        title: "Corrected PCI Express error",
-    },
-    Rule {
-        providers: DISPLAY,
-        id: 4101,
-        category: EventCategory::GpuTimeout,
-        title: "Graphics driver stopped responding and recovered",
-    },
-    Rule {
-        providers: DISK,
-        id: 7,
-        category: EventCategory::Disk,
-        title: "Bad block found on a drive",
-    },
-    Rule {
-        providers: DISK,
-        id: 11,
-        category: EventCategory::Disk,
-        title: "Drive controller error",
-    },
-    Rule {
-        providers: DISK,
-        id: 51,
-        category: EventCategory::Disk,
-        title: "Error while paging to a drive",
-    },
-    Rule {
-        providers: DISK,
-        id: 52,
-        category: EventCategory::Disk,
-        title: "Drive reports it is about to fail",
-    },
-    Rule {
-        providers: DISK,
-        id: 153,
-        category: EventCategory::Disk,
-        title: "Drive operation had to be retried",
-    },
-    Rule {
-        providers: NTFS,
-        id: 55,
-        category: EventCategory::Disk,
-        title: "File system corruption found",
-    },
-    Rule {
-        providers: NTFS,
-        id: 98,
-        category: EventCategory::Disk,
-        title: "Volume needs a disk check (chkdsk)",
-    },
-    Rule {
-        providers: EVENTLOG,
-        id: 6008,
-        category: EventCategory::DirtyShutdown,
-        title: "The previous shutdown was unexpected",
+        source: Some("systemd-oomd"),
+        patterns: &["killed"],
+        category: C::OutOfMemory,
+        level: Some(L::Error),
+        title: "Ran out of memory; systemd-oomd stopped an app",
     },
 ];
+
+/// Whether `e` is a hardware error (the memory and disk tests report these).
+pub fn is_hardware_error(e: &LogEntry) -> bool {
+    e.category == EventCategory::HardwareError
+}
 
 /// One event shown on the page.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -237,14 +375,13 @@ pub struct LogEntry {
     pub unix: i64,
     /// Local time offset from UTC at that moment, in seconds (`None`: show UTC).
     pub utc_offset: Option<i32>,
-    pub channel: Channel,
-    pub provider: String,
-    pub id: u32,
+    /// Who logged it (`SYSLOG_IDENTIFIER`), e.g. "kernel" or "systemd-coredump".
+    pub source: String,
     pub level: EventLevel,
     pub category: EventCategory,
     /// What it means, in plain English.
     pub title: &'static str,
-    /// Key data: stop code, driver, device, ...; may be empty.
+    /// The logged message (first line, trimmed).
     pub detail: String,
 }
 
@@ -274,350 +411,117 @@ impl LogEntry {
         };
         format!("{y}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}{utc}")
     }
-
-    /// "Kernel-Power 41": the provider without its "Microsoft-Windows-" prefix, and the id.
-    pub fn source(&self) -> String {
-        let p = self
-            .provider
-            .strip_prefix("Microsoft-Windows-")
-            .unwrap_or(&self.provider);
-        format!("{p} {}", self.id)
-    }
 }
 
 /// What a refresh read: the entries (newest first) and any query that failed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EventLog {
     pub entries: Vec<LogEntry>,
-    /// One line per failed query, e.g. "Application log: Access is denied."
+    /// One line per failed query, e.g. "kernel messages: ...".
     pub errors: Vec<String>,
 }
 
-// ---- XPath filters ---------------------------------------------------------------------------
+// ---- Journal entries ---------------------------------------------------------------------------
 
-const MS_PER_DAY: u64 = 86_400_000;
-
-/// `TimeCreated` within the last `days` days.
-pub fn within(days: u32) -> String {
-    format!(
-        "TimeCreated[timediff(@SystemTime) <= {}]",
-        days as u64 * MS_PER_DAY
-    )
+/// The fields of one `journalctl --output=json` line that the page uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JournalEntry {
+    pub unix: i64,
+    pub priority: u8,
+    pub identifier: String,
+    pub message: String,
 }
 
-fn providers_xpath(providers: &[&str]) -> String {
-    let names: Vec<String> = providers.iter().map(|p| format!("@Name='{p}'")).collect();
-    format!("Provider[{}]", names.join(" or "))
-}
-
-/// System log: every categorized event (levels 1-3) in the last `days` days.
-pub fn named_filter(days: u32) -> String {
-    let mut groups: Vec<(&[&str], Vec<u32>)> = Vec::new();
-    for r in RULES {
-        match groups.iter_mut().find(|(p, _)| *p == r.providers) {
-            Some((_, ids)) => ids.push(r.id),
-            None => groups.push((r.providers, vec![r.id])),
+/// A JSON field that journalctl writes as a string, or as an array of bytes when it isn't
+/// valid UTF-8.
+fn text_field(v: &serde_json::Value) -> Option<String> {
+    match v {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(a) => {
+            let bytes: Vec<u8> = a
+                .iter()
+                .filter_map(|b| b.as_u64())
+                .map(|b| b as u8)
+                .collect();
+            Some(String::from_utf8_lossy(&bytes).into_owned())
         }
+        _ => None,
     }
-    let parts: Vec<String> = groups
-        .iter()
-        .map(|(p, ids)| {
-            let ids: Vec<String> = ids.iter().map(|i| format!("EventID={i}")).collect();
-            format!("({} and ({}))", providers_xpath(p), ids.join(" or "))
-        })
-        .collect();
-    format!(
-        "*[System[({}) and (Level=1 or Level=2 or Level=3) and {}]]",
-        parts.join(" or "),
-        within(days)
-    )
 }
 
-/// System log: every critical or error event in the last `days` days (the categorized ones are
-/// dropped when parsing with [`parse_other`]).
-pub fn other_filter(days: u32) -> String {
-    format!("*[System[(Level=1 or Level=2) and {}]]", within(days))
-}
-
-/// System log: Display 4101 in the last `days` days.
-pub fn display_tdr_filter(days: u32) -> String {
-    format!(
-        "*[System[Provider[@Name='Display'] and EventID=4101 and {}]]",
-        within(days)
-    )
-}
-
-/// Application log: Windows Error Reporting LiveKernelEvent 141/117 reports.
-pub fn live_kernel_filter(days: u32) -> String {
-    let codes: Vec<String> = GPU_LIVE_KERNEL_CODES
-        .iter()
-        .map(|c| format!("Data[@Name='P1']='{c:x}'"))
-        .collect();
-    format!(
-        "*[System[Provider[@Name='{WER}'] and EventID=1001 and {}] and \
-         EventData[Data[@Name='EventName']='LiveKernelEvent'] and EventData[{}]]",
-        within(days),
-        codes.join(" or ")
-    )
-}
-
-// ---- Parsing ---------------------------------------------------------------------------------
-
-/// Value of attribute `attr` in the first `<tag ...>` element.
-fn attribute<'a>(xml: &'a str, tag: &str, attr: &str) -> Option<&'a str> {
-    let start = xml.find(&format!("<{tag} "))?;
-    let open = &xml[start..start + xml[start..].find('>')?];
-    let i = open.find(&format!("{attr}="))? + attr.len() + 1;
-    let q = open[i..].chars().next()?;
-    let rest = &open[i + 1..];
-    Some(&rest[..rest.find(q)?])
-}
-
-/// Text of the first `<tag>` element (`<tag attr=...>` too).
-fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
-    let mut from = 0;
-    while let Some(i) = xml[from..].find(&format!("<{tag}")) {
-        let start = from + i + tag.len() + 1;
-        let next = xml[start..].chars().next()?;
-        if next == '>' || next == ' ' {
-            let body = &xml[start + xml[start..].find('>')? + 1..];
-            return Some(&body[..body.find(&format!("</{tag}>"))?]);
-        }
-        from = start;
-    }
-    None
-}
-
-/// Every `<Data>` element of the event as (name, unescaped value), in order.
-pub fn data_items(xml: &str) -> Vec<(Option<String>, String)> {
-    let mut out = Vec::new();
-    let mut rest = xml;
-    while let Some(i) = rest.find("<Data") {
-        rest = &rest[i + 5..];
-        let Some(open_end) = rest.find('>') else {
-            break;
-        };
-        let open = &rest[..open_end];
-        if !(open.is_empty() || open.starts_with(' ') || open.starts_with('/')) {
-            continue; // e.g. <DataItem>
-        }
-        let name = open.find("Name=").and_then(|n| {
-            let q = open[n + 5..].chars().next()?;
-            let v = &open[n + 6..];
-            Some(v[..v.find(q)?].to_string())
-        });
-        if open.ends_with('/') {
-            out.push((name, String::new()));
-            rest = &rest[open_end + 1..];
-            continue;
-        }
-        let body = &rest[open_end + 1..];
-        let Some(end) = body.find("</Data>") else {
-            break;
-        };
-        out.push((name, unescape_xml(&body[..end])));
-        rest = &body[end..];
-    }
-    out
-}
-
-/// Value of the first unnamed `<Data>` (Display 4101 driver, disk device, ...).
-fn first_unnamed(items: &[(Option<String>, String)], index: usize) -> Option<&str> {
-    items
-        .iter()
-        .filter(|(n, _)| n.is_none())
-        .nth(index)
-        .map(|(_, v)| v.trim())
-        .filter(|v| !v.is_empty())
-}
-
-/// Up to four "Name: value" pairs (or bare values), skipping empty and very long ones.
-fn summary(items: &[(Option<String>, String)]) -> String {
-    let parts: Vec<String> = items
-        .iter()
-        .filter(|(_, v)| !v.trim().is_empty() && v.len() <= 120)
-        .take(4)
-        .map(|(n, v)| match n {
-            Some(n) => format!("{n}: {}", v.trim()),
-            None => v.trim().to_string(),
-        })
-        .collect();
-    parts.join("; ")
-}
-
-/// Hex code of a LiveKernelEvent report (`P1`, e.g. "141"), or `None` for other reports.
-pub fn live_kernel_code(xml: &str) -> Option<u32> {
-    if event_data(xml, "EventName")?.trim() != "LiveKernelEvent" {
-        return None;
-    }
-    u32::from_str_radix(event_data(xml, "P1")?.trim(), 16).ok()
-}
-
-/// Local (year, month, day, hour, minute) from the live dump's file name, e.g.
-/// `WATCHDOG-20261015-0915.dmp`. WER often sends reports days later in a batch, so this is when
-/// the timeout actually happened; the event's own time is when it was reported.
-pub fn dump_local_time(xml: &str) -> Option<(i64, u32, u32, u32, u32)> {
-    let name = dump_name(xml)?;
-    let stem = name.strip_suffix(".dmp")?;
-    let mut parts = stem.rsplit('-');
-    let (hm, ymd) = (parts.next()?, parts.next()?);
-    if hm.len() != 4
-        || ymd.len() != 8
-        || !(hm.chars().chain(ymd.chars())).all(|c| c.is_ascii_digit())
-    {
-        return None;
-    }
-    let num = |s: &str| s.parse::<u32>().ok();
-    let (m, d, h, mi) = (
-        num(&ymd[4..6])?,
-        num(&ymd[6..8])?,
-        num(&hm[..2])?,
-        num(&hm[2..])?,
-    );
-    let valid = (1..=12).contains(&m) && (1..=31).contains(&d) && h < 24 && mi < 60;
-    valid.then_some((i64::from(num(&ymd[..4])?), m, d, h, mi))
-}
-
-/// File name of the first `.dmp` in a WER report's `AttachedFiles`.
-fn dump_name(xml: &str) -> Option<String> {
-    event_data(xml, "AttachedFiles")?
-        .lines()
-        .map(str::trim)
-        .find(|l| l.ends_with(".dmp"))
-        .and_then(|l| l.rsplit('\\').next())
-        .map(str::to_string)
-}
-
-/// `ReportId` of a Windows Error Reporting event: WER can log the same report more than once.
-pub fn report_id(xml: &str) -> Option<String> {
-    event_data(xml, "ReportId").filter(|s| !s.is_empty())
-}
-
-/// The rule matching a provider and id.
-fn rule(provider: &str, id: u32) -> Option<&'static Rule> {
-    RULES
-        .iter()
-        .find(|r| r.id == id && r.providers.iter().any(|p| p.eq_ignore_ascii_case(provider)))
-}
-
-/// Key data of a categorized event.
-fn detail(category: EventCategory, xml: &str, items: &[(Option<String>, String)]) -> String {
-    let stop = || {
-        parse_event_xml(xml)
-            .and_then(|e| e.code)
-            .filter(|&c| c != 0)
-            .map(|c| format!("Stop code {}", stop_code_label(c)))
-    };
-    match category {
-        EventCategory::UnexpectedShutdown => {
-            let mut parts: Vec<String> = stop().into_iter().collect();
-            if event_data(xml, "PowerButtonTimestamp").is_some_and(|v| v.trim() != "0") {
-                parts.push("the power button was held down".into());
-            }
-            if parts.is_empty() {
-                "No blue screen recorded: the PC lost power, froze or was reset.".into()
-            } else {
-                parts.join("; ")
-            }
-        }
-        EventCategory::BlueScreen => stop().unwrap_or_default(),
-        EventCategory::GpuTimeout => first_unnamed(items, 0)
-            .map(|d| format!("Driver: {d}"))
+/// Parse one line of `journalctl --output=json`.
+pub fn parse_journal_line(line: &str) -> Option<JournalEntry> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    let micros: i64 = text_field(v.get("__REALTIME_TIMESTAMP")?)?.parse().ok()?;
+    Some(JournalEntry {
+        unix: micros / 1_000_000,
+        priority: v
+            .get("PRIORITY")
+            .and_then(text_field)
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(6),
+        identifier: v
+            .get("SYSLOG_IDENTIFIER")
+            .and_then(text_field)
             .unwrap_or_default(),
-        EventCategory::Disk if first_unnamed(items, 0).is_some() => {
-            format!("Device: {}", first_unnamed(items, 0).unwrap_or_default())
-        }
-        EventCategory::DirtyShutdown => {
-            // Time and date of the previous shutdown, with left-to-right marks around them.
-            let clean = |i| first_unnamed(items, i).map(|s| s.replace('\u{200e}', ""));
-            match (clean(0), clean(1)) {
-                (Some(t), Some(d)) => format!("Previous shutdown at {t} on {d}"),
-                _ => String::new(),
-            }
-        }
-        _ => summary(items),
-    }
-}
-
-/// Fields every entry has: provider, id, level value and time.
-fn header(xml: &str) -> Option<(String, u32, u32, i64)> {
-    let provider = attribute(xml, "Provider", "Name")?.to_string();
-    let id: u32 = element(xml, "EventID")?.trim().parse().ok()?;
-    let level: u32 = element(xml, "Level")
-        .and_then(|l| l.trim().parse().ok())
-        .unwrap_or(0);
-    let t = attribute(xml, "TimeCreated", "SystemTime")?;
-    let unix = crate::recording::parse_iso_utc(t)? as i64;
-    Some((provider, id, level, unix))
-}
-
-/// A categorized System event (or a LiveKernelEvent GPU timeout from the Application log);
-/// `None` for anything else.
-pub fn parse_named(xml: &str, channel: Channel) -> Option<LogEntry> {
-    let (provider, id, level, unix) = header(xml)?;
-    let items = data_items(xml);
-    if provider == WER && id == 1001 {
-        let code = live_kernel_code(xml)?;
-        if !GPU_LIVE_KERNEL_CODES.contains(&base_stop_code(code)) {
-            return None;
-        }
-        let mut detail = format!("LiveKernelEvent {}", stop_code_label(code));
-        if let Some(d) = dump_name(xml) {
-            detail.push_str(&format!("; dump {d}"));
-        }
-        return Some(LogEntry {
-            unix,
-            utc_offset: None,
-            channel,
-            provider,
-            id,
-            level: EventLevel::Error,
-            category: EventCategory::GpuTimeout,
-            title: if code == 0x141 {
-                "Graphics card hung and was reset"
-            } else {
-                "Graphics driver timed out and was reset"
-            },
-            detail,
-        });
-    }
-    let r = rule(&provider, id)?;
-    Some(LogEntry {
-        unix,
-        utc_offset: None,
-        channel,
-        level: EventLevel::from_xml(level).unwrap_or(EventLevel::Error),
-        category: r.category,
-        title: r.title,
-        detail: detail(r.category, xml, &items),
-        provider,
-        id,
+        message: text_field(v.get("MESSAGE")?)?,
     })
 }
 
-/// A critical/error System event that no rule covers; `None` for categorized events (read by
-/// [`parse_named`]) and lower levels.
-pub fn parse_other(xml: &str) -> Option<LogEntry> {
-    let (provider, id, level, unix) = header(xml)?;
-    if rule(&provider, id).is_some() {
-        return None;
-    }
-    let level = EventLevel::from_xml(level).filter(|&l| l >= EventLevel::Error)?;
+/// The page's entry for a journal entry: a known message in its category, or an unknown one
+/// that was logged as an error or worse (`Other`). `None` for anything else.
+pub fn classify(j: &JournalEntry) -> Option<LogEntry> {
+    let lower = j.message.to_lowercase();
+    let rule = RULES.iter().find(|r| {
+        r.source.is_none_or(|s| s == j.identifier) && r.patterns.iter().all(|p| lower.contains(p))
+    });
+    let (category, level, title) = match rule {
+        Some(r) => (
+            r.category,
+            r.level.or(EventLevel::from_priority(j.priority))?,
+            r.title,
+        ),
+        None if j.priority <= 3 => (
+            EventCategory::Other,
+            EventLevel::from_priority(j.priority)?,
+            "Logged as an error",
+        ),
+        None => return None,
+    };
+    let detail = j.message.lines().next().unwrap_or_default().trim();
     Some(LogEntry {
-        unix,
+        unix: j.unix,
         utc_offset: None,
-        channel: Channel::System,
-        provider,
-        id,
+        source: j.identifier.clone(),
         level,
-        category: EventCategory::Other,
-        title: if level == EventLevel::Critical {
-            "Other critical event"
-        } else {
-            "Other error"
-        },
-        detail: summary(&data_items(xml)),
+        category,
+        title,
+        detail: truncate(detail, 300),
     })
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s.to_string(),
+    }
+}
+
+/// Classified entries of a journalctl JSON output, at most `OTHER_CAP` of them uncategorized.
+pub fn parse_journal(json_lines: &str) -> Vec<LogEntry> {
+    let mut others = 0;
+    json_lines
+        .lines()
+        .filter_map(parse_journal_line)
+        .filter_map(|j| classify(&j))
+        .filter(|e| {
+            if e.category != EventCategory::Other {
+                return true;
+            }
+            others += 1;
+            others <= OTHER_CAP
+        })
+        .collect()
 }
 
 /// Newest first, at most [`TOTAL_CAP`] entries.
@@ -663,7 +567,7 @@ impl Filter {
             || [
                 e.title,
                 e.category.name(),
-                &e.source(),
+                &e.source,
                 &e.detail,
                 e.level.name(),
             ]
@@ -681,7 +585,7 @@ pub fn to_text<'a>(entries: impl IntoIterator<Item = &'a LogEntry>) -> String {
             e.time_text(),
             e.level.name(),
             e.category.name(),
-            e.source(),
+            e.source,
             e.title
         ));
         if !e.detail.is_empty() {
@@ -692,233 +596,235 @@ pub fn to_text<'a>(entries: impl IntoIterator<Item = &'a LogEntry>) -> String {
     out
 }
 
+/// "2 hardware errors were logged during the test: Corrected memory error (2)." for a test's
+/// result, or `None` when there were none.
+pub fn during_test_text(events: &[LogEntry]) -> Option<String> {
+    if events.is_empty() {
+        return None;
+    }
+    let mut titles: Vec<(&str, usize)> = Vec::new();
+    for e in events {
+        match titles.iter_mut().find(|(t, _)| *t == e.title) {
+            Some((_, n)) => *n += 1,
+            None => titles.push((e.title, 1)),
+        }
+    }
+    let list = titles
+        .iter()
+        .map(|(t, n)| {
+            if *n > 1 {
+                format!("{t} ({n})")
+            } else {
+                t.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let n = events.len();
+    Some(format!(
+        "{n} hardware {} logged during the test: {list}. Errors under load point at unstable memory settings (XMP/EXPO), CPU overclocks or undervolts, or failing hardware.",
+        if n == 1 { "error was" } else { "errors were" }
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const DISPLAY_4101: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='Display'/><EventID Qualifiers='0'>4101</EventID><Version>0</Version><Level>3</Level>\
-        <Task>0</Task><Opcode>0</Opcode><Keywords>0x80000000000000</Keywords>\
-        <TimeCreated SystemTime='2026-10-10T20:15:30.1234567Z'/><EventRecordID>1234</EventRecordID>\
-        <Correlation/><Execution ProcessID='0' ThreadID='0'/><Channel>System</Channel><Computer>PC</Computer>\
-        <Security/></System><EventData><Data>nvlddmkm</Data><Data></Data></EventData></Event>";
+    fn line(us: i64, prio: u8, id: &str, msg: &str) -> String {
+        serde_json::json!({
+            "__REALTIME_TIMESTAMP": us.to_string(),
+            "PRIORITY": prio.to_string(),
+            "SYSLOG_IDENTIFIER": id,
+            "MESSAGE": msg,
+        })
+        .to_string()
+    }
 
-    // Recorded on Windows 11 26300 (paths shortened).
-    const LIVE_KERNEL_141: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='Windows Error Reporting' Guid='{0ead09bd-2157-539a-8d6d-c87f95b64d70}'/><EventID>1001</EventID>\
-        <Version>0</Version><Level>4</Level><Task>0</Task><Opcode>0</Opcode><Keywords>0x8000000000000000</Keywords>\
-        <TimeCreated SystemTime='2026-10-19T16:13:18.4498342Z'/><EventRecordID>306579</EventRecordID><Correlation/>\
-        <Execution ProcessID='25676' ThreadID='30576'/><Channel>Application</Channel><Computer>PC</Computer>\
-        <Security UserID='S-1-5-18'/></System><EventData><Data Name='Bucket'></Data><Data Name='BucketType'>0</Data>\
-        <Data Name='EventName'>LiveKernelEvent</Data><Data Name='Response'>Not available</Data><Data Name='CabId'>0</Data>\
-        <Data Name='P1'>141</Data><Data Name='P2'>aaaaaaaaaaaaaaaa</Data><Data Name='P6'>10_0_26300</Data>\
-        <Data Name='AttachedFiles'>\n\\\\?\\C:\\WINDOWS\\LiveKernelReports\\WATCHDOG\\WATCHDOG-20261015-0915.dmp\n\
-        \\\\?\\C:\\WINDOWS\\SystemTemp\\WER-85363171-0.sysdata.xml</Data>\
-        <Data Name='ReportId'>994fb83c-91e6-487d-8c32-f47263dba4c0</Data><Data Name='ReportStatus'>2049</Data></EventData></Event>";
-
-    const KERNEL_POWER_41: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='Microsoft-Windows-Kernel-Power' Guid='{331c3b3a-2005-44c2-ac5e-77220c37d6b4}'/>\
-        <EventID>41</EventID><Version>9</Version><Level>1</Level><Task>63</Task>\
-        <TimeCreated SystemTime='2026-10-01T12:34:56.1234567Z'/><Channel>System</Channel></System><EventData>\
-        <Data Name='BugcheckCode'>0</Data><Data Name='BugcheckParameter1'>0x0</Data>\
-        <Data Name='SleepInProgress'>0</Data><Data Name='PowerButtonTimestamp'>0</Data></EventData></Event>";
-
-    const DISK_153: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='disk'/><EventID Qualifiers='32772'>153</EventID><Version>0</Version><Level>3</Level>\
-        <TimeCreated SystemTime='2026-10-05T08:00:00.000Z'/><Channel>System</Channel></System><EventData>\
-        <Data>\\Device\\Harddisk1\\DR1</Data><Data>0x2a18c00</Data><Data>1</Data><Binary>0F01</Binary></EventData></Event>";
-
-    const EVENTLOG_6008: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='EventLog'/><EventID Qualifiers='32768'>6008</EventID><Level>2</Level>\
-        <TimeCreated SystemTime='2026-10-02T07:00:00.5Z'/><Channel>System</Channel></System><EventData>\
-        <Data>\u{200e}9:41:07 PM</Data><Data>\u{200e}10/1/2026</Data><Data></Data><Data></Data><Data>1</Data>\
-        <Data></Data></EventData></Event>";
-
-    const UNKNOWN: &str = "<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'><System>\
-        <Provider Name='Microsoft-Windows-DistributedCOM' Guid='{1b562e86-b7aa-4131-badc-b6f3a001407e}' EventSourceName='DCOM'/>\
-        <EventID Qualifiers='0'>10016</EventID><Level>2</Level>\
-        <TimeCreated SystemTime='2026-10-03T10:00:00Z'/><Channel>System</Channel></System><EventData>\
-        <Data Name='param1'>application-specific</Data><Data Name='param2'>Local</Data><Data Name='param3'>Activation</Data>\
-        </EventData></Event>";
+    const T: i64 = 1_791_000_000;
 
     #[test]
-    fn gpu_timeouts() {
-        let e = parse_named(DISPLAY_4101, Channel::System).unwrap();
-        assert_eq!(e.category, EventCategory::GpuTimeout);
-        assert_eq!(e.level, EventLevel::Warning);
-        assert_eq!(e.detail, "Driver: nvlddmkm");
-        assert_eq!(e.source(), "Display 4101");
-        assert_eq!(e.time_text(), "2026-10-10 20:15:30 UTC");
-
-        assert_eq!(live_kernel_code(LIVE_KERNEL_141), Some(0x141));
+    fn journal_lines() {
+        let j = parse_journal_line(&line(T * 1_000_000 + 5, 3, "kernel", "x")).unwrap();
         assert_eq!(
-            dump_local_time(LIVE_KERNEL_141),
-            Some((2026, 10, 15, 9, 15))
+            j,
+            JournalEntry {
+                unix: T,
+                priority: 3,
+                identifier: "kernel".into(),
+                message: "x".into()
+            }
         );
-        assert_eq!(dump_local_time(DISPLAY_4101), None);
-        assert_eq!(
-            report_id(LIVE_KERNEL_141).as_deref(),
-            Some("994fb83c-91e6-487d-8c32-f47263dba4c0")
-        );
-        let e = parse_named(LIVE_KERNEL_141, Channel::Application).unwrap();
-        assert_eq!(e.category, EventCategory::GpuTimeout);
-        assert_eq!(
-            e.level,
-            EventLevel::Error,
-            "Information-level reports count as errors"
-        );
-        assert_eq!(e.title, "Graphics card hung and was reset");
-        assert_eq!(
-            e.detail,
-            "LiveKernelEvent VIDEO_ENGINE_TIMEOUT_DETECTED (0x141); dump WATCHDOG-20261015-0915.dmp"
-        );
-        // Other live dumps (e.g. 0x193) aren't GPU timeouts.
-        let other = LIVE_KERNEL_141.replace("<Data Name='P1'>141<", "<Data Name='P1'>193<");
-        assert_eq!(parse_named(&other, Channel::Application), None);
+        // Non-UTF-8 messages come as byte arrays.
+        let bytes = r#"{"__REALTIME_TIMESTAMP":"1000000","MESSAGE":[104,105,255]}"#;
+        let j = parse_journal_line(bytes).unwrap();
+        assert_eq!((j.unix, j.priority), (1, 6));
+        assert!(j.message.starts_with("hi"));
+        assert!(parse_journal_line("not json").is_none());
     }
 
     #[test]
-    fn crashes_disks_and_shutdowns() {
-        let e = parse_named(KERNEL_POWER_41, Channel::System).unwrap();
+    fn categories() {
+        let c = |prio, id: &str, msg: &str| {
+            classify(&parse_journal_line(&line(T * 1_000_000, prio, id, msg)).unwrap())
+        };
+        let gpu = c(
+            3,
+            "kernel",
+            "amdgpu 0000:03:00.0: amdgpu: ring gfx_0.0.0 timeout, signaled seq=1, emitted seq=3",
+        )
+        .unwrap();
+        assert_eq!((gpu.category, gpu.level), (C::GpuTimeout, L::Error));
+        let xid = c(
+            4,
+            "kernel",
+            "NVRM: Xid (PCI:0000:01:00): 79, pid=1234, GPU has fallen off the bus.",
+        )
+        .unwrap();
+        assert_eq!((xid.category, xid.level), (C::GpuTimeout, L::Critical));
+        let ce = c(
+            4,
+            "kernel",
+            "EDAC MC0: 1 CE memory read error on CPU_SrcID#0_Ha#0_Chan#1_DIMM#0",
+        )
+        .unwrap();
         assert_eq!(
-            (e.category, e.level, e.id),
-            (EventCategory::UnexpectedShutdown, EventLevel::Critical, 41)
+            (ce.category, ce.title),
+            (C::HardwareError, "Corrected memory error")
         );
-        assert!(e.detail.starts_with("No blue screen recorded"));
-        assert_eq!(e.source(), "Kernel-Power 41");
-        let bsod = KERNEL_POWER_41.replace(
-            "<Data Name='BugcheckCode'>0<",
-            "<Data Name='BugcheckCode'>209<",
-        );
+        let mce = c(
+            2,
+            "kernel",
+            "mce: [Hardware Error]: Machine check events logged",
+        )
+        .unwrap();
+        assert_eq!(mce.category, C::HardwareError);
+        let aer = c(4, "kernel", "pcieport 0000:00:01.1: PCIe Bus Error: severity=Corrected, type=Physical Layer, (Receiver ID)").unwrap();
+        assert_eq!(aer.title, "Corrected PCI Express error");
+        let io = c(
+            3,
+            "kernel",
+            "I/O error, dev sda, sector 123456 op 0x0:(READ) flags 0x0",
+        )
+        .unwrap();
+        assert_eq!(io.category, C::Disk);
+        let oom = c(
+            3,
+            "kernel",
+            "Out of memory: Killed process 4242 (firefox) total-vm:1kB",
+        )
+        .unwrap();
+        assert_eq!(oom.category, C::OutOfMemory);
+        let hot = c(
+            4,
+            "kernel",
+            "CPU3: Core temperature above threshold, cpu clock throttled (total events = 1)",
+        )
+        .unwrap();
+        assert_eq!((hot.category, hot.level), (C::Overheating, L::Warning));
+        let core = c(
+            2,
+            "systemd-coredump",
+            "Process 1234 (gnome-shell) of user 1000 dumped core.\n\nStack trace...",
+        )
+        .unwrap();
+        assert_eq!(core.category, C::AppCrash);
         assert_eq!(
-            parse_named(&bsod, Channel::System).unwrap().detail,
-            "Stop code DRIVER_IRQL_NOT_LESS_OR_EQUAL (0xD1)"
+            core.detail,
+            "Process 1234 (gnome-shell) of user 1000 dumped core."
         );
-
-        let e = parse_named(DISK_153, Channel::System).unwrap();
-        assert_eq!(
-            (e.category, e.level),
-            (EventCategory::Disk, EventLevel::Warning)
-        );
-        assert_eq!(e.detail, r"Device: \Device\Harddisk1\DR1");
-        assert_eq!(e.title, "Drive operation had to be retried");
-
-        let e = parse_named(EVENTLOG_6008, Channel::System).unwrap();
-        assert_eq!(e.category, EventCategory::DirtyShutdown);
-        assert_eq!(e.detail, "Previous shutdown at 9:41:07 PM on 10/1/2026");
-
-        // Categorized events are skipped by the "other" parser, and vice versa.
-        assert_eq!(parse_other(KERNEL_POWER_41), None);
-        assert_eq!(parse_named(UNKNOWN, Channel::System), None);
-        let e = parse_other(UNKNOWN).unwrap();
-        assert_eq!(
-            (e.category, e.level),
-            (EventCategory::Other, EventLevel::Error)
-        );
-        assert_eq!(e.source(), "DistributedCOM 10016");
-        assert_eq!(
-            e.detail,
-            "param1: application-specific; param2: Local; param3: Activation"
-        );
-        assert_eq!(
-            parse_other(&UNKNOWN.replace("<Level>2<", "<Level>3<")),
-            None
-        );
-        assert_eq!(parse_named("garbage", Channel::System), None);
+        let panic = c(0, "kernel", "Kernel panic - not syncing: Fatal exception").unwrap();
+        assert_eq!((panic.category, panic.level), (C::KernelCrash, L::Critical));
+        // Unknown errors are "Other"; unknown warnings and info are left out.
+        let other = c(
+            3,
+            "kernel",
+            "ACPI BIOS Error (bug): Could not resolve symbol",
+        )
+        .unwrap();
+        assert_eq!(other.category, C::Other);
+        assert!(c(4, "kernel", "usb 1-2: device descriptor read/64, error -71").is_none());
+        assert!(c(6, "kernel", "Linux version 6.8.0").is_none());
+        // A rule only matches its sender.
+        assert!(c(6, "firefox", "process dumped core").is_none());
     }
 
     #[test]
     fn rules_are_consistent() {
-        for (i, r) in RULES.iter().enumerate() {
-            assert!(!r.title.is_empty());
-            assert!(
-                RULES[..i]
-                    .iter()
-                    .all(|o| o.id != r.id || o.providers != r.providers),
-                "duplicate rule {}",
-                r.id
-            );
+        for r in RULES {
+            assert!(!r.patterns.is_empty(), "{}", r.title);
+            for p in r.patterns {
+                assert_eq!(*p, p.to_lowercase(), "patterns are lower case: {p}");
+            }
         }
-        assert_eq!(rule("DISK", 7).unwrap().category, EventCategory::Disk);
-        assert_eq!(
-            rule("BugCheck", 1001).unwrap().category,
-            EventCategory::BlueScreen
-        );
-        assert!(rule("disk", 8).is_none());
-    }
-
-    #[test]
-    fn filters() {
-        let f = named_filter(30);
-        assert!(f.starts_with(
-            "*[System[((Provider[@Name='Microsoft-Windows-Kernel-Power'] and (EventID=41))"
-        ));
-        assert!(f.contains("(Provider[@Name='disk'] and (EventID=7 or EventID=11 or EventID=51 or EventID=52 or EventID=153))"));
-        assert!(f.ends_with(
-            "(Level=1 or Level=2 or Level=3) and TimeCreated[timediff(@SystemTime) <= 2592000000]]]"
-        ));
-        assert_eq!(f.matches('[').count(), f.matches(']').count());
-        assert!(
-            live_kernel_filter(30)
-                .contains("EventData[Data[@Name='P1']='141' or Data[@Name='P1']='117']")
-        );
-    }
-
-    #[test]
-    fn data_and_time() {
-        let items = data_items(
-            "<EventData><Data Name='a'>x &amp; y</Data><Data/><DataItem>z</DataItem><Data>q</Data></EventData>",
-        );
-        assert_eq!(
-            items,
-            vec![
-                (Some("a".into()), "x & y".into()),
-                (None, String::new()),
-                (None, "q".into())
-            ]
-        );
-        let mut e = parse_named(DISK_153, Channel::System).unwrap();
-        e.utc_offset = Some(-4 * 3600);
-        assert_eq!(e.time_text(), "2026-10-05 04:00:00");
-        assert_eq!(e.time(), (2026, 10, 5, 4, 0, 0));
     }
 
     #[test]
     fn filtering_and_copy() {
-        let mut list: Vec<LogEntry> = [DISPLAY_4101, KERNEL_POWER_41, DISK_153]
-            .iter()
-            .filter_map(|x| parse_named(x, Channel::System))
-            .collect();
-        list.extend(parse_other(UNKNOWN));
+        let text = [
+            line(T * 1_000_000, 3, "kernel", "I/O error, dev sdb, sector 8"),
+            line(
+                (T - 2 * 86_400) * 1_000_000,
+                4,
+                "kernel",
+                "EDAC MC0: 1 CE memory read error",
+            ),
+            line(
+                (T - 3 * 86_400) * 1_000_000,
+                2,
+                "systemd-coredump",
+                "Process 7 (app) of user 1000 dumped core.",
+            ),
+        ]
+        .join("\n");
+        let mut list = parse_journal(&text);
         sort_and_cap(&mut list);
-        assert_eq!(list[0].id, 4101, "newest first");
-        let now = list[0].unix + 3600;
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0].category, C::Disk, "newest first");
+        let now = T + 3600;
         let count = |f: &Filter| list.iter().filter(|e| f.matches(e, now)).count();
-        assert_eq!(count(&Filter::default()), 4);
+        assert_eq!(count(&Filter::default()), 3);
         let day = Filter {
             within_secs: 86_400,
             ..Default::default()
         };
         assert_eq!(count(&day), 1);
-        let disk = Filter {
-            category: Some(EventCategory::Disk),
+        let crashes = Filter {
+            category: Some(C::AppCrash),
             ..Default::default()
         };
-        assert_eq!(count(&disk), 1);
-        let critical = Filter {
-            level: Some(EventLevel::Critical),
-            ..Default::default()
-        };
-        assert_eq!(count(&critical), 1);
+        assert_eq!(count(&crashes), 1);
         let text = Filter {
-            text: "NVLDDMKM".into(),
+            text: "SDB".into(),
             ..Default::default()
         };
         assert_eq!(count(&text), 1);
         let t = to_text(&list[..1]);
-        assert_eq!(
-            t,
-            "2026-10-10 20:15:30 UTC\tWarning\tGPU driver timeout\tDisplay 4101\tGraphics driver stopped responding and recovered (Driver: nvlddmkm)\n"
-        );
+        assert!(t.ends_with(
+            "\tError\tDisk problem\tkernel\tDrive read/write error (I/O error, dev sdb, sector 8)\n"
+        ));
+        assert!(t.contains(" UTC\t"));
+    }
+
+    #[test]
+    fn during_test() {
+        assert_eq!(during_test_text(&[]), None);
+        let e = classify(&JournalEntry {
+            unix: T,
+            priority: 4,
+            identifier: "kernel".into(),
+            message: "EDAC MC0: 1 CE memory read error".into(),
+        })
+        .unwrap();
+        let t = during_test_text(&[e.clone(), e]).unwrap();
+        assert!(t.starts_with(
+            "2 hardware errors were logged during the test: Corrected memory error (2)."
+        ));
+    }
+
+    #[test]
+    fn long_details_are_cut() {
+        assert_eq!(truncate("abc", 2), "ab…");
+        assert_eq!(truncate("abc", 3), "abc");
     }
 }

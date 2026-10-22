@@ -16,11 +16,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             info: &info,
             sensors: &sensors,
             today: (2026, 1, 1),
-            uptime_secs: None,
-            power: None,
             network: None,
-            whea_live: &[],
-            dumps: None,
         };
         diagnostics::run(&ctx)
             .into_iter()

@@ -17,7 +17,6 @@ pub enum Tab {
     Storage,
     Network,
     LanSecurity,
-    Power,
     Sensors,
     Recording,
     Alerts,
@@ -27,7 +26,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 16] = [
+    pub const ALL: [Tab; 15] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -38,7 +37,6 @@ impl Tab {
         Tab::Storage,
         Tab::Network,
         Tab::LanSecurity,
-        Tab::Power,
         Tab::Sensors,
         Tab::Recording,
         Tab::Alerts,
@@ -58,7 +56,6 @@ impl Tab {
             Tab::Storage => "Storage",
             Tab::Network => "Network",
             Tab::LanSecurity => "LAN Security Report",
-            Tab::Power => "Power",
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
             Tab::Alerts => "Alerts",
@@ -81,7 +78,6 @@ impl Tab {
             Tab::Storage => "🖴",
             Tab::Network => "🌐",
             Tab::LanSecurity => "🛡",
-            Tab::Power => "🔌",
             Tab::Sensors => "📈",
             Tab::Recording => "⏺",
             Tab::Alerts => "🔔",
@@ -104,7 +100,6 @@ impl Tab {
             Tab::Storage => "storage",
             Tab::Network => "network",
             Tab::LanSecurity => "lansecurity",
-            Tab::Power => "power",
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
             Tab::Alerts => "alerts",
@@ -114,14 +109,10 @@ impl Tab {
         }
     }
 
-    /// Whether the page works on this platform. The Windows-only pages (power plans, Windows
-    /// networking, the Event Log) stay in the navigation on Linux but show a notice instead.
+    /// Whether the page works yet. The pages still being ported stay in the navigation but
+    /// show a notice instead.
     pub fn supported(self) -> bool {
-        cfg!(windows)
-            || !matches!(
-                self,
-                Tab::Power | Tab::Network | Tab::LanSecurity | Tab::EventLog
-            )
+        !matches!(self, Tab::Network | Tab::LanSecurity)
     }
 
     pub fn from_key(key: &str) -> Option<Tab> {
@@ -336,7 +327,7 @@ fn page_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
 
 pub struct OmniApp {
     tab: Tab,
-    /// Page shown last frame, to notice when the Power page is opened.
+    /// Page shown last frame, to notice when a page is opened.
     last_tab: Option<Tab>,
     /// Last page used in each navigation category, for Left/Right arrows.
     nav_memory: nav::NavMemory,
@@ -877,10 +868,6 @@ impl eframe::App for OmniApp {
 
         crate::help::show(ui.ctx(), &mut self.help);
 
-        // Re-read power devices and wake history whenever the Power page is opened.
-        if self.tab == Tab::Power && self.last_tab != Some(Tab::Power) {
-            self.sampler.refresh_power();
-        }
         // Read network adapters often (and in full right away) while the Network page is open.
         let on_network = self.tab == Tab::Network;
         self.sampler.set_network_page(on_network);
@@ -970,7 +957,6 @@ impl eframe::App for OmniApp {
                         Tab::Storage => tabs::storage::show(ui, info, &snap),
                         Tab::Network => tabs::network::show(ui, &snap),
                         Tab::LanSecurity => tabs::lansec::show(ui, &snap),
-                        Tab::Power => tabs::power::show(ui, &snap),
                         Tab::About => tabs::about::show(ui, info, &snap),
                         Tab::Sensors
                         | Tab::Recording
@@ -984,12 +970,7 @@ impl eframe::App for OmniApp {
                 });
         });
 
-        // Power changes requested this frame (Power page or a Health Check "Fix"), applied
-        // outside the snapshot lock.
-        if let Some(msg) = tabs::power::dispatch(ui.ctx(), &self.sampler) {
-            self.set_status(msg);
-        }
-        // Same for network changes and tests.
+        // Network changes and tests requested this frame, applied outside the snapshot lock.
         if let Some(msg) = tabs::network::dispatch(ui.ctx(), &self.sampler, on_network) {
             self.set_status(msg);
         }
@@ -998,7 +979,6 @@ impl eframe::App for OmniApp {
         tabs::storage::dispatch(ui.ctx(), &self.sampler);
         tabs::memory::dispatch(ui.ctx(), &self.sampler);
         tabs::dispatch_root_read(ui.ctx(), &self.sampler);
-        tabs::health::dispatch(ui.ctx(), &self.sampler);
 
         // Health Check dismissals changed this frame: keep them in the settings (saved to disk
         // only when "remember dismissed" is on).

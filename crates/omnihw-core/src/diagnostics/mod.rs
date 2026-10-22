@@ -2,24 +2,19 @@
 //! problems and suggest fixes. Every check reports a finding, a pass, or why it was skipped,
 //! so the user can see what was examined.
 //!
-//! The checks live in one submodule per area; [`CHECKS`] (plus the power checks) fixes the
-//! order they run and are listed in.
+//! The checks live in one submodule per area; [`CHECKS`] fixes the order they run and are
+//! listed in.
 
 mod cpu;
-mod crashes;
 mod gpu;
 mod helpers;
 mod memory;
-mod network;
-mod power;
-mod settings;
 mod storage;
 mod system;
 #[cfg(test)]
 mod testutil;
 mod types;
 
-pub use crashes::{CRASHES_CHECK, dump_line, is_blue_screen_finding};
 pub use memory::{channel_letter, rated_speed_from_part};
 pub use system::parse_bios_date;
 pub use types::{
@@ -54,11 +49,6 @@ const CHECKS: &[(&str, Category, Check)] = &[
         memory::memory_capacity,
     ),
     (
-        "Memory diagnostic results",
-        Category::Memory,
-        memory::memory_diagnostic,
-    ),
-    (
         "Monitor connected to the graphics card",
         Category::Gpu,
         gpu::monitor_connection,
@@ -66,25 +56,12 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("GPU PCIe link", Category::Gpu, gpu::gpu_pcie_link),
     ("GPU temperature", Category::Gpu, gpu::gpu_temperature),
     ("GPU memory (VRAM) pressure", Category::Gpu, gpu::gpu_vram),
-    ("Monitor refresh rate", Category::Gpu, gpu::monitor_refresh),
-    (
-        "Graphics driver installed",
-        Category::Gpu,
-        gpu::gpu_driver_missing,
-    ),
     (
         "GPU power and thermal slowdown",
         Category::Gpu,
         gpu::gpu_hw_slowdown,
     ),
-    (
-        "Leftover graphics drivers",
-        Category::Gpu,
-        gpu::leftover_gpu_drivers,
-    ),
-    // ReBAR and Windows settings.
     ("Resizable BAR", Category::Gaming, gpu::resizable_bar),
-    ("GPU driver age", Category::Gpu, gpu::gpu_driver_age),
     (
         "Drive free space",
         Category::Storage,
@@ -106,106 +83,26 @@ const CHECKS: &[(&str, Category, Check)] = &[
         storage::drive_temperature,
     ),
     ("Drives set up", Category::Storage, storage::drive_setup),
-    (
-        "Windows drive type",
-        Category::Storage,
-        storage::system_drive_type,
-    ),
     ("Drive link speed", Category::Storage, storage::storage_link),
     ("Battery wear", Category::System, system::battery_wear),
-    ("Power plan", Category::Power, system::power_plan),
     ("BIOS age", Category::System, system::bios_age),
-    ("Uptime", Category::System, system::uptime),
-    (
-        "Pending restart",
-        Category::System,
-        settings::pending_restart,
-    ),
-    (
-        "Memory Integrity (VBS)",
-        Category::Gaming,
-        settings::memory_integrity,
-    ),
-    (
-        "Hardware-accelerated GPU scheduling",
-        Category::Gaming,
-        settings::gpu_scheduling,
-    ),
-    ("Game Mode", Category::Gaming, settings::game_mode),
-    ("Pagefile", Category::System, settings::pagefile),
-    ("Device drivers", Category::System, system::device_problems),
-    (
-        "Hardware errors (WHEA)",
-        Category::Crashes,
-        crashes::whea_errors,
-    ),
-    (crashes::CRASHES_CHECK, Category::Crashes, crashes::crashes),
-    (
-        "GPU driver timeouts (TDR)",
-        Category::Crashes,
-        crashes::gpu_timeouts,
-    ),
     (
         "Ethernet link speed",
         Category::Network,
         system::ethernet_speed,
     ),
     (
-        "Network address (DHCP and DNS)",
-        Category::Network,
-        network::addresses,
-    ),
-    ("Wi-Fi signal", Category::Network, network::wifi_signal),
-    (
         "Secure Boot, TPM and UEFI boot",
         Category::System,
         system::firmware_security,
     ),
-    ("Windows activation", Category::System, system::activation),
-    ("Startup apps", Category::System, system::startup_apps),
-];
-
-/// Checks that work from the data Linux collects too. The others read Windows-only sources
-/// (registry, event log, power plans, Windows networking) and are skipped there.
-const LINUX_CHECKS: &[&str] = &[
-    "CPU microcode (13th/14th Gen Intel stability)",
-    "CPU clocks under load",
-    "CPU temperature",
-    "Memory speed (XMP / EXPO)",
-    "Memory channel layout",
-    "Memory pressure",
-    "Installed memory",
-    "Memory diagnostic results",
-    "Monitor connected to the graphics card",
-    "GPU PCIe link",
-    "GPU temperature",
-    "GPU memory (VRAM) pressure",
-    "GPU power and thermal slowdown",
-    "Resizable BAR",
-    "Drive free space",
-    "Drive health (NVMe SMART)",
-    "Drive health (SATA SMART)",
-    "Drive temperature",
-    "Drives set up",
-    "Drive link speed",
-    "Battery wear",
-    "BIOS age",
 ];
 
 /// Run every check. Findings within a result are ordered most severe first.
 pub fn run(ctx: &Context) -> Vec<CheckResult> {
     CHECKS
         .iter()
-        .chain(power::CHECKS)
         .map(|&(name, category, check)| {
-            // Unit tests run every check, including the ones not used on Linux yet.
-            if cfg!(not(test)) && !LINUX_CHECKS.contains(&name) {
-                return CheckResult {
-                    name,
-                    category,
-                    outcome: Outcome::Skipped("Not checked on Linux yet".into()),
-                };
-            }
             let outcome = match check(ctx) {
                 Outcome::Findings(mut f) if !f.is_empty() => {
                     // The check's category is authoritative (e.g. Gaming groups GPU/System settings).
@@ -249,38 +146,11 @@ mod tests {
     use crate::sensors::SensorTable;
 
     #[test]
-    fn linux_checks_exist() {
-        let names: Vec<&str> = CHECKS.iter().chain(power::CHECKS).map(|c| c.0).collect();
-        for n in LINUX_CHECKS {
-            assert!(names.contains(n), "{n} is not a check");
-        }
-    }
-
-    #[test]
-    fn gaming_checks_are_grouped() {
-        let info = SystemInfo {
-            windows: crate::platform::settings::WindowsSettings {
-                game_mode: Some(false),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let s = SensorTable::default();
-        let results = run(&ctx(&info, &s));
-        let gm = results.iter().find(|r| r.name == "Game Mode").unwrap();
-        assert_eq!(gm.category, Category::Gaming);
-        let Outcome::Findings(f) = &gm.outcome else {
-            panic!("game mode off is a finding")
-        };
-        assert_eq!(f[0].category, Category::Gaming);
-    }
-
-    #[test]
     fn run_reports_every_check() {
         let info = SystemInfo::default();
         let s = SensorTable::default();
         let results = run(&ctx(&info, &s));
-        assert_eq!(results.len(), CHECKS.len() + power::CHECKS.len());
+        assert_eq!(results.len(), CHECKS.len());
         assert!(findings(&results).is_empty());
     }
 
@@ -291,10 +161,6 @@ mod tests {
             "https://www.google.com/search?q=ASUS+ROG+STRIX+B650E-F+enable+EXPO"
         );
         assert_eq!(query_encode("a&b/c"), "a%26b%2Fc");
-        assert_eq!(
-            Link::Settings("ms-settings:display".into()).url(),
-            "ms-settings:display"
-        );
         assert_eq!(Step::from("x"), Step::new("x"));
     }
 }

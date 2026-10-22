@@ -1,18 +1,10 @@
-//! System checks: battery, power plan, BIOS age, uptime, Device Manager problems, Ethernet
-//! speed, firmware security, activation and startup apps.
+//! System checks: battery, BIOS age, Ethernet speed and firmware security.
 
-use super::helpers::{
-    MBR2GPT_URL, bios_update_step, board_drivers_step, finding, guided, months_since, plural,
-};
+use super::helpers::{bios_update_step, finding, guided, months_since};
 use super::{Category, Context, Level, Outcome, Step};
 use crate::bios_help::{self, BiosSetting};
-use crate::checkup::{Activation, Tpm, format_link_speed, problem_is_missing_driver, problem_text};
+use crate::checkup::{Tpm, format_link_speed};
 use crate::network::Media;
-use crate::platform::PlanKind;
-use crate::power::{Action, BALANCED};
-
-/// Device Manager problems listed by name before "and N more".
-const DEVICES_LISTED: usize = 8;
 
 pub(super) fn battery_wear(ctx: &Context) -> Outcome {
     let Some(b) = &ctx.info.battery_health else {
@@ -42,35 +34,6 @@ pub(super) fn battery_wear(ctx: &Context) -> Outcome {
             "To slow further wear, enable the maker's charge limit (e.g. stop at 80 %) if you're mostly plugged in.",
         ],
     )])
-}
-
-pub(super) fn power_plan(ctx: &Context) -> Outcome {
-    // Prefer the live power info: the user may have switched plans since startup.
-    let live = ctx
-        .power
-        .and_then(|p| p.active_scheme())
-        .map(|s| (s.name.as_str(), s.kind));
-    let Some((name, kind)) = live.or(ctx
-        .info
-        .power_plan
-        .as_ref()
-        .map(|p| (p.name.as_str(), p.kind)))
-    else {
-        return Outcome::Skipped("Power plan not available".into());
-    };
-    let name = if name.is_empty() { "Custom plan" } else { name };
-    if kind != PlanKind::PowerSaver {
-        return Outcome::Pass(format!("Active plan: {name}"));
-    }
-    let laptop = ctx.info.battery.is_some();
-    Outcome::Findings(vec![finding(
-        if laptop { Level::Info } else { Level::Warning },
-        Category::System,
-        "Power saver plan is active",
-        "Windows is limiting CPU performance to save power.",
-        &["Switch to Balanced (or High performance on desktops) in Control Panel > Power Options."],
-    )
-    .with_fix(Action::SetScheme(BALANCED.into()))])
 }
 
 /// Parse SMBIOS BIOS dates ("MM/DD/YYYY", sometimes "MM/DD/YY").
@@ -117,87 +80,6 @@ pub(super) fn bios_age(ctx: &Context) -> Outcome {
         )
         .bios(),
     ])
-}
-
-pub(super) fn uptime(ctx: &Context) -> Outcome {
-    let Some(s) = ctx.uptime_secs else {
-        return Outcome::Skipped("Uptime not available".into());
-    };
-    let days = s / 86400;
-    if days < 14 {
-        return Outcome::Pass(crate::format_uptime(s));
-    }
-    Outcome::Findings(vec![finding(
-        Level::Info,
-        Category::System,
-        format!("Windows has been running for {days} days"),
-        format!(
-            "Windows has been running for {days} days without a restart. Over long sessions, apps that leak memory or handles, stuck background processes and misbehaving drivers can build up and slow things down."
-        ),
-        &[
-            "Restart to clear them out: Start > Power > Restart.",
-            "With Fast Startup on, \"Shut down\" resumes the previous session instead of starting fresh, so this counter keeps running. Restart always starts fresh.",
-        ],
-    )])
-}
-
-pub(super) fn device_problems(ctx: &Context) -> Outcome {
-    let c = &ctx.info.checkup;
-    if c.devices.is_empty() {
-        return Outcome::Skipped("Device list not available".into());
-    }
-    // Display adapters without a driver are reported by the GPU driver check.
-    let bad: Vec<_> = c
-        .devices
-        .iter()
-        .filter(|d| !(d.is_display() && d.pci_vendor().is_some()))
-        .filter_map(|d| Some((d, d.problem?)))
-        .collect();
-    if bad.is_empty() {
-        return Outcome::Pass("No devices with problems in Device Manager".into());
-    }
-    let list: Vec<String> = bad
-        .iter()
-        .take(DEVICES_LISTED)
-        .map(|(d, p)| format!("{}: {} (code {p})", d.name, problem_text(*p)))
-        .collect();
-    let more = if bad.len() > DEVICES_LISTED {
-        format!(" and {} more", bad.len() - DEVICES_LISTED)
-    } else {
-        String::new()
-    };
-    let mut steps = Vec::new();
-    if bad.iter().any(|&(_, p)| problem_is_missing_driver(p)) {
-        steps.push(board_drivers_step(
-            ctx,
-            "Install the drivers from your motherboard or PC maker's support page: the chipset driver first, then LAN, Wi-Fi, Bluetooth and audio.",
-        ));
-        steps.push(Step::settings(
-            "Also check Windows Update > Advanced options > Optional updates > Driver updates.",
-            "ms-settings:windowsupdate-optionalupdates",
-        ));
-    }
-    if bad.iter().any(|&(_, p)| matches!(p, 10 | 43)) {
-        steps.push(Step::new(
-            "For \"cannot start\" (code 10) or \"stopped\" (code 43) on USB devices: unplug and replug, try another port, and update the chipset driver.",
-        ));
-    }
-    steps.push(Step::new(
-        "Open Device Manager (right-click Start > Device Manager): devices with a yellow \"!\" are the ones listed here. Right-click > Update driver, or Uninstall device and restart to let Windows retry.",
-    ));
-    Outcome::Findings(vec![guided(
-        Level::Warning,
-        Category::System,
-        format!(
-            "{} not working properly",
-            plural(bad.len(), "device is", "devices are")
-        ),
-        format!(
-            "Device Manager reports: {}{more}. These are usually missing chipset, network or audio drivers on a fresh Windows install.",
-            list.join("; ")
-        ),
-        steps,
-    )])
 }
 
 pub(super) fn ethernet_speed(ctx: &Context) -> Outcome {
@@ -249,7 +131,7 @@ pub(super) fn ethernet_speed(ctx: &Context) -> Outcome {
             vec![
                 Step::new(format!("Check whether your router or switch has a {max} port, and plug into that one.")),
                 Step::new("Use a Cat5e or Cat6 cable (Cat6 for longer runs) and make sure both plugs click in."),
-                Step::new("On the Network page, check the adapter's Speed & Duplex setting is Auto Negotiation."),
+                Step::new("Check that the link isn't forced to a fixed speed: \"ethtool <interface>\" should show auto-negotiation on."),
             ],
         ));
     }
@@ -268,10 +150,7 @@ pub(super) fn ethernet_speed(ctx: &Context) -> Outcome {
             vec![
                 Step::new("Replace the network cable with a Cat5e or Cat6 one, and make sure both plugs click in."),
                 Step::new("Try a different port on the router or switch, and check that it supports gigabit."),
-                Step::search(
-                    "Update the network adapter's driver.",
-                    format!("{name} driver download"),
-                ),
+                Step::new("Install your distribution's updates: network drivers come with the kernel."),
             ],
         ));
     }
@@ -292,27 +171,23 @@ pub(super) fn firmware_security(ctx: &Context) -> Outcome {
     if fw.uefi.is_none() && fw.secure_boot.is_none() && fw.tpm == Tpm::Unknown {
         return Outcome::Skipped("Firmware information not available".into());
     }
-    let why = "Windows 11 and the anti-cheat in games such as Valorant, Battlefield 6 and FACEIT need it.";
     let mut out = Vec::new();
     if fw.uefi == Some(false) {
-        let mut steps = vec![Step::url(
-            "Convert the Windows disk from MBR to GPT without losing data: in an administrator terminal run \"mbr2gpt /validate /allowFullOS\", then \"mbr2gpt /convert /allowFullOS\". Back up first.",
-            MBR2GPT_URL,
+        let mut steps = vec![Step::new(
+            "Switching an installed system to UEFI means a GPT partition table with an EFI system partition and reinstalling the bootloader in UEFI mode; for most people a fresh install in UEFI mode is simpler. Back up first.",
         )];
         steps.extend(bios_help::bios_steps(
             ctx.info,
             BiosSetting::Csm,
-            "Turn off CSM / legacy boot so the PC boots in UEFI mode.",
+            "Turn off CSM / legacy boot so the PC can boot in UEFI mode.",
             "",
         ));
         out.push(
             guided(
-                Level::Warning,
+                Level::Info,
                 Category::System,
-                "Windows boots in legacy BIOS (CSM) mode",
-                format!(
-                    "The PC starts Windows through the old BIOS compatibility mode, which rules out Secure Boot and Resizable BAR. {why}"
-                ),
+                "The system boots in legacy BIOS (CSM) mode",
+                "The PC starts through the old BIOS compatibility mode, which rules out Secure Boot and Resizable BAR.",
                 steps,
             )
             .security(),
@@ -320,10 +195,10 @@ pub(super) fn firmware_security(ctx: &Context) -> Outcome {
     } else if fw.secure_boot == Some(false) {
         out.push(
             guided(
-                Level::Warning,
+                Level::Info,
                 Category::System,
                 "Secure Boot is off",
-                format!("Secure Boot checks that only trusted code runs while the PC starts. {why}"),
+                "Secure Boot checks that only signed code runs while the PC starts. Most distributions boot with it on; out-of-tree kernel modules (such as some NVIDIA driver packages) then need to be signed with a Machine Owner Key, which their installers usually offer to set up.",
                 bios_help::bios_steps(
                     ctx.info,
                     BiosSetting::SecureBoot,
@@ -335,15 +210,13 @@ pub(super) fn firmware_security(ctx: &Context) -> Outcome {
             .bios(),
         );
     }
-    match fw.tpm {
-        Tpm::Missing => out.push(
+    if fw.tpm == Tpm::Missing {
+        out.push(
             guided(
-                Level::Warning,
+                Level::Info,
                 Category::System,
                 "No TPM found",
-                format!(
-                    "The PC has no active TPM (Trusted Platform Module), used for BitLocker, Windows Hello and secure sign-in. {why} Most CPUs since 2017 have a firmware TPM that's simply turned off."
-                ),
+                "The PC has no active TPM (Trusted Platform Module), which can unlock encrypted disks at boot (systemd-cryptenroll) and measure the boot chain. Most CPUs since 2017 have a firmware TPM that's simply turned off.",
                 bios_help::bios_steps(
                     ctx.info,
                     BiosSetting::Tpm,
@@ -353,19 +226,7 @@ pub(super) fn firmware_security(ctx: &Context) -> Outcome {
             )
             .security()
             .bios(),
-        ),
-        Tpm::V12 => out.push(guided(
-            Level::Info,
-            Category::System,
-            "Only TPM 1.2 is available",
-            "Windows 11 needs TPM 2.0. Many boards can switch the firmware TPM to 2.0, or a discrete TPM 2.0 module can be added.",
-            vec![Step::new(
-                "Check the BIOS security settings for a TPM 2.0 / firmware TPM option.",
-            )],
-        )
-        .security()
-        .bios()),
-        _ => {}
+        );
     }
     if out.is_empty() {
         let mut parts = Vec::new();
@@ -375,83 +236,23 @@ pub(super) fn firmware_security(ctx: &Context) -> Outcome {
         if fw.secure_boot == Some(true) {
             parts.push("Secure Boot on");
         }
-        if fw.tpm == Tpm::V20 {
-            parts.push("TPM 2.0");
+        match fw.tpm {
+            Tpm::V20 => parts.push("TPM 2.0"),
+            Tpm::V12 => parts.push("TPM 1.2"),
+            _ => {}
         }
         return Outcome::Pass(parts.join(", "));
     }
     Outcome::Findings(out)
 }
 
-pub(super) fn activation(ctx: &Context) -> Outcome {
-    match ctx.info.checkup.activation {
-        None => Outcome::Skipped("Activation status not available".into()),
-        Some(Activation::Activated) => Outcome::Pass("Windows is activated".into()),
-        Some(state) => Outcome::Findings(vec![guided(
-            Level::Warning,
-            Category::System,
-            if state == Activation::Tampered {
-                "Windows license isn't genuine"
-            } else {
-                "Windows isn't activated"
-            },
-            "An unactivated Windows shows a watermark, locks personalization settings and keeps reminding you.",
-            vec![
-                Step::settings(
-                    "Open Settings > System > Activation and enter your product key, or buy a license there.",
-                    "ms-settings:activation",
-                ),
-                Step::new(
-                    "If Windows was activated before you changed the motherboard, run the Troubleshoot option there and choose \"I changed hardware on this device recently\" (sign in with the Microsoft account the license is linked to).",
-                ),
-            ],
-        )]),
-    }
-}
-
-/// More enabled startup apps than this is flagged.
-const STARTUP_LIMIT: usize = 15;
-
-pub(super) fn startup_apps(ctx: &Context) -> Outcome {
-    let Some(apps) = &ctx.info.checkup.startup_apps else {
-        return Outcome::Skipped("Startup apps not readable".into());
-    };
-    let n = apps.len();
-    if n <= STARTUP_LIMIT {
-        return Outcome::Pass(plural(n, "startup app", "startup apps"));
-    }
-    let shown: Vec<&str> = apps.iter().take(12).map(String::as_str).collect();
-    Outcome::Findings(vec![guided(
-        Level::Info,
-        Category::System,
-        format!("{n} apps start with Windows"),
-        format!(
-            "{n} apps launch at sign-in ({}{}). Each adds to startup time and keeps running in the background.",
-            shown.join(", "),
-            if n > shown.len() { ", ..." } else { "" }
-        ),
-        vec![
-            Step::settings(
-                "Open Settings > Apps > Startup and turn off the apps you don't need right away (launchers, updaters, chat apps).",
-                "ms-settings:startupapps",
-            ),
-            Step::new(
-                "Task Manager's Startup apps page shows the same list with each app's startup impact.",
-            ),
-        ],
-    )])
-}
-
 #[cfg(test)]
 mod tests {
-    use super::super::gpu::{gpu_driver_missing, leftover_gpu_drivers};
     use super::super::storage::storage_link;
     use super::super::testutil::*;
     use super::*;
     use crate::SystemInfo;
-    use crate::checkup::{Device, NicLink, PcieLink};
-    use crate::gpu::VENDOR_NVIDIA;
-    use crate::platform::PowerPlan;
+    use crate::checkup::{NicLink, PcieLink};
     use crate::sensors::SensorTable;
     use crate::storage::{Drive, SataLink};
 
@@ -459,12 +260,6 @@ mod tests {
     fn system_checks() {
         let s = SensorTable::default();
         let mut info = system(vec![]);
-        info.power_plan = Some(PowerPlan {
-            name: "Power saver".into(),
-            guid: String::new(),
-            kind: PlanKind::PowerSaver,
-        });
-        assert_eq!(levels(&power_plan(&ctx(&info, &s))), vec![Level::Warning]);
         assert!(matches!(bios_age(&ctx(&info, &s)), Outcome::Pass(_)));
         info.smbios
             .as_mut()
@@ -474,9 +269,6 @@ mod tests {
             .unwrap()
             .release_date = "03/15/2021".into();
         assert_eq!(levels(&bios_age(&ctx(&info, &s))), vec![Level::Info]);
-        let mut c = ctx(&info, &s);
-        c.uptime_secs = Some(20 * 86400);
-        assert_eq!(levels(&uptime(&c)), vec![Level::Info]);
         assert_eq!(parse_bios_date("06/15/24"), Some((2024, 6, 15)));
     }
 
@@ -501,63 +293,6 @@ mod tests {
             levels(&battery_wear(&ctx(&info, &s))),
             vec![Level::Critical]
         );
-    }
-
-    #[test]
-    fn drivers_and_devices() {
-        let s = SensorTable::default();
-        let dev = |name: &str, class: &str, service: &str, hw: &str, problem| Device {
-            name: name.into(),
-            class: class.into(),
-            service: service.into(),
-            hardware_id: hw.into(),
-            problem,
-        };
-        let mut info = SystemInfo::default();
-        info.checkup.devices = vec![
-            dev(
-                "Microsoft Basic Display Adapter",
-                "Display",
-                "BasicDisplay",
-                r"PCI\VEN_10DE&DEV_2204",
-                None,
-            ),
-            dev(
-                "Microsoft Hyper-V Video",
-                "Display",
-                "BasicDisplay",
-                r"VMBUS\{x}",
-                None,
-            ),
-        ];
-        let o = gpu_driver_missing(&ctx(&info, &s));
-        assert_eq!(levels(&o), vec![Level::Critical]);
-        let Outcome::Findings(f) = o else {
-            unreachable!()
-        };
-        assert!(f[0].title.contains("NVIDIA"));
-        assert!(matches!(device_problems(&ctx(&info, &s)), Outcome::Pass(_)));
-
-        info.checkup.devices.push(dev(
-            "Ethernet Controller",
-            "Other",
-            "",
-            r"PCI\VEN_8086&DEV_15F3",
-            Some(28),
-        ));
-        let o = device_problems(&ctx(&info, &s));
-        assert_eq!(levels(&o), vec![Level::Warning]);
-        let Outcome::Findings(f) = o else {
-            unreachable!()
-        };
-        assert!(
-            f[0].detail
-                .contains("Ethernet Controller: no driver installed (code 28)")
-        );
-        assert!(matches!(
-            f[0].steps[0].link,
-            Some(super::super::Link::Search(_))
-        ));
     }
 
     #[test]
@@ -651,7 +386,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_and_software() {
+    fn firmware() {
         use crate::checkup::Firmware;
         let s = SensorTable::default();
         let mut info = SystemInfo::default();
@@ -665,7 +400,7 @@ mod tests {
             tpm: Tpm::Missing,
         };
         let o = firmware_security(&ctx(&info, &s));
-        assert_eq!(levels(&o), vec![Level::Warning, Level::Warning]);
+        assert_eq!(levels(&o), vec![Level::Info, Level::Info]);
         let Outcome::Findings(f) = o else {
             unreachable!()
         };
@@ -676,36 +411,12 @@ mod tests {
             tpm: Tpm::V20,
         };
         let o = firmware_security(&ctx(&info, &s));
-        assert_eq!(levels(&o), vec![Level::Warning]);
+        assert_eq!(levels(&o), vec![Level::Info]);
         info.checkup.firmware.uefi = Some(true);
         info.checkup.firmware.secure_boot = Some(true);
         assert!(matches!(
             firmware_security(&ctx(&info, &s)),
             Outcome::Pass(_)
         ));
-
-        assert!(matches!(activation(&ctx(&info, &s)), Outcome::Skipped(_)));
-        info.checkup.activation = Some(Activation::NotActivated);
-        assert_eq!(levels(&activation(&ctx(&info, &s))), vec![Level::Warning]);
-
-        info.checkup.gpu_driver_packages = vec![
-            "AMD Software".into(),
-            "NVIDIA Graphics Driver 581.57".into(),
-        ];
-        info.gpus = vec![crate::gpu::GpuAdapter {
-            vendor_id: VENDOR_NVIDIA,
-            ..Default::default()
-        }];
-        let o = leftover_gpu_drivers(&ctx(&info, &s));
-        assert_eq!(levels(&o), vec![Level::Info]);
-        let Outcome::Findings(f) = o else {
-            unreachable!()
-        };
-        assert!(f[0].title.contains("AMD") && !f[0].detail.contains("NVIDIA"));
-
-        info.checkup.startup_apps = Some((0..20).map(|i| format!("App{i}")).collect());
-        assert_eq!(levels(&startup_apps(&ctx(&info, &s))), vec![Level::Info]);
-        info.checkup.startup_apps = Some(vec!["OneDrive".into()]);
-        assert!(matches!(startup_apps(&ctx(&info, &s)), Outcome::Pass(_)));
     }
 }

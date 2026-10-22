@@ -21,7 +21,6 @@ pub const GROUPS: [(&str, &[Tab]); 3] = [
             Tab::Memory,
             Tab::Gpu,
             Tab::Storage,
-            Tab::Power,
         ],
     ),
     ("Network", &[Tab::Network, Tab::LanSecurity]),
@@ -157,7 +156,7 @@ mod tests {
     fn classic_left_right_walks_the_bar_and_wraps() {
         let c = NavStyle::Classic;
         assert_eq!(go(c, Tab::Overview, Arrow::Right), Some(Tab::Health));
-        assert_eq!(go(c, Tab::Power, Arrow::Right), Some(Tab::Sensors));
+        assert_eq!(go(c, Tab::Storage, Arrow::Right), Some(Tab::Sensors));
         assert_eq!(go(c, Tab::Alerts, Arrow::Right), Some(Tab::EventLog));
         assert_eq!(go(c, Tab::EventLog, Arrow::Right), Some(Tab::About));
         assert_eq!(go(c, Tab::About, Arrow::Right), Some(Tab::Settings));
@@ -230,7 +229,11 @@ mod tests {
             assert_eq!(go(g, Tab::Cpu, Arrow::Down), Some(Tab::Caches));
             assert_eq!(go(g, Tab::Caches, Arrow::Up), Some(Tab::Cpu));
             assert_eq!(go(g, Tab::Cpu, Arrow::Up), None, "stops at the top");
-            assert_eq!(go(g, Tab::Power, Arrow::Down), None, "stops at the bottom");
+            assert_eq!(
+                go(g, Tab::Storage, Arrow::Down),
+                None,
+                "stops at the bottom"
+            );
             assert_eq!(go(g, Tab::Network, Arrow::Down), Some(Tab::LanSecurity));
             assert_eq!(go(g, Tab::LanSecurity, Arrow::Up), Some(Tab::Network));
             assert_eq!(go(g, Tab::Sensors, Arrow::Down), Some(Tab::Recording));

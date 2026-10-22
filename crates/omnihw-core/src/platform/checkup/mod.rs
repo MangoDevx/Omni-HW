@@ -2,11 +2,13 @@
 //! background thread; nothing here runs on the UI thread or makes network requests.
 
 use crate::checkup::Checkup;
+use crate::linux::{Root, block, firmware, net};
 
-/// Only the NVMe PCIe links so far.
 pub fn gather() -> Checkup {
+    let root = Root::system();
     Checkup {
-        nvme_links: crate::linux::block::nvme_links(&crate::linux::Root::system()),
-        ..Default::default()
+        firmware: firmware::firmware(&root),
+        nics: net::wired_links(&root),
+        nvme_links: block::nvme_links(&root),
     }
 }

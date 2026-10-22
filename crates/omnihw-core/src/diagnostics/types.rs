@@ -4,11 +4,8 @@
 use std::fmt::Write;
 
 use crate::SystemInfo;
-use crate::minidump::DumpAnalysis;
 use crate::network::NetworkInfo;
-use crate::power::{Action, PowerInfo};
 use crate::sensors::SensorTable;
-use crate::whea::WheaEvent;
 
 /// How serious a finding is; ordered so the most severe sorts last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -41,9 +38,7 @@ pub enum Category {
     System,
     /// Settings that mainly matter for games; shown in their own section.
     Gaming,
-    /// Power plan, sleep and device power-saving settings.
-    Power,
-    /// Blue screens, unexpected restarts and hardware (WHEA) errors.
+    /// Kernel crashes, app crashes and hardware errors from the journal.
     Crashes,
 }
 
@@ -58,13 +53,12 @@ impl Category {
             Category::Network => "Network",
             Category::System => "System",
             Category::Gaming => "Gaming",
-            Category::Power => "Power Management",
-            Category::Crashes => "Crashes (BSOD)",
+            Category::Crashes => "Crashes",
         }
     }
 
     /// Every category, in the order the Health Check tab lists them.
-    pub const ALL: [Category; 9] = [
+    pub const ALL: [Category; 8] = [
         Category::Crashes,
         Category::System,
         Category::Cpu,
@@ -72,21 +66,18 @@ impl Category {
         Category::Gpu,
         Category::Storage,
         Category::Network,
-        Category::Power,
         Category::Gaming,
     ];
 }
 
 /// Something a fix step can open. The app never fetches these itself: they are only handed to
-/// the browser or Windows when the user clicks them.
+/// the browser when the user clicks them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Link {
     /// A Google search for this query (built from the detected hardware).
     Search(String),
     /// A web page.
     Url(String),
-    /// A Windows Settings page, e.g. `ms-settings:display`.
-    Settings(String),
 }
 
 impl Link {
@@ -94,7 +85,7 @@ impl Link {
     pub fn url(&self) -> String {
         match self {
             Link::Search(q) => format!("https://www.google.com/search?q={}", query_encode(q)),
-            Link::Url(u) | Link::Settings(u) => u.clone(),
+            Link::Url(u) => u.clone(),
         }
     }
 
@@ -103,7 +94,6 @@ impl Link {
         match self {
             Link::Search(_) => "Search Google",
             Link::Url(_) => "Open website",
-            Link::Settings(_) => "Open Settings",
         }
     }
 }
@@ -152,14 +142,6 @@ impl Step {
         }
     }
 
-    /// A step with an "Open Settings" link (`ms-settings:` URI).
-    pub fn settings(text: impl Into<String>, uri: &str) -> Step {
-        Step {
-            text: text.into(),
-            link: Some(Link::Settings(uri.into())),
-        }
-    }
-
     /// A step with a link to a web page.
     pub fn url(text: impl Into<String>, url: &str) -> Step {
         Step {
@@ -196,8 +178,6 @@ pub struct Finding {
     pub security: bool,
     /// The fix is made in the UEFI/BIOS setup: the UI offers "Restart into UEFI" on UEFI PCs.
     pub bios: bool,
-    /// A change the app can apply itself (offered as a one-click "Fix").
-    pub fix: Option<Action>,
 }
 
 impl Finding {
@@ -210,12 +190,6 @@ impl Finding {
     /// Mark this finding as fixed in the UEFI/BIOS setup.
     pub(super) fn bios(mut self) -> Finding {
         self.bios = true;
-        self
-    }
-
-    /// Offer a one-click fix.
-    pub(super) fn with_fix(mut self, fix: Action) -> Finding {
-        self.fix = Some(fix);
         self
     }
 }
@@ -245,15 +219,8 @@ pub struct Context<'a> {
     pub sensors: &'a SensorTable,
     /// Today's date (year, month, day).
     pub today: (i64, u32, u32),
-    pub uptime_secs: Option<u64>,
-    /// Power settings, once gathered.
-    pub power: Option<&'a PowerInfo>,
     /// Network adapters, once gathered.
     pub network: Option<&'a NetworkInfo>,
-    /// WHEA hardware errors logged while the app runs (the event log query covers earlier ones).
-    pub whea_live: &'a [WheaEvent],
-    /// Crash dumps, once the user had them analysed (newest first).
-    pub dumps: Option<&'a [DumpAnalysis]>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

@@ -5,15 +5,12 @@ use crate::notify::Notifier;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::disktest::{self, DiskTestResult};
-use omnihw_core::eventlog::EventLog;
+use omnihw_core::eventlog::{EventLog, LogEntry};
 use omnihw_core::lansec::{self, LanScan};
 use omnihw_core::memtest::{self, MemTestResult};
-use omnihw_core::minidump::DumpAnalysis;
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
-use omnihw_core::power::{Action, PowerInfo};
 use omnihw_core::recording::Recording;
 use omnihw_core::sensors::{SensorBackend, SensorTable};
-use omnihw_core::whea::WheaEvent;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -26,12 +23,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
 /// Fired alerts kept for the log.
 const ALERT_LOG_LEN: usize = 200;
-/// Live WHEA events kept.
-const WHEA_LIVE_LEN: usize = 200;
-/// Event log times are whole seconds, so a run's start and end get this much slack.
-const WHEA_SLACK: Duration = Duration::from_secs(1);
-/// How often power plan settings are re-read (devices and wake history only on request).
-const POWER_SETTINGS_EVERY: Duration = Duration::from_secs(30);
+/// Journal times are read in whole seconds, so a run's start and end get this much slack.
+const HW_SLACK: Duration = Duration::from_secs(1);
+/// How often the kernel log is read for hardware errors while a memory or disk test runs.
+const HW_POLL_EVERY: Duration = Duration::from_secs(5);
 /// Network adapter re-reads (addresses, link, Wi-Fi) while the Network page is open / closed.
 const NETWORK_EVERY_OPEN: Duration = Duration::from_secs(5);
 const NETWORK_EVERY_CLOSED: Duration = Duration::from_secs(60);
@@ -64,14 +59,6 @@ pub struct Snapshot {
     pub alerts: Alerts,
     /// Fired alerts, newest last.
     pub alert_log: Vec<AlertEvent>,
-    /// Power settings, devices and wake history (None until first read).
-    pub power: Option<PowerInfo>,
-    /// Bumped whenever `power` changes, so the UI can tell when to recompute what depends on it.
-    pub power_rev: u64,
-    /// A power change or elevated query is in progress.
-    pub power_busy: bool,
-    /// Result of the last power change, for the status bar.
-    pub power_msg: Option<String>,
     /// Network adapters (None until first read).
     pub network: Option<NetworkInfo>,
     /// A network change is in progress.
@@ -86,17 +73,6 @@ pub struct Snapshot {
     pub disk_test: DiskTestState,
     /// Memory page quick test: progress and last result.
     pub mem_test: MemTestState,
-    /// WHEA hardware errors logged since the app started, newest last.
-    pub whea_live: Vec<WheaEvent>,
-    /// Bumped whenever `whea_live` gains events.
-    pub whea_rev: u64,
-    /// Analysed crash dumps (newest first), or why they couldn't be read; None until the user
-    /// asks for them.
-    pub dumps: Option<Result<Vec<DumpAnalysis>, String>>,
-    /// Crash dumps are being read.
-    pub dumps_busy: bool,
-    /// Bumped whenever `dumps` or `dumps_busy` changes.
-    pub dumps_rev: u64,
     /// Event Log page: the last read with the time it finished (`None` until first read).
     pub event_log: Option<(Arc<EventLog>, SystemTime)>,
     /// The event log is being read.
@@ -132,8 +108,8 @@ pub struct DiskTestState {
     pub progress: Arc<disktest::Progress>,
     /// The last result per drive index, with the time it finished.
     pub results: HashMap<u32, (Result<DiskTestResult, String>, SystemTime)>,
-    /// Per drive index: when its last run started and the WHEA errors logged during it.
-    pub whea: HashMap<u32, (SystemTime, Vec<WheaEvent>)>,
+    /// Per drive index: when its last run started and the hardware errors logged during it.
+    pub hw_errors: HashMap<u32, (SystemTime, Vec<LogEntry>)>,
 }
 
 /// State of the Memory page's quick bandwidth/latency test.
@@ -146,8 +122,8 @@ pub struct MemTestState {
     pub result: Option<(Result<MemTestResult, String>, SystemTime)>,
     /// When the last run started.
     pub started: Option<SystemTime>,
-    /// WHEA errors logged during the last (or running) test.
-    pub whea_during: Vec<WheaEvent>,
+    /// Hardware errors logged during the last (or running) test.
+    pub hw_errors: Vec<LogEntry>,
 }
 
 /// An in-progress recording: kept in memory for charts and streamed to a CSV file.
@@ -179,8 +155,6 @@ struct Shared {
     test_notification: AtomicBool,
     /// Desktop notifications for fired alerts (they always show in-app).
     alert_notifications: AtomicBool,
-    /// Re-read all power info (devices, wake history) on the next sample.
-    power_refresh: AtomicBool,
     /// The Network page is open: read adapters more often.
     network_page: AtomicBool,
     /// Re-read network adapters with all details on the next sample.
@@ -221,7 +195,6 @@ impl Sampler {
             reset: AtomicBool::new(false),
             test_notification: AtomicBool::new(false),
             alert_notifications: AtomicBool::new(true),
-            power_refresh: AtomicBool::new(false),
             network_page: AtomicBool::new(false),
             network_refresh: AtomicBool::new(false),
             network_reading: AtomicBool::new(false),
@@ -238,79 +211,6 @@ impl Sampler {
             ctx,
             _stop: stop,
         }
-    }
-
-    /// Re-read power settings, devices and wake history on the next sample.
-    pub fn refresh_power(&self) {
-        self.shared.power_refresh.store(true, Ordering::Relaxed);
-    }
-
-    /// Run blocking power work (which may wait on a UAC prompt) on a short-lived worker thread,
-    /// then report `msg(result)` and refresh the power info.
-    fn power_job<T: Send + 'static>(
-        &self,
-        work: impl FnOnce() -> T + Send + 'static,
-        done: impl FnOnce(T, &mut Snapshot) + Send + 'static,
-    ) {
-        {
-            let mut snap = self.snapshot();
-            if snap.power_busy {
-                return;
-            }
-            snap.power_busy = true;
-        }
-        let (shared, ctx) = (self.shared.clone(), self.ctx.clone());
-        let spawned = std::thread::Builder::new()
-            .name("omnihw-power".into())
-            .spawn(move || {
-                let r = work();
-                {
-                    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                    snap.power_busy = false;
-                    done(r, &mut snap);
-                    snap.power_rev += 1;
-                }
-                shared.power_refresh.store(true, Ordering::Relaxed);
-                ctx.request_repaint();
-            });
-        if spawned.is_err() {
-            self.snapshot().power_busy = false;
-        }
-    }
-
-    /// Apply a power change.
-    pub fn power_action(&self, action: Action) {
-        let a = action.clone();
-        self.power_job(
-            move || omnihw_core::power::apply(&a).map_err(|e| e.to_string()),
-            move |r, snap| {
-                snap.power_msg = Some(match r {
-                    Ok(()) => format!("Done: {}", action.label()),
-                    Err(e) => format!("{} failed: {e}", action.label()),
-                });
-            },
-        );
-    }
-
-    /// Read power requests and wake timers.
-    pub fn power_query_admin(&self) {
-        let query = || {
-            let (requests, timers) = omnihw_core::power::query_admin_raw()
-                .ok_or_else(|| "not available on Linux yet".to_string())?;
-            Ok::<_, String>((
-                omnihw_core::power::parse_requests(&requests),
-                omnihw_core::power::parse_wake_timers(&timers),
-            ))
-        };
-        self.power_job(query, |r, snap| match r {
-            Ok((requests, timers)) => {
-                if let Some(p) = &mut snap.power {
-                    p.requests = Some(requests);
-                    p.wake_timers = Some(timers);
-                }
-            }
-            Err(e) => snap.power_msg = Some(format!("Couldn't read power requests: {e}")),
-        });
     }
 
     /// Whether the Network page is open (it reads adapters more often then).
@@ -462,36 +362,6 @@ impl Sampler {
         }
     }
 
-    /// Analyse the newest crash dumps (asks for administrator rights unless elevated). Only on
-    /// the user's click.
-    pub fn read_dumps(&self) {
-        {
-            let mut snap = self.snapshot();
-            if snap.dumps_busy {
-                return;
-            }
-            snap.dumps_busy = true;
-            snap.dumps_rev += 1;
-        }
-        self.ctx.request_repaint();
-        let read = || {
-            omnihw_core::minidump::read_folder(
-                &omnihw_core::minidump::dump_folder(),
-                omnihw_core::minidump::MAX_DUMPS,
-            )
-        };
-        let ok = self.worker("omnihw-dumps", read, |r, snap| {
-            snap.dumps = Some(r);
-            snap.dumps_busy = false;
-            snap.dumps_rev += 1;
-        });
-        if !ok {
-            let mut snap = self.snapshot();
-            snap.dumps_busy = false;
-            snap.dumps_rev += 1;
-        }
-    }
-
     /// Run the LAN Security Report: scan the connected adapters' private subnets. Only on the
     /// user's click. Progress is updated on the shared [`lansec::Progress`] as it runs.
     pub fn run_lan_scan(&self) {
@@ -538,7 +408,7 @@ impl Sampler {
             }
             snap.disk_test.running = Some(drive_index);
             snap.disk_test
-                .whea
+                .hw_errors
                 .insert(drive_index, (SystemTime::now(), Vec::new()));
             snap.disk_test.progress = Arc::new(disktest::Progress::default());
             snap.disk_test.progress.clone()
@@ -572,7 +442,7 @@ impl Sampler {
                 progress: Arc::new(memtest::Progress::default()),
                 result: snap.mem_test.result.take(),
                 started: Some(SystemTime::now()),
-                whea_during: Vec::new(),
+                hw_errors: Vec::new(),
             };
             snap.mem_test.progress.clone()
         };
@@ -597,7 +467,7 @@ impl Sampler {
         }
     }
 
-    /// Read the System and Application event logs for the Event Log page on a worker thread
+    /// Read the journal for the Event Log page on a worker thread
     /// (when the page is first opened and on Refresh).
     pub fn read_event_log(&self) {
         {
@@ -813,7 +683,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_a
     let mut readings = Vec::new();
     let started = Instant::now();
     let mut notifier = Notifier::default();
-    let mut power_read: Option<Instant> = None;
+    let mut hw_watch = HwWatch::default();
     let mut network_read = NetworkReads::default();
     loop {
         let interval = Duration::from_millis(shared.interval_ms.load(Ordering::Relaxed));
@@ -830,13 +700,12 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_a
             }
         }
 
-        // Hardware error events aren't watched on Linux yet.
-        let new_whea: Vec<WheaEvent> = Vec::new();
+        let new_hw = hw_watch.poll(&shared);
 
         let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
         snap.table.update(readings.drain(..));
-        if !new_whea.is_empty() {
-            record_whea(&mut snap, new_whea);
+        if !new_hw.is_empty() {
+            record_hw_errors(&mut snap, &new_hw);
         }
         if shared.reset.swap(false, Ordering::Relaxed) {
             snap.table.reset_stats();
@@ -872,22 +741,23 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_a
                 "Test notification: alerts will appear like this.",
             );
         }
-        update_power(&shared, &mut power_read);
         update_network(&shared, &ctx, &mut network_read);
         ctx.request_repaint();
     }
 }
 
 /// Whether an event logged at `t` falls in a test run from `start` to `end` (None: running).
-fn during(t: Option<SystemTime>, start: SystemTime, end: Option<SystemTime>) -> bool {
-    // Without a time it can only have been seen now, so it counts while the test runs.
-    let Some(t) = t else { return end.is_none() };
-    t + WHEA_SLACK >= start && end.is_none_or(|e| t <= e + WHEA_SLACK)
+fn during(t: SystemTime, start: SystemTime, end: Option<SystemTime>) -> bool {
+    t + HW_SLACK >= start && end.is_none_or(|e| t <= e + HW_SLACK)
 }
 
-/// Add newly logged WHEA events to the live list, and to a memory or disk test that was
-/// running when they were logged (they can be read a moment after the test ends).
-fn record_whea(snap: &mut Snapshot, events: Vec<WheaEvent>) {
+fn logged_at(e: &LogEntry) -> SystemTime {
+    UNIX_EPOCH + Duration::from_secs(e.unix.max(0) as u64)
+}
+
+/// Add newly logged hardware errors to a memory or disk test that was running when they were
+/// logged (they can be read a moment after the test ends).
+fn record_hw_errors(snap: &mut Snapshot, events: &[LogEntry]) {
     let mem = &mut snap.mem_test;
     if let Some(start) = mem.started {
         let end = if mem.running {
@@ -896,16 +766,16 @@ fn record_whea(snap: &mut Snapshot, events: Vec<WheaEvent>) {
             mem.result.as_ref().map(|r| r.1)
         };
         if mem.running || end.is_some() {
-            mem.whea_during.extend(
+            mem.hw_errors.extend(
                 events
                     .iter()
-                    .filter(|e| during(e.time, start, end))
+                    .filter(|e| during(logged_at(e), start, end))
                     .cloned(),
             );
         }
     }
     let disk = &mut snap.disk_test;
-    for (index, (start, list)) in &mut disk.whea {
+    for (index, (start, list)) in &mut disk.hw_errors {
         let end = if disk.running == Some(*index) {
             None
         } else {
@@ -917,44 +787,64 @@ fn record_whea(snap: &mut Snapshot, events: Vec<WheaEvent>) {
         list.extend(
             events
                 .iter()
-                .filter(|e| during(e.time, *start, end))
+                .filter(|e| during(logged_at(e), *start, end))
                 .cloned(),
         );
     }
-    snap.whea_live.extend(events);
-    let excess = snap.whea_live.len().saturating_sub(WHEA_LIVE_LEN);
-    snap.whea_live.drain(..excess);
-    snap.whea_rev += 1;
 }
 
-/// Read power info outside the snapshot lock: everything at startup and on request, plan
-/// settings every `POWER_SETTINGS_EVERY`.
-fn update_power(shared: &Shared, last: &mut Option<Instant>) {
-    let full = shared.power_refresh.swap(false, Ordering::Relaxed) || last.is_none();
-    if !full && last.is_some_and(|t| t.elapsed() < POWER_SETTINGS_EVERY) {
-        return;
-    }
-    let fresh = if full {
-        PowerInfo::gather()
-    } else {
-        PowerInfo::gather_settings()
-    };
-    *last = Some(Instant::now());
-    let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
-    snap.power_rev += 1;
-    match (&mut snap.power, full) {
-        (Some(old), false) => old.merge_settings(fresh),
-        (old, _) => {
-            let mut fresh = fresh;
-            // Power requests read with a one-off elevation stay until the next elevated read.
-            if fresh.requests.is_none()
-                && let Some(o) = old
-            {
-                fresh.requests = o.requests.take();
-                fresh.wake_timers = o.wake_timers.take();
-            }
-            *old = Some(fresh);
+/// Reads the kernel's hardware errors while a memory or disk test runs (and briefly after, as
+/// errors can be read a moment after they're logged).
+#[derive(Default)]
+struct HwWatch {
+    last: Option<Instant>,
+    /// Read errors logged at or after this Unix second.
+    since: i64,
+    /// Errors already seen that were logged in second `since`.
+    seen: Vec<LogEntry>,
+}
+
+impl HwWatch {
+    fn poll(&mut self, shared: &Shared) -> Vec<LogEntry> {
+        let active = {
+            let snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());
+            let recent = |t: SystemTime| t.elapsed().is_ok_and(|d| d < HW_POLL_EVERY * 2);
+            snap.mem_test.running
+                || snap.disk_test.running.is_some()
+                || snap.mem_test.result.as_ref().is_some_and(|r| recent(r.1))
+                || snap.disk_test.results.values().any(|r| recent(r.1))
+        };
+        if !active {
+            self.last = None;
+            return Vec::new();
         }
+        if self.last.is_some_and(|t| t.elapsed() < HW_POLL_EVERY) {
+            return Vec::new();
+        }
+        if self.last.is_none() {
+            // A test just started: look back far enough to cover its first moments.
+            self.since = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64)
+                - HW_POLL_EVERY.as_secs() as i64;
+            self.seen.clear();
+        }
+        self.last = Some(Instant::now());
+        let fresh: Vec<LogEntry> =
+            omnihw_core::platform::events_viewer::hardware_errors_since(self.since)
+                .into_iter()
+                .filter(|e| !self.seen.contains(e))
+                .collect();
+        if let Some(newest) = fresh.iter().map(|e| e.unix).max() {
+            if newest > self.since {
+                self.since = newest;
+                self.seen.clear();
+            }
+            let since = self.since;
+            self.seen
+                .extend(fresh.iter().filter(|e| e.unix == since).cloned());
+        }
+        fresh
     }
 }
 
@@ -1033,23 +923,18 @@ impl Recorder {
 }
 
 #[cfg(test)]
-mod whea_tests {
+mod hw_error_tests {
     use super::*;
-    use omnihw_core::whea::WheaKind;
 
-    fn event(time: SystemTime) -> WheaEvent {
-        WheaEvent {
-            record_id: 1,
-            id: 19,
-            time: Some(time),
-            fatal: false,
-            kind: WheaKind::Interconnect,
-            source: String::new(),
-            apic_id: Some(5),
-            mca_bank: None,
-            pcie: None,
-            device: None,
-            summary: String::new(),
+    fn event(time: SystemTime) -> LogEntry {
+        LogEntry {
+            unix: time.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            utc_offset: None,
+            source: "kernel".into(),
+            level: omnihw_core::eventlog::EventLevel::Warning,
+            category: omnihw_core::eventlog::EventCategory::HardwareError,
+            title: "Corrected memory error",
+            detail: String::new(),
         }
     }
 
@@ -1057,14 +942,12 @@ mod whea_tests {
     fn events_during_a_run() {
         let start = UNIX_EPOCH + Duration::from_secs(1_000);
         let end = start + Duration::from_secs(10);
-        let at = |s: u64| Some(UNIX_EPOCH + Duration::from_secs(s));
+        let at = |s: u64| UNIX_EPOCH + Duration::from_secs(s);
         assert!(during(at(1_000), start, None));
         assert!(during(at(999), start, None));
         assert!(!during(at(990), start, None));
         assert!(during(at(1_010), start, Some(end)));
         assert!(!during(at(1_020), start, Some(end)));
-        assert!(during(None, start, None));
-        assert!(!during(None, start, Some(end)));
     }
 
     #[test]
@@ -1074,29 +957,22 @@ mod whea_tests {
         // Memory test running; drive 0 finished 10 s ago; drive 1 never finished.
         snap.mem_test.running = true;
         snap.mem_test.started = Some(start);
-        snap.disk_test.whea.insert(0, (start, Vec::new()));
+        snap.disk_test.hw_errors.insert(0, (start, Vec::new()));
         snap.disk_test.results.insert(
             0,
             (Err("x".into()), SystemTime::now() - Duration::from_secs(10)),
         );
-        snap.disk_test.whea.insert(1, (start, Vec::new()));
+        snap.disk_test.hw_errors.insert(1, (start, Vec::new()));
         // Logged 15 s ago (during both runs), then now (after the disk test ended).
-        record_whea(
+        record_hw_errors(
             &mut snap,
-            vec![
+            &[
                 event(SystemTime::now() - Duration::from_secs(15)),
                 event(SystemTime::now()),
             ],
         );
-        assert_eq!(snap.whea_live.len(), 2);
-        assert_eq!(snap.whea_rev, 1);
-        assert_eq!(snap.mem_test.whea_during.len(), 2);
-        assert_eq!(snap.disk_test.whea[&0].1.len(), 1);
-        assert!(snap.disk_test.whea[&1].1.is_empty());
-
-        // The live list is capped, oldest dropped.
-        record_whea(&mut snap, vec![event(SystemTime::now()); WHEA_LIVE_LEN + 5]);
-        assert_eq!(snap.whea_live.len(), WHEA_LIVE_LEN);
-        assert_eq!(snap.whea_rev, 2);
+        assert_eq!(snap.mem_test.hw_errors.len(), 2);
+        assert_eq!(snap.disk_test.hw_errors[&0].1.len(), 1);
+        assert!(snap.disk_test.hw_errors[&1].1.is_empty());
     }
 }

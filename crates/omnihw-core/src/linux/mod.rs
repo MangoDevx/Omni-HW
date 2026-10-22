@@ -7,6 +7,8 @@ pub mod ata;
 pub mod block;
 pub mod dmi;
 pub mod drm;
+pub mod firmware;
+pub mod net;
 pub mod nvme;
 pub mod os;
 pub mod pciids;
@@ -154,7 +156,7 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
 /// The implementations behind `crate::platform`'s API.
 pub mod imp {
     use super::Root;
-    use crate::platform::{Battery, MemoryStatus, OsInfo, PowerPlan};
+    use crate::platform::{Battery, MemoryStatus, OsInfo};
 
     /// DRM adapters, with NVML details (and NVML's names and VRAM) on NVIDIA cards.
     pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
@@ -193,10 +195,6 @@ pub mod imp {
     }
     pub fn microcode_revision() -> Option<u32> {
         super::os::microcode(&Root::system())
-    }
-    /// Linux has no Windows-style power plans.
-    pub fn power_plan() -> Option<PowerPlan> {
-        None
     }
     pub fn smbios_buffer() -> Option<Vec<u8>> {
         super::dmi::raw_smbios(&Root::system())

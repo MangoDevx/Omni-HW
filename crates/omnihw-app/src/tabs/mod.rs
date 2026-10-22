@@ -14,7 +14,6 @@ pub mod mainboard;
 pub mod memory;
 pub mod network;
 pub mod overview;
-pub mod power;
 pub mod recording;
 pub mod sensors;
 pub mod settings;
@@ -154,13 +153,14 @@ pub fn ago(t: std::time::SystemTime) -> String {
     }
 }
 
-/// Warning under a memory or disk test when WHEA hardware errors were logged during it: red if
-/// any was fatal, else orange. Shows nothing when there were none.
-pub fn whea_warning(ui: &mut Ui, events: &[omnihw_core::whea::WheaEvent]) {
-    let Some(text) = omnihw_core::whea::during_test_text(events) else {
+/// Warning under a memory or disk test when the kernel logged hardware errors during it: red
+/// if any was critical, else orange. Shows nothing when there were none.
+pub fn hw_error_warning(ui: &mut Ui, events: &[omnihw_core::eventlog::LogEntry]) {
+    let Some(text) = omnihw_core::eventlog::during_test_text(events) else {
         return;
     };
-    let color = if events.iter().any(|e| e.fatal) {
+    let critical = omnihw_core::eventlog::EventLevel::Critical;
+    let color = if events.iter().any(|e| e.level == critical) {
         crate::heat::RED
     } else {
         crate::heat::ORANGE
@@ -169,7 +169,7 @@ pub fn whea_warning(ui: &mut Ui, events: &[omnihw_core::whea::WheaEvent]) {
         .iter()
         .rev()
         .take(10)
-        .map(|e| e.summary.as_str())
+        .map(|e| e.detail.as_str())
         .collect::<Vec<_>>()
         .join("\n");
     ui.add(

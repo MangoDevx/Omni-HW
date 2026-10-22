@@ -139,7 +139,7 @@ fn quick_test(ui: &mut Ui, snap: &Snapshot) {
             }
             None => {}
         }
-        super::whea_warning(ui, &state.whea_during);
+        super::hw_error_warning(ui, &state.hw_errors);
     });
 }
 
