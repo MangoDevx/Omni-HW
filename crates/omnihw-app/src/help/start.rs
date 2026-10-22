@@ -19,7 +19,7 @@ pub(super) fn getting_started(ui: &mut Ui) {
             "Health Check: automatic checks that flag common problems and explain how to fix them.",
             "Hardware: CPU, Caches, Mainboard, Memory, GPU, Storage, Power - detailed hardware information, like CPU-Z and GPU-Z.",
             "Network: adapters, connection details and tests, plus the LAN Security Report.",
-            "Monitoring: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis), Alerts (Windows notifications when a sensor crosses a limit) and Event Log (crashes, hardware errors and driver timeouts Windows logged, in plain English).",
+            "Monitoring: Sensors (every live reading with min/max/average, like HWiNFO), Recording (record, compare, bottleneck analysis), Alerts (desktop notifications when a sensor crosses a limit) and Event Log (crashes, hardware errors and GPU hangs from the system journal, in plain English).",
             "Record (start/stop a recording from any page) and Report (save an HTML report or copy a text one) are always at the top right, next to the alerts badge while alerts fire.",
         ],
     );
@@ -55,23 +55,22 @@ pub(super) fn getting_started(ui: &mut Ui) {
     h(ui, "No driver needed");
     p(
         ui,
-        "Omni-HW uses only standard Windows interfaces and the graphics driver's own monitoring library (NVIDIA). \
-         It installs nothing and runs as a single program.",
+        "Omni-HW reads the kernel's own interfaces (/proc, /sys, the system journal) and the graphics driver's \
+         monitoring library (NVIDIA). It installs nothing and runs as a single program.",
     );
-    h(ui, "Administrator prompt (UAC)");
+    h(ui, "Password prompt (Read as root)");
     p(
         ui,
-        "Reading the health (SMART) data of SATA drives needs administrator rights. If Omni-HW finds a SATA-type drive \
-         and isn't already running as administrator, it asks once via the Windows UAC prompt when it starts. If you \
-         click No, it simply carries on without SATA health; everything else works. PCs with only NVMe drives are \
-         never asked.",
+        "A few things only root can read: the memory module details (SMBIOS), SATA drive health (SMART) and CPU \
+         package power. Omni-HW always runs as you; when you ask, a short-lived helper reads them once through \
+         pkexec, which shows your desktop's password prompt. If you cancel, everything else still works.",
     );
     details(
         ui,
         "start",
         &[
-            "Start Omni-HW with --no-elevate to skip the prompt.",
-            "The About tab shows whether Omni-HW is running as administrator.",
+            "Turn on Settings > Root access to read them at every start, or click Read as root on a page that needs it.",
+            "The About tab shows whether Omni-HW is running as root.",
         ],
     );
 }
@@ -86,11 +85,11 @@ pub(super) fn overview(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Processor: average and fastest core clock, total usage, package power (where Windows reports it), a usage graph, and one tile per physical core.",
+            "Processor: average and fastest core clock, total usage, package power (after Read as root), a usage graph, and one tile per physical core.",
             "Graphics card: load, temperature, power and core clock, graphs of load and temperature, a VRAM bar, Resizable BAR status, fan speed, memory clock and power state.",
             "Memory: total, type and speed, the installed modules, a used/total bar and a load graph.",
-            "Storage: each drive with temperature, activity, read/write speed, a health bar (NVMe) and a free-space bar per drive letter.",
-            "System: Windows version, computer name, uptime, motherboard, BIOS, CPU socket and combined CPU + GPU power.",
+            "Storage: each drive with temperature, activity, read/write speed, a health bar (NVMe) and a free-space bar per mounted file system.",
+            "System: distribution and kernel version, computer name, uptime, motherboard, BIOS, CPU socket and combined CPU + GPU power.",
         ],
     );
     h(ui, "Using it");
@@ -154,7 +153,7 @@ pub(super) fn settings(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "Theme: Match Windows (follows your light/dark mode), Dark, Light or Retro (2000s), a classic beveled desktop look with square buttons and sunken fields.",
+            "Theme: Match system (follows your desktop's light/dark mode), Dark, Light or Retro (2000s), a classic beveled desktop look with square buttons and sunken fields.",
             "UI scale: makes everything larger or smaller (75 % to 200 %). Reset returns to 100 %.",
             "Navigation bar: Sidebar (the default) lists every page down the left side, sorted into categories; Tabs shows category tabs with the open category's pages on a second row; Classic shows every page as its own tab (it may wrap onto two lines in small windows).",
         ],
@@ -164,10 +163,9 @@ pub(super) fn settings(ui: &mut Ui) {
         ui,
         &[
             "Start page: the page Omni-HW opens on.",
-            "Launch Omni-HW when I sign in to Windows: adds Omni-HW to your startup programs. Turn it off to remove it again.",
-            "Start minimized: when launched at sign-in, start minimized instead of opening the window (in the system tray if Minimize to the system tray is on, otherwise in the taskbar).",
-            "Minimize to the system tray (on by default): minimizing hides Omni-HW to the notification area next to the clock instead of the taskbar. Click the icon to bring the window back, or right-click it for Open / Exit. Sensors, recordings and alerts keep running while it's hidden.",
-            "Ask for administrator rights at start: only matters if you have SATA drives, whose health (SMART) can only be read as administrator. Turn it off to never see the prompt (SATA health will then be unavailable). Launches at sign-in never ask.",
+            "Launch Omni-HW when I sign in: adds Omni-HW to your desktop's startup applications. Turn it off to remove it again.",
+            "Start minimized: when launched at sign-in, start minimized instead of opening the window. Sensors, recordings and alerts keep running while it's minimized.",
+            "Root access: read the memory module details and drive health at every start (your desktop asks for your password). Launches at sign-in never ask.",
         ],
     );
     h(ui, "Monitoring");
@@ -175,22 +173,22 @@ pub(super) fn settings(ui: &mut Ui) {
         ui,
         &[
             "Sampling interval: how often sensors are read (250 ms to 2 s). Shorter gives more detail in graphs and recordings but uses a little more CPU.",
-            "Show Windows notifications for alerts: turn off to keep alerts inside the app only (the ALERT button and history still show them).",
+            "Show desktop notifications for alerts: turn off to keep alerts inside the app only (the ALERT button and history still show them).",
         ],
     );
     h(ui, "Files");
     p(
         ui,
         "Choose where recordings and reports are saved by pasting a folder path and pressing Apply. \
-         Reset to Documents goes back to the default. Open folder shows the current folder in Explorer.",
+         Reset to Documents goes back to the default. Open folder shows the current folder in your file manager.",
     );
     details(
         ui,
         "settings",
         &[
-            r"Settings are stored in %APPDATA%\OmniHW\settings.ini (plain text).",
-            r"Launch at sign-in uses your user's startup entry: HKCU\Software\Microsoft\Windows\CurrentVersion\Run, value Omni-HW, with --autostart (and --minimized).",
-            "Command-line options: --no-elevate skips the administrator prompt; --autostart and --minimized are used by the startup entry.",
+            "Settings are stored in ~/.config/omnihw/settings.ini (plain text; $XDG_CONFIG_HOME is used when set).",
+            "Launch at sign-in writes an autostart entry, ~/.config/autostart/omnihw.desktop, that starts Omni-HW with --autostart (and --minimized).",
+            "Command-line options: --autostart and --minimized are used by the autostart entry.",
             "Compare and Bottleneck look for saved recordings in the same folder.",
         ],
     );
@@ -202,23 +200,20 @@ pub(super) fn privacy(ui: &mut Ui) {
         ui,
         &[
             "Omni-HW makes no network connections on its own and works fully offline: no telemetry, no uploads.",
-            "The update check only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
-            "The internet tests on the Network page only run when you click Run internet tests. They look up dns.msftncsi.com, request www.msftconnecttest.com/connecttest.txt (Windows' own connectivity probes) and ping the public DNS resolvers 1.1.1.1 and 8.8.8.8. The local tests only contact your own router and the DNS servers on your local network.",
-            "It only reads hardware information and settings and never changes system settings on its own. It changes a setting only when you ask: power settings on the Power page or a Health Check Fix button, and the optional Launch at sign-in setting, which adds or removes Omni-HW's own startup entry.",
-            "Health Check links (Google searches, Settings pages, driver downloads) only open in your browser or Windows when you click them; Omni-HW itself requests nothing.",
-            "It reads the System event log (hardware errors, blue screens) and the Device Manager state locally to explain crashes and missing drivers.",
-            "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in AppData.",
+            "The update check only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub (through curl) for the latest release's version number and sends nothing about your PC.",
+            "It only reads hardware information and settings and never changes system settings on its own. It changes a setting only when you ask: power settings on the Power page, and the optional Launch at sign-in setting, which adds or removes Omni-HW's own autostart entry.",
+            "Health Check links (Google searches, driver downloads) only open in your browser when you click them; Omni-HW itself requests nothing.",
+            "It reads the system journal locally (journalctl) to explain crashes, hardware errors and GPU hangs.",
+            "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in ~/.config/omnihw.",
         ],
     );
-    h(ui, "Administrator rights");
+    h(ui, "Root access");
     p(
         ui,
-        "Administrator rights are used to read SATA drive health (SMART) and link speed and, on some systems, the NVMe health log.          Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline.          The Restart into UEFI / BIOS button and power changes that need them (Fast Startup, adapter power saving, wake devices) ask separately, only when you click them.",
-    );
-    p(
-        ui,
-        "Some power changes (Fast Startup, adapter power saving, wake devices), network changes on the Network page and reading power requests also need them. \
-         Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
+        "Omni-HW never runs as root. Root is used only to read the memory module details, SATA drive health (SMART) \
+         and CPU package power, and to change the CPU settings on the Power page. Each time, pkexec asks for your \
+         password and a short-lived copy of Omni-HW does just that one thing and exits. It asks at start only if you \
+         turned that on in Settings, and works without root if you cancel.",
     );
     h(ui, "Security-related advice");
     p(
@@ -233,29 +228,31 @@ pub(super) fn troubleshooting(ui: &mut Ui) {
     bullets(
         ui,
         &[
-            "GPU temperature, clocks, power, fan, PCIe link and Resizable BAR are read through NVIDIA's NVML, so they currently appear for NVIDIA cards only. AMD and Intel cards show load and VRAM use.",
-            "CPU package power appears only when the CPU reports it to Windows (common on Intel; many AMD systems don't).",
+            "NVIDIA cards show their sensors only with NVIDIA's driver; on nouveau they show basic information only.",
+            "CPU package power, memory module details and SATA health need Read as root (Settings > Root access).",
+            "Motherboard fans and voltages need the kernel driver for the board's sensor chip (often nct6775 or it87); run sudo sensors-detect from lm-sensors to find it.",
             "The About tab lists any part Omni-HW couldn't read.",
         ],
     );
     h(ui, "Resizable BAR shows Unknown");
     p(
         ui,
-        "Detection currently works on NVIDIA cards only. On AMD and Intel, check the BIOS (Above 4G Decoding and Re-Size BAR Support) or the vendor's control panel.",
+        "Omni-HW couldn't read the card's PCI memory window. Check the BIOS (Above 4G Decoding and Re-Size BAR Support), \
+         or run lspci -vv as root and look for the card's Resizable BAR capability.",
     );
     h(ui, "Drive health is unavailable");
     bullets(
         ui,
         &[
-            "SATA health needs administrator rights: accept the UAC prompt at start, or right-click Omni-HW > Run as administrator.",
-            "Drives behind USB adapters, RAID arrays or Storage Spaces often don't pass health data through.",
+            "SATA health needs root: click Read as root on the Storage page and enter your password.",
+            "Drives behind USB adapters, RAID controllers or mdadm/LVM layers often don't pass health data through.",
         ],
     );
     h(ui, "Notifications don't appear");
     bullets(
         ui,
         &[
-            "Turn off Do Not Disturb / Focus, and check Settings > System > Notifications.",
+            "Turn off Do Not Disturb in your desktop's notification settings, and check notifications are allowed for Omni-HW.",
             "Use Alerts > Test notification to check.",
             "Notifications only fire while Omni-HW is running (it can be minimized).",
         ],
@@ -263,7 +260,7 @@ pub(super) fn troubleshooting(ui: &mut Ui) {
     h(ui, "Numbers differ from other tools");
     p(
         ui,
-        "Tools sample at different moments and some report different sensors (e.g. GPU 'Core Load' vs Task Manager's busiest \
-         engine, or effective vs reported clocks). Small differences are normal.",
+        "Tools sample at different moments and some report different sensors (e.g. GPU 'Core Load' vs a tool's busiest engine, \
+         or effective vs reported clocks). Small differences are normal.",
     );
 }

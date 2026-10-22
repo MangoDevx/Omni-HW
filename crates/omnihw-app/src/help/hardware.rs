@@ -22,8 +22,9 @@ pub(super) fn hardware(ui: &mut Ui) {
         ui,
         "cpu",
         &[
-            "Read with the CPUID instruction and Windows' processor topology. Live clocks are Windows performance counters (% Processor Performance x base clock).",
-            "VT-x may be missing from the instruction list when Hyper-V or Memory Integrity is on; Windows hides it from programs.",
+            "Read with the CPUID instruction and the kernel's CPU topology in /sys/devices/system/cpu. Live clocks come from cpufreq (scaling_cur_freq).",
+            "Package power comes from RAPL (powercap), which recent kernels only let root read: use Read as root in Settings.",
+            "VT-x / AMD-V may be missing from the instruction list inside a virtual machine.",
         ],
     );
     h(ui, "Caches");
@@ -39,7 +40,7 @@ pub(super) fn hardware(ui: &mut Ui) {
     h(ui, "Memory");
     p(
         ui,
-        "Memory type, installed and usable size, slots used, configured speed and live load, plus a table of every module with its size, rated and configured speed, ranks, maker and part number. The quick memory test measures bandwidth and latency; any hardware errors (WHEA) Windows logs while it runs are shown under the result, since they mean the memory or CPU is unstable.",
+        "Memory type, installed and usable size, slots used, configured speed and live load, plus a table of every module with its size, rated and configured speed, ranks, maker and part number (the module table needs Read as root, since only root can read the SMBIOS tables). The quick memory test measures bandwidth and latency; any hardware errors (machine checks, EDAC) the kernel logs while it runs are shown under the result, since they mean the memory or CPU is unstable.",
     );
     h(ui, "GPU");
     bullets(
@@ -47,7 +48,7 @@ pub(super) fn hardware(ui: &mut Ui) {
         &[
             "Name, chip, architecture, process, card maker, PCI ids and revision.",
             "PCIe link (current vs maximum), BIOS version, driver version and date (NVIDIA shows more detail).",
-            "Resizable BAR: lets the CPU access all of the graphics memory at once, which helps many modern games. Shown as On/Off on NVIDIA cards; Unknown on AMD and Intel for now.",
+            "Resizable BAR: lets the CPU access all of the graphics memory at once, which helps many modern games. NVIDIA cards report it through NVML; on AMD and Intel it's On when the card's PCI memory window covers its whole VRAM.",
             "Displays: which monitors are connected to this card.",
             "Memory and limits (VRAM, bus width, CUDA cores, max clocks, power limit) and the card's live sensors.",
             "If you have more than one graphics adapter, pick it from the Adapter list.",
@@ -57,9 +58,9 @@ pub(super) fn hardware(ui: &mut Ui) {
         ui,
         "gpu",
         &[
-            "Basic adapter information comes from DXGI and works for every vendor. Temperatures, clocks, power, fan, PCIe and ReBAR come from NVIDIA's NVML library, which ships with the NVIDIA driver.",
-            "GPU load and VRAM use for any vendor come from the same Windows counters Task Manager uses.",
-            "Virtual display adapters (used by streaming and virtual monitor tools) are hidden so your real card isn't listed twice.",
+            "Basic adapter information comes from /sys/class/drm and the PCI ID list, and works for every vendor. On NVIDIA cards with NVIDIA's driver, temperatures, clocks, power, fan, PCIe and ReBAR come from its NVML library (libnvidia-ml).",
+            "AMD (amdgpu) and Intel (i915/xe) load, VRAM use, clocks and temperatures come from the driver's sysfs and hwmon files.",
+            "Cards on the nouveau driver show basic information only.",
         ],
     );
     h(ui, "Storage");
@@ -67,11 +68,11 @@ pub(super) fn hardware(ui: &mut Ui) {
         ui,
         &[
             "Each physical drive: model, type (NVMe SSD, SSD, HDD), interface, capacity, firmware and serial number.",
-            "Volumes: each drive letter with a free-space bar.",
+            "File systems: each mounted file system with its type and a free-space bar.",
             "NVMe health: health %, spare capacity, temperature, data written and read, power-on hours, power cycles, unsafe shutdowns, media errors and warnings.",
-            "SATA health (SMART): reallocated, pending and uncorrectable sectors, SSD life left, temperature and the full attribute table. Needs administrator rights.",
+            "SATA health (SMART): reallocated, pending and uncorrectable sectors, SSD life left, temperature and the full attribute table. Needs Read as root.",
             "Live sensors: temperature, activity and read/write speed.",
-            "Speed test: sequential and 4K random read/write speed; any hardware errors (WHEA, e.g. PCIe errors) Windows logs while it runs are shown under the result.",
+            "Speed test: sequential and 4K random read/write speed; any hardware errors (e.g. PCIe errors) the kernel logs while it runs are shown under the result.",
         ],
     );
 }
@@ -167,38 +168,33 @@ pub(super) fn lan_security(ui: &mut Ui) {
 pub(super) fn power(ui: &mut Ui) {
     p(
         ui,
-        "The Power page (Hardware > Power) shows and changes Windows power settings in one place. Changes apply to the \
-         active power plan right away.",
+        "The Power page (Hardware > Power) shows and changes the power settings Linux spreads over power-profiles-daemon, \
+         cpufreq and sysfs, in one place.",
     );
     h(ui, "What it shows");
     bullets(
         ui,
         &[
-            "Power plan: every plan on the PC (Balanced, High performance, Ultimate Performance, vendor plans). Click one to switch.",
-            "Sleep and display: when the screen turns off, the PC sleeps or hibernates and hard disks turn off, plugged in and (on laptops) on battery.",
-            "Power buttons and lid, minimum and maximum processor state, USB selective suspend, PCI Express power saving, wake timers, Wi-Fi power saving and the battery saver level.",
-            "Startup and standby: Fast Startup, hibernation and whether the PC uses Modern Standby.",
-            "Network and Bluetooth adapters: whether Windows may turn them off to save power, and Energy-Efficient Ethernet.",
-            "Waking: the last wake source, the wake history of the last 2 weeks, devices allowed to wake the PC (with Disarm) and active wake timers.",
-            "What's keeping the PC awake: apps and drivers with active power requests (like powercfg /requests).",
+            "Power profile: Power Saver, Balanced or Performance from power-profiles-daemon, and the firmware's platform profile on laptops that have one.",
+            "CPU: the frequency driver (intel_pstate, amd-pstate, acpi-cpufreq) and its mode, the governor, the energy/performance preference and turbo boost.",
+            "Power saving and sleep: the PCIe power saving policy (ASPM), USB autosuspend, the sleep mode (s2idle or deep) and the devices allowed to wake the PC.",
         ],
     );
     h(ui, "Changing settings");
     bullets(
         ui,
         &[
-            "Pick a new value from a drop-down or click a button; the page refreshes when the change is done and the status bar says whether it worked.",
-            "Power plan values and plan switching don't need administrator rights. Fast Startup, adapter power saving, Energy-Efficient Ethernet and wake devices do: Windows shows its permission prompt.",
-            "Changes that briefly disconnect a network adapter or change how Windows shuts down ask for confirmation first.",
-            "Power requests and wake timers need administrator rights to read: click Check now.",
+            "Pick a new value from a drop-down; the page refreshes when the change is done and the status bar says whether it worked.",
+            "The power profile changes through power-profiles-daemon without a password. CPU settings need root: your desktop asks for your password (pkexec), and a short-lived copy of Omni-HW makes just that one change and exits.",
+            "Changes last until the next restart. Tools such as TLP, auto-cpufreq or tuned may set their own values at startup; change them there to make a setting stick.",
         ],
     );
     details(
         ui,
         "power",
         &[
-            "Settings are read with Windows' power APIs when Omni-HW starts, when you open the page or click Refresh, and plan settings every 30 seconds in the background.",
-            "Wake history comes from the System event log (Power-Troubleshooter). Adapter power saving is Device Manager's \"Allow the computer to turn off this device\" setting. Power requests and wake timers come from powercfg.",
+            "Settings are read when Omni-HW starts and when you open the page or click Refresh.",
+            "The root helper only accepts the values the kernel lists as available for each setting.",
         ],
     );
 }
@@ -224,9 +220,10 @@ pub(super) fn sensors(ui: &mut Ui) {
         ui,
         "sensors",
         &[
-            "CPU clock per core is the fastest of its threads. GPU 'Load (busiest engine)' is how Task Manager measures GPU usage; 'Core Load' (NVIDIA) is what GPU-Z shows.",
-            "Some sensors only exist on some systems: package power needs a CPU that reports it to Windows (or the extra sensors on AMD); battery sensors only appear on laptops.",
-            "With the optional extra sensors (Settings > Extra sensors: the PawnIO driver and Omni-HW's read-only sensor service) you also get per-core CPU temperatures, CPU voltage (VID), per-core power on AMD Ryzen, and motherboard fan speeds, temperatures and voltages on supported Nuvoton and ITE chips. Fan headers with nothing plugged in stay hidden.",
+            "CPU clock per core is the fastest of its threads. CPU usage comes from /proc/stat, drive activity from /proc/diskstats.",
+            "Temperatures, fans and voltages come from the kernel's hwmon drivers: coretemp or k10temp for the CPU, nvme and drivetemp for drives, and nct6775 or it87 for motherboard fans and voltages. A sensor chip without a loaded driver shows nothing; sensors-detect (lm-sensors) finds the right module.",
+            "CPU package power comes from RAPL, which needs Read as root on recent kernels. Battery sensors only appear on laptops.",
+            "Fan headers with nothing plugged in stay hidden.",
         ],
     );
 }

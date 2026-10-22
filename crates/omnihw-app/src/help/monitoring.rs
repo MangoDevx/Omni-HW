@@ -10,7 +10,7 @@ pub(super) fn recording(ui: &mut Ui) {
         ui,
         &[
             "Click Record in the tab bar (or Start recording on the Recording tab). Every sensor is recorded at the sampling interval until you click Stop.",
-            r"Each recording is saved as a CSV file in your Documents folder named OmniHW-Recording-<date-time>.csv (opens in Excel). It is written as it records, so a crash loses at most one row.",
+            r"Each recording is saved as a CSV file in your Documents folder named OmniHW-Recording-<date-time>.csv (opens in LibreOffice Calc). It is written as it records, so a crash loses at most one row.",
             "Sensors that only appear after recording starts aren't added to it.",
         ],
     );
@@ -86,14 +86,14 @@ pub(super) fn alerts(ui: &mut Ui) {
             "Quick add offers common alerts for the sensors your PC has: GPU over 85 °C, CPU usage over 95 % for 2 minutes, memory over 90 % for 1 minute, each drive over 70 °C, and battery below 20 % on laptops.",
             "Add custom alert creates a rule you can point at any sensor: choose above or below, the limit, and how many seconds it must hold (0 = immediately).",
             "Untick On to pause a rule without deleting it; Remove deletes it.",
-            "Test notification shows a sample notification so you can check Windows displays them.",
+            "Test notification shows a sample notification so you can check your desktop displays them.",
         ],
     );
     h(ui, "When an alert fires");
     bullets(
         ui,
         &[
-            "You get a Windows notification and the taskbar button flashes if Omni-HW isn't in front.",
+            "You get a desktop notification, and the window asks for attention if Omni-HW isn't in front.",
             "A red ALERT button appears in the tab bar; click it to open the Alerts tab.",
             "Each alert fires once, then re-arms when the reading goes back past the limit.",
             "History lists the alerts that fired since Omni-HW started.",
@@ -103,8 +103,8 @@ pub(super) fn alerts(ui: &mut Ui) {
         ui,
         "alerts",
         &[
-            r"Rules are saved automatically to %APPDATA%\OmniHW\alerts.tsv.",
-            "Windows hides notifications while Do Not Disturb / Focus is on or a full-screen game is running; the ALERT button and History still record them.",
+            "Rules are saved automatically to ~/.config/omnihw/alerts.tsv.",
+            "Desktops hide notifications while Do Not Disturb is on; the ALERT button and History still record them.",
         ],
     );
 }
@@ -113,20 +113,21 @@ pub(super) fn event_log(ui: &mut Ui) {
     h(ui, "What it shows");
     p(
         ui,
-        "The Event Log page (under Monitoring) lists the problems Windows recorded in its event logs over the last 30 days, \
-         each with a plain-English meaning, so you don't have to dig through Event Viewer. It reads the logs when you \
-         first open the page and when you click Refresh; no administrator rights are needed.",
+        "The Event Log page (under Monitoring) lists the problems recorded in the system journal over the last 30 days, \
+         each with a plain-English meaning, so you don't have to dig through journalctl. It reads the journal when \
+         Omni-HW starts and when you click Refresh.",
     );
     bullets(
         ui,
         &[
-            "Unexpected shutdown: the PC restarted without shutting down cleanly (Kernel-Power 41): a crash, freeze, power cut or the power button held down.",
-            "Blue screen: Windows crashed with a stop code (BugCheck 1001), shown with its name, e.g. MEMORY_MANAGEMENT.",
-            "Hardware error: CPU, memory or PCIe errors (WHEA-Logger 17, 18, 19, 47), often from an unstable overclock or XMP/EXPO profile.",
-            "GPU driver timeout: the graphics driver stopped responding and Windows reset it (Display 4101, or LiveKernelEvent 141/117 reports).",
-            "Disk problem: bad blocks, controller or paging errors, retried operations, a drive predicting failure, or file system corruption (disk 7, 11, 51, 52, 153; Ntfs 55, 98).",
-            "Unexpected restart: the previous shutdown was unexpected (EventLog 6008).",
-            "Other critical/error: any other critical or error event in the System log. Many are harmless (e.g. DCOM 10016); look them up before acting on them.",
+            "Kernel crash or hang: a kernel panic or oops, a CPU lockup, or a task blocked for minutes.",
+            "Hardware error: machine checks (CPU), EDAC memory errors and PCIe errors, often from an unstable overclock or XMP/EXPO profile.",
+            "GPU hang or reset: the graphics driver (amdgpu, i915/xe, nouveau, NVIDIA Xid) found the GPU stuck and reset it.",
+            "Disk problem: I/O errors, bad sectors, NVMe timeouts, SATA link resets or file system errors.",
+            "Out of memory: the kernel's OOM killer or systemd-oomd stopped an app because memory ran out.",
+            "App crash: a program crashed (systemd-coredump).",
+            "Overheating: the CPU throttled or the system shut down because it was too hot.",
+            "Other critical/error: any other critical or error message. Many are harmless; look them up before acting on them.",
         ],
     );
     h(ui, "Using it");
@@ -134,17 +135,17 @@ pub(super) fn event_log(ui: &mut Ui) {
         ui,
         &[
             "Filter by category, level (Critical, Error, Warning) and time (24 h, 7 days, 30 days), or type in Search to match the meaning, source or details.",
-            "Click an event's meaning to show its details: the stop code, the driver or the drive involved.",
+            "Click an event's meaning to show the full logged message.",
             "Copy puts the events shown on the clipboard as plain text, ready for a forum post or support ticket.",
-            "The Health Check uses the same events: see Crashes (BSOD) for blue screens, hardware errors and GPU driver timeouts with fix steps.",
+            "The Health Check uses the same events: see the Crashes category for kernel crashes, hardware errors and GPU hangs with fix steps.",
         ],
     );
     details(
         ui,
         "eventlog",
         &[
-            "Up to 500 events are shown, newest first; other errors are limited to the newest 150 so they can't crowd out the important ones.",
-            "LiveKernelEvent reports come from Windows Error Reporting in the Application log and are often sent days later; they are dated by their dump file instead.",
+            "Read with journalctl: messages at warning level and above, hardware error notices, and crash records from systemd-coredump and systemd-oomd, from the last 30 days. Newest first; other errors are limited to the newest 150 so they can't crowd out the important ones.",
+            "Without membership of the adm or systemd-journal group, journalctl only shows your own messages: the page says so, and sudo usermod -aG adm $USER (then signing in again) fixes it.",
             "Times are your local time.",
         ],
     );
