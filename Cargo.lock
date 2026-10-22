@@ -2204,6 +2204,10 @@ dependencies = [
 name = "omnihw-core"
 version = "0.5.0"
 dependencies = [
+ "libc",
+ "libloading",
+ "rustix 1.1.5",
+ "tempfile",
  "windows",
 ]
 
