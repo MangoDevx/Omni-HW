@@ -58,8 +58,8 @@ pub struct Settings {
     pub launch_at_startup: bool,
     /// Start minimized when launched at login.
     pub start_minimized: bool,
-    /// Ask for administrator rights at start (SATA drive health).
-    pub ask_admin_at_start: bool,
+    /// Read the root-only data (memory modules, drive health) through pkexec at start.
+    pub root_read_at_start: bool,
     /// Desktop notifications and an attention request for fired alerts (they always show
     /// in-app).
     pub alert_notifications: bool,
@@ -86,7 +86,7 @@ impl Default for Settings {
             sample_interval_ms: 1000,
             launch_at_startup: false,
             start_minimized: false,
-            ask_admin_at_start: true,
+            root_read_at_start: false,
             alert_notifications: true,
             data_dir: None,
             check_updates_at_start: false,
@@ -162,7 +162,7 @@ impl Settings {
              sample_interval_ms={}\n\
              launch_at_startup={}\n\
              start_minimized={}\n\
-             ask_admin_at_start={}\n\
+             root_read_at_start={}\n\
              alert_notifications={}\n\
              data_dir={data_dir}\n\
              check_updates_at_start={}\n\
@@ -174,7 +174,7 @@ impl Settings {
             self.sample_interval_ms,
             bool_str(self.launch_at_startup),
             bool_str(self.start_minimized),
-            bool_str(self.ask_admin_at_start),
+            bool_str(self.root_read_at_start),
             bool_str(self.alert_notifications),
             bool_str(self.check_updates_at_start),
             bool_str(self.remember_dismissed),
@@ -232,8 +232,8 @@ impl Settings {
                     s.launch_at_startup = parse_bool(v).unwrap_or(s.launch_at_startup)
                 }
                 "start_minimized" => s.start_minimized = parse_bool(v).unwrap_or(s.start_minimized),
-                "ask_admin_at_start" => {
-                    s.ask_admin_at_start = parse_bool(v).unwrap_or(s.ask_admin_at_start)
+                "root_read_at_start" => {
+                    s.root_read_at_start = parse_bool(v).unwrap_or(s.root_read_at_start)
                 }
                 "alert_notifications" => {
                     s.alert_notifications = parse_bool(v).unwrap_or(s.alert_notifications)
@@ -308,7 +308,7 @@ mod tests {
             sample_interval_ms: 500,
             launch_at_startup: true,
             start_minimized: true,
-            ask_admin_at_start: false,
+            root_read_at_start: true,
             alert_notifications: false,
             data_dir: Some(PathBuf::from("/home/user/Omni HW/data")),
             check_updates_at_start: true,

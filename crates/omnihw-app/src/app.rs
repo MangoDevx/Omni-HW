@@ -373,7 +373,9 @@ impl OmniApp {
         crate::settings::apply_visuals(&cc.egui_ctx, &settings);
         crate::export::set_data_dir(settings.data_dir.clone());
         crate::dismissed::load(&settings.dismissed);
-        let sampler = Sampler::start(cc.egui_ctx.clone());
+        // Launches at sign-in never ask for the password.
+        let root_at_start = settings.root_read_at_start && !crate::autostart::launch_flags().0;
+        let sampler = Sampler::start(cc.egui_ctx.clone(), root_at_start);
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
         let updates = crate::update::UpdateChecker::default();
@@ -495,7 +497,7 @@ impl OmniApp {
                 .on_hover_text("Save a report to Documents and open it in your browser")
                 .clicked()
             {
-                msg = Some(match export::save_html(info, &self.sampler.snapshot()) {
+                msg = Some(match export::save_html(&info, &self.sampler.snapshot()) {
                     Ok(p) => format!("Saved {}", p.display()),
                     Err(e) => e,
                 });
@@ -507,7 +509,7 @@ impl OmniApp {
                 .clicked()
             {
                 ui.ctx()
-                    .copy_text(export::text(info, &self.sampler.snapshot()));
+                    .copy_text(export::text(&info, &self.sampler.snapshot()));
                 msg = Some("Report copied to clipboard".into());
                 ui.close();
             }
@@ -904,6 +906,7 @@ impl eframe::App for OmniApp {
                 });
                 return;
             };
+            let info = &*info;
             if self.tab == Tab::Recording {
                 // Has its own panels and scroll areas.
                 if tabs::recording::show(ui, &self.sampler, &mut self.rec_view) {
@@ -994,6 +997,7 @@ impl eframe::App for OmniApp {
         tabs::lansec::dispatch(ui.ctx(), &self.sampler);
         tabs::storage::dispatch(ui.ctx(), &self.sampler);
         tabs::memory::dispatch(ui.ctx(), &self.sampler);
+        tabs::dispatch_root_read(ui.ctx(), &self.sampler);
         tabs::health::dispatch(ui.ctx(), &self.sampler);
 
         // Health Check dismissals changed this frame: keep them in the settings (saved to disk

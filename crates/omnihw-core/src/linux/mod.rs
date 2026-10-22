@@ -3,6 +3,7 @@
 //! Everything reads files under a [`Root`] (`/` on a real system), so the readers are
 //! unit-tested against fake trees.
 
+pub mod ata;
 pub mod block;
 pub mod dmi;
 pub mod drm;
@@ -10,6 +11,7 @@ pub mod nvme;
 pub mod os;
 pub mod pciids;
 pub mod power_supply;
+pub mod rootdata;
 pub mod sensors;
 pub mod topology;
 
@@ -175,10 +177,6 @@ pub mod imp {
     }
     pub fn drives() -> Vec<crate::storage::Drive> {
         super::block::drives(&Root::system())
-    }
-    /// SATA SMART needs root and an ATA passthrough ioctl, not wired up yet.
-    pub fn has_smart_capable_drive() -> bool {
-        false
     }
     /// Running as root (effective uid 0).
     pub fn is_elevated() -> bool {

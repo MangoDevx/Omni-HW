@@ -158,6 +158,25 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
                     }
                 });
                 ui.end_row();
+
+                ui.label("Root access");
+                ui.vertical(|ui| {
+                    ui.checkbox(
+                        &mut s.root_read_at_start,
+                        "Read memory modules and drive health at start (asks for your password)",
+                    );
+                    ui.weak(
+                        "Only root can read the memory module details and drive health (SMART). \
+                         Omni-HW keeps running as you: a short-lived helper reads them once \
+                         through pkexec. Launches at sign-in never ask.",
+                    );
+                    super::root_read_button(
+                        ui,
+                        &sampler.snapshot(),
+                        "Memory module details and drive health",
+                    );
+                });
+                ui.end_row();
             });
     });
 

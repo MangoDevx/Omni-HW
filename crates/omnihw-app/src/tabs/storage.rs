@@ -153,7 +153,12 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, links: &[PcieLink]) {
             );
         }
         None if d.bus == omnihw_core::storage::BusType::Nvme => {
-            ui.weak("NVMe health log unavailable (try running as administrator).");
+            if crate::elevate::elevated() {
+                ui.weak("This drive didn't return its NVMe health log.");
+            } else {
+                ui.weak("The NVMe health log can only be read by root.");
+                super::root_read_button(ui, snap, "Drive health");
+            }
         }
         None => {}
     }
@@ -170,7 +175,12 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, links: &[PcieLink]) {
                 | BusType::Spaces
         ) =>
         {
-            ui.weak("SATA SMART data unavailable (try running as administrator).");
+            if crate::elevate::elevated() {
+                ui.weak("This drive didn't return SMART data.");
+            } else {
+                ui.weak("SMART data can only be read by root.");
+                super::root_read_button(ui, snap, "Drive health");
+            }
         }
         None => {}
     }

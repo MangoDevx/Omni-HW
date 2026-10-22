@@ -87,8 +87,6 @@ pub use imp::battery_health;
 pub use imp::drives;
 /// Display adapters (DRM), with NVML details on NVIDIA cards.
 pub use imp::gpu_adapters;
-/// Whether a drive could report ATA SMART (needs root).
-pub use imp::has_smart_capable_drive;
 /// Whether this process runs as root.
 pub use imp::is_elevated;
 pub use imp::memory_status;

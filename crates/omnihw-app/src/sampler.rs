@@ -20,7 +20,7 @@ use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const DEFAULT_INTERVAL_MS: u64 = 1000;
@@ -101,6 +101,16 @@ pub struct Snapshot {
     pub event_log: Option<(Arc<EventLog>, SystemTime)>,
     /// The event log is being read.
     pub event_log_busy: bool,
+    /// Reading the root-only data (memory modules, drive health) through pkexec.
+    pub root_read: RootRead,
+}
+
+/// State of the root-only read (see [`Sampler::read_as_root`]).
+#[derive(Default, Clone)]
+pub struct RootRead {
+    pub busy: bool,
+    /// The last read's outcome: how many items it added, or why it failed.
+    pub result: Option<Result<usize, String>>,
 }
 
 /// State of the LAN Security Report scan.
@@ -161,7 +171,8 @@ impl Snapshot {
 }
 
 struct Shared {
-    info: OnceLock<SystemInfo>,
+    /// Static info once gathered; replaced when the root-only data is merged in.
+    info: RwLock<Option<Arc<SystemInfo>>>,
     snapshot: Mutex<Snapshot>,
     interval_ms: AtomicU64,
     reset: AtomicBool,
@@ -198,9 +209,10 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    pub fn start(ctx: egui::Context) -> Self {
+    /// `root_at_start`: read the root-only data through pkexec once the info is gathered.
+    pub fn start(ctx: egui::Context, root_at_start: bool) -> Self {
         let shared = Arc::new(Shared {
-            info: OnceLock::new(),
+            info: RwLock::new(None),
             snapshot: Mutex::new(Snapshot {
                 alerts: Alerts::new(load_alert_rules()),
                 ..Default::default()
@@ -219,7 +231,7 @@ impl Sampler {
         let c = ctx.clone();
         std::thread::Builder::new()
             .name("omnihw-sampler".into())
-            .spawn(move || run(s, c, stop_rx))
+            .spawn(move || run(s, c, stop_rx, root_at_start))
             .expect("spawn sampler thread");
         Sampler {
             shared,
@@ -266,11 +278,11 @@ impl Sampler {
         }
     }
 
-    /// Apply a power change (asking for administrator rights if needed).
+    /// Apply a power change.
     pub fn power_action(&self, action: Action) {
         let a = action.clone();
         self.power_job(
-            move || crate::power_ops::apply(&a),
+            move || omnihw_core::power::apply(&a).map_err(|e| e.to_string()),
             move |r, snap| {
                 snap.power_msg = Some(match r {
                     Ok(()) => format!("Done: {}", action.label()),
@@ -280,9 +292,17 @@ impl Sampler {
         );
     }
 
-    /// Read power requests and wake timers (asks for administrator rights if needed).
+    /// Read power requests and wake timers.
     pub fn power_query_admin(&self) {
-        self.power_job(crate::power_ops::query_admin, |r, snap| match r {
+        let query = || {
+            let (requests, timers) = omnihw_core::power::query_admin_raw()
+                .ok_or_else(|| "not available on Linux yet".to_string())?;
+            Ok::<_, String>((
+                omnihw_core::power::parse_requests(&requests),
+                omnihw_core::power::parse_wake_timers(&timers),
+            ))
+        };
+        self.power_job(query, |r, snap| match r {
             Ok((requests, timers)) => {
                 if let Some(p) = &mut snap.power {
                     p.requests = Some(requests);
@@ -340,7 +360,7 @@ impl Sampler {
         let ok = self.worker(
             "omnihw-net",
             move || {
-                let r = crate::net_ops::apply(&a);
+                let r = net::apply(&a);
                 // Re-read right away so the page never shows the state from before the change.
                 // Wait (briefly) for a background read to finish so it can't overwrite this one.
                 let mut owned = false;
@@ -453,9 +473,14 @@ impl Sampler {
             snap.dumps_busy = true;
             snap.dumps_rev += 1;
         }
-        // Show the spinner now, not only after the (possibly long) UAC prompt.
         self.ctx.request_repaint();
-        let ok = self.worker("omnihw-dumps", crate::dump_ops::read_dumps, |r, snap| {
+        let read = || {
+            omnihw_core::minidump::read_folder(
+                &omnihw_core::minidump::dump_folder(),
+                omnihw_core::minidump::MAX_DUMPS,
+            )
+        };
+        let ok = self.worker("omnihw-dumps", read, |r, snap| {
             snap.dumps = Some(r);
             snap.dumps_busy = false;
             snap.dumps_rev += 1;
@@ -596,8 +621,38 @@ impl Sampler {
     }
 
     /// Static info, once gathered.
-    pub fn info(&self) -> Option<&SystemInfo> {
-        self.shared.info.get()
+    pub fn info(&self) -> Option<Arc<SystemInfo>> {
+        self.shared
+            .info
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Read the root-only data (memory modules, drive health) through pkexec and merge it into
+    /// the static info. Only on the user's click (or the "read at start" setting).
+    pub fn read_as_root(&self) {
+        {
+            let mut snap = self.snapshot();
+            if snap.root_read.busy || self.info().is_none() {
+                return;
+            }
+            snap.root_read.busy = true;
+        }
+        let shared = self.shared.clone();
+        let ok = self.worker(
+            "omnihw-root",
+            move || read_root_data(&shared),
+            |r, snap| {
+                snap.root_read = RootRead {
+                    busy: false,
+                    result: Some(r),
+                };
+            },
+        );
+        if !ok {
+            self.snapshot().root_read.busy = false;
+        }
     }
 
     pub fn snapshot(&self) -> std::sync::MutexGuard<'_, Snapshot> {
@@ -721,11 +776,40 @@ fn backends(info: &SystemInfo) -> Vec<Box<dyn SensorBackend>> {
     list
 }
 
-fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
-    let info = shared.info.get_or_init(SystemInfo::gather);
-    ctx.request_repaint();
+/// Run the root helper and merge its data into a copy of the info, which then replaces it.
+/// Returns how many items were added.
+fn read_root_data(shared: &Shared) -> Result<usize, String> {
+    let text = crate::elevate::read_as_root()?;
+    let names = omnihw_core::linux::block::drive_names(&omnihw_core::linux::Root::system());
+    let mut slot = shared.info.write().unwrap_or_else(|e| e.into_inner());
+    let Some(current) = slot.as_ref() else {
+        return Err("Hardware info isn't ready yet".into());
+    };
+    let mut info = SystemInfo::clone(current);
+    let n = omnihw_core::linux::rootdata::apply(&mut info, &names, &text);
+    *slot = Some(Arc::new(info));
+    Ok(n)
+}
 
-    let mut backends = backends(info);
+fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_at_start: bool) {
+    let info = Arc::new(SystemInfo::gather());
+    *shared.info.write().unwrap_or_else(|e| e.into_inner()) = Some(info.clone());
+    ctx.request_repaint();
+    if root_at_start
+        && !crate::elevate::elevated()
+        && omnihw_core::linux::rootdata::would_add(&info)
+    {
+        let r = read_root_data(&shared);
+        shared
+            .snapshot
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .root_read
+            .result = Some(r);
+        ctx.request_repaint();
+    }
+
+    let mut backends = backends(&info);
     let mut readings = Vec::new();
     let started = Instant::now();
     let mut notifier = Notifier::default();

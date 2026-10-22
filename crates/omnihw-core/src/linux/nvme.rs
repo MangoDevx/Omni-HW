@@ -56,6 +56,11 @@ pub fn controller_of(block: &str) -> Option<&str> {
 
 /// The SMART / health log of controller `ctrl` (e.g. "nvme0").
 pub fn smart_log(ctrl: &str) -> Option<NvmeHealth> {
+    crate::storage::parse_nvme_health(&smart_log_raw(ctrl)?)
+}
+
+/// The raw 512-byte SMART / health log page of controller `ctrl`.
+pub fn smart_log_raw(ctrl: &str) -> Option<Vec<u8>> {
     use std::os::fd::AsRawFd;
     let file = std::fs::File::open(format!("/dev/{ctrl}")).ok()?;
     let mut buf = vec![0u8; SMART_LOG_LEN as usize];
@@ -69,10 +74,7 @@ pub fn smart_log(ctrl: &str) -> Option<NvmeHealth> {
             &mut cmd as *mut AdminCmd,
         )
     };
-    if rc != 0 {
-        return None;
-    }
-    crate::storage::parse_nvme_health(&buf)
+    (rc == 0).then_some(buf)
 }
 
 #[cfg(test)]

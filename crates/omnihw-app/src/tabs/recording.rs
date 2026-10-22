@@ -118,7 +118,8 @@ pub fn show(ui: &mut Ui, sampler: &Sampler, state: &mut ViewState) -> bool {
         }
         Mode::Bottleneck => {
             ui.separator();
-            let gpus = sampler.info().map_or(&[][..], |i| &i.gpus[..]);
+            let info = sampler.info();
+            let gpus = info.as_ref().map_or(&[][..], |i| &i.gpus[..]);
             super::bottleneck::show(ui, &snap, &mut state.compare, &mut state.analysis, gpus);
             return clicked;
         }

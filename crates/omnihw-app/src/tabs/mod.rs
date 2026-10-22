@@ -62,7 +62,50 @@ pub fn section(ui: &mut Ui, title: &str, rows: &[(&str, String)]) {
     });
 }
 
-/// Placeholder for a page that only works on Windows so far.
+/// egui-memory flag: the user asked to read the root-only data this frame.
+const ROOT_READ: &str = "root_read";
+
+/// "Read as root..." for data only root can read, with the last read's outcome. Nothing when
+/// Omni-HW already runs as root. `what` starts the hover text ("Memory module details").
+pub fn root_read_button(ui: &mut Ui, snap: &crate::sampler::Snapshot, what: &str) {
+    if crate::elevate::elevated() {
+        return;
+    }
+    let state = &snap.root_read;
+    ui.horizontal_wrapped(|ui| {
+        if state.busy {
+            ui.spinner();
+            ui.label("Waiting for root access...");
+        } else if ui
+            .button("Read as root...")
+            .on_hover_text(format!(
+                "{what} can only be read by root. This asks for your password (pkexec), reads \
+                 them once and stops; Omni-HW itself keeps running as you."
+            ))
+            .clicked()
+        {
+            temp::set(ui.ctx(), egui::Id::new(ROOT_READ), true);
+        }
+        match &state.result {
+            Some(Err(e)) => {
+                ui.colored_label(crate::heat::ink(ui.visuals(), crate::heat::ORANGE), e);
+            }
+            Some(Ok(0)) => {
+                ui.weak("Nothing more could be read, even as root.");
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Start the root read if a [`root_read_button`] was clicked. Call once per frame.
+pub fn dispatch_root_read(ctx: &egui::Context, sampler: &crate::sampler::Sampler) {
+    if temp::take::<bool>(ctx, egui::Id::new(ROOT_READ)).unwrap_or(false) {
+        sampler.read_as_root();
+    }
+}
+
+/// Placeholder for a page that isn't available on Linux yet.
 pub fn unsupported(ui: &mut Ui, page: &str) {
     page_title(ui, page);
     ui.add_space(8.0);

@@ -1,178 +1,113 @@
-//! Ask for administrator rights at startup when SATA drives are present, because reading their
-//! SMART health requires it. If the user declines the UAC prompt, Omni-HW continues without it.
-//! `--no-elevate` skips the prompt (and is passed to the elevated copy so it can never loop).
-//! Launches at Windows sign-in (`--autostart`) and the "Ask for administrator at start" setting
-//! being off also skip it.
+//! Root access. Omni-HW runs as the user; what only root can read (memory modules from the
+//! SMBIOS tables, NVMe and SATA drive health) comes from a short-lived copy of Omni-HW started
+//! through `pkexec` with `--root-read`. It prints the raw data (see
+//! [`omnihw_core::linux::rootdata`]) and exits without opening a window. pkexec asks for the
+//! password through the desktop's polkit agent. Nothing runs as root unless the user asks
+//! (a button, or the "read at start" setting).
 
+use omnihw_core::linux::{Root, rootdata};
+use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
-const NO_ELEVATE: &str = "--no-elevate";
+const ROOT_READ_FLAG: &str = "--root-read";
 
-/// Whether this process runs as administrator (asked once; it can't change while running).
+/// Whether this process runs as root (asked once; it can't change while running).
 pub fn elevated() -> bool {
     static ELEVATED: OnceLock<bool> = OnceLock::new();
     *ELEVATED.get_or_init(omnihw_core::platform::is_elevated)
 }
 
-/// Returns true if an elevated copy was launched and this process should exit.
-pub fn relaunch_elevated_if_useful() -> bool {
+/// If this process was started as the root helper, print the data and return the exit code.
+pub fn run_helper() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if args
-        .iter()
-        .any(|a| a == NO_ELEVATE || a == crate::autostart::AUTOSTART_FLAG)
-        || !crate::settings::Settings::load().ask_admin_at_start
-        || elevated()
-        || !omnihw_core::platform::has_smart_capable_drive()
-    {
-        return false;
-    }
-    let mut params: Vec<String> = args.iter().map(|a| quote(a)).collect();
-    params.push(NO_ELEVATE.into());
-    run_as_admin(&params.join(" "))
-}
-
-/// Quote an argument for the Windows command line.
-fn quote(a: &str) -> String {
-    if a.is_empty() || a.contains([' ', '\t', '"']) {
-        format!("\"{}\"", a.replace('"', "\\\""))
-    } else {
-        a.to_string()
+    match args.as_slice() {
+        [flag] if flag == ROOT_READ_FLAG => {
+            print!("{}", rootdata::collect(&Root::system()));
+            Some(0)
+        }
+        [flag, ..] if flag == ROOT_READ_FLAG => Some(2),
+        _ => None,
     }
 }
 
-#[cfg(windows)]
-fn run_as_admin(params: &str) -> bool {
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-    use windows::core::{HSTRING, PCWSTR, w};
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    let (file, params) = (
-        HSTRING::from(&*exe.to_string_lossy()),
-        HSTRING::from(params),
-    );
-    // SAFETY: NUL-terminated strings that outlive the call. Shows the UAC prompt; returns a
-    // value <= 32 if it failed or the user declined.
-    let r = unsafe {
-        ShellExecuteW(
-            None,
-            w!("runas"),
-            &file,
-            &params,
-            PCWSTR::null(),
-            SW_SHOWNORMAL,
-        )
-    };
-    r.0 as isize > 32
+/// The root-only data as [`rootdata::collect`] text: read directly when already root, else
+/// through the pkexec helper (which shows the password prompt). Blocks, so call it off the UI
+/// thread.
+pub fn read_as_root() -> Result<String, String> {
+    if elevated() {
+        return Ok(rootdata::collect(&Root::system()));
+    }
+    let exe =
+        std::env::current_exe().map_err(|e| format!("Can't find Omni-HW's executable: {e}"))?;
+    let out = Command::new("pkexec")
+        .arg(exe)
+        .arg(ROOT_READ_FLAG)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                "pkexec isn't installed (it comes with polkit; install it with your package manager)"
+                    .to_string()
+            }
+            _ => format!("Couldn't run pkexec: {e}"),
+        })?;
+    pkexec_result(out.status.code(), &out.stdout, &out.stderr)
 }
 
-#[cfg(not(windows))]
-fn run_as_admin(_params: &str) -> bool {
-    false
+/// Interpret pkexec's exit code: 126 when the prompt was dismissed or not allowed, 127 when
+/// authentication failed or pkexec couldn't start the helper.
+fn pkexec_result(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<String, String> {
+    match code {
+        Some(0) => Ok(String::from_utf8_lossy(stdout).into_owned()),
+        Some(126) => Err("Root access wasn't granted".into()),
+        Some(127) => {
+            let e = String::from_utf8_lossy(stderr);
+            Err(match e.trim() {
+                "" => "Authentication failed".to_string(),
+                e => format!("Authentication failed ({e})"),
+            })
+        }
+        Some(c) => Err(format!("The root helper failed (exit code {c})")),
+        None => Err("The root helper was stopped".into()),
+    }
 }
 
-/// Restart straight into the UEFI firmware setup (`shutdown /r /fw /t 0`). Needs administrator
-/// rights, so it goes through UAC; only offered on UEFI systems. Only ever runs on a click
-/// after the user confirmed.
-#[cfg(windows)]
+/// Restart straight into the UEFI firmware setup (`systemctl reboot --firmware-setup`; polkit
+/// may ask for the password). Only offered on UEFI systems, and only ever runs on a click after
+/// the user confirmed.
 pub fn restart_to_firmware() -> Result<(), String> {
-    use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-    use windows::core::{HSTRING, PCWSTR, w};
-    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into());
-    let exe = std::path::Path::new(&root).join(r"System32\shutdown.exe");
-    let file = HSTRING::from(&*exe.to_string_lossy());
-    // SAFETY: NUL-terminated strings that outlive the call. Shows the UAC prompt unless already
-    // elevated; returns a value <= 32 if it failed or the user declined.
-    let r = unsafe {
-        ShellExecuteW(
-            None,
-            w!("runas"),
-            &file,
-            w!("/r /fw /t 0"),
-            PCWSTR::null(),
-            SW_HIDE,
-        )
-    };
-    if r.0 as isize > 32 {
+    let out = Command::new("systemctl")
+        .args(["reboot", "--firmware-setup"])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("Couldn't run systemctl: {e}"))?;
+    if out.status.success() {
         Ok(())
     } else {
-        Err("Couldn't restart: administrator rights were declined, or this PC doesn't support restarting into the firmware setup.".into())
+        let e = String::from_utf8_lossy(&out.stderr);
+        Err(format!(
+            "Couldn't restart into the firmware setup: {}",
+            e.trim()
+        ))
     }
-}
-
-#[cfg(not(windows))]
-pub fn restart_to_firmware() -> Result<(), String> {
-    Err("Only supported on Windows".into())
-}
-
-/// Run this executable elevated with `params` (shows the UAC prompt), wait for it to finish and
-/// return its exit code. Errors if the prompt was declined or the launch failed. Blocks, so call
-/// it off the UI thread.
-#[cfg(windows)]
-pub fn run_as_admin_wait(params: &str) -> Result<u32, String> {
-    use windows::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
-    use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
-    use windows::Win32::UI::Shell::{
-        SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW,
-    };
-    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
-    use windows::core::{HSTRING, w};
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let (file, params) = (
-        HSTRING::from(&*exe.to_string_lossy()),
-        HSTRING::from(params),
-    );
-    let mut info = SHELLEXECUTEINFOW {
-        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
-        fMask: SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC,
-        lpVerb: w!("runas"),
-        lpFile: windows::core::PCWSTR(file.as_ptr()),
-        lpParameters: windows::core::PCWSTR(params.as_ptr()),
-        nShow: SW_HIDE.0,
-        ..Default::default()
-    };
-    // SAFETY: the strings outlive the call; shows the UAC prompt.
-    unsafe { ShellExecuteExW(&mut info) }
-        .map_err(|_| "Administrator permission was not granted".to_string())?;
-    if info.hProcess.is_invalid() {
-        return Err("Could not start the elevated helper".into());
-    }
-    /// Closes the helper's process handle on drop.
-    struct Process(windows::Win32::Foundation::HANDLE);
-    impl Drop for Process {
-        fn drop(&mut self) {
-            // SAFETY: a valid process handle from ShellExecuteExW, closed exactly once.
-            let _ = unsafe { CloseHandle(self.0) };
-        }
-    }
-    let process = Process(info.hProcess);
-    let mut code = 1u32;
-    // SAFETY: `process` holds a valid handle for the duration of both calls.
-    let ok = unsafe {
-        WaitForSingleObject(process.0, INFINITE) == WAIT_OBJECT_0
-            && GetExitCodeProcess(process.0, &mut code).is_ok()
-    };
-    if !ok {
-        return Err("The elevated helper did not finish".into());
-    }
-    Ok(code)
-}
-
-#[cfg(not(windows))]
-pub fn run_as_admin_wait(_params: &str) -> Result<u32, String> {
-    Err("Not supported on this platform".into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::quote;
+    use super::pkexec_result;
 
     #[test]
-    fn quoting() {
-        assert_eq!(quote("--x"), "--x");
-        assert_eq!(quote("a b"), "\"a b\"");
-        assert_eq!(quote(""), "\"\"");
+    fn pkexec_codes() {
+        assert_eq!(
+            pkexec_result(Some(0), b"smbios 00\n", b""),
+            Ok("smbios 00\n".into())
+        );
+        assert_eq!(
+            pkexec_result(Some(126), b"", b""),
+            Err("Root access wasn't granted".into())
+        );
+        assert!(pkexec_result(Some(127), b"", b"Not authorized").is_err());
+        assert!(pkexec_result(Some(2), b"", b"").is_err());
+        assert!(pkexec_result(None, b"", b"").is_err());
     }
 }
