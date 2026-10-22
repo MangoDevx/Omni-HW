@@ -165,12 +165,47 @@ const CHECKS: &[(&str, Category, Check)] = &[
     ("Startup apps", Category::System, system::startup_apps),
 ];
 
+/// Checks that work from the data Linux collects too. The others read Windows-only sources
+/// (registry, event log, power plans, Windows networking) and are skipped there.
+const LINUX_CHECKS: &[&str] = &[
+    "CPU microcode (13th/14th Gen Intel stability)",
+    "CPU clocks under load",
+    "CPU temperature",
+    "Memory speed (XMP / EXPO)",
+    "Memory channel layout",
+    "Memory pressure",
+    "Installed memory",
+    "Memory diagnostic results",
+    "Monitor connected to the graphics card",
+    "GPU PCIe link",
+    "GPU temperature",
+    "GPU memory (VRAM) pressure",
+    "GPU power and thermal slowdown",
+    "Resizable BAR",
+    "Drive free space",
+    "Drive health (NVMe SMART)",
+    "Drive health (SATA SMART)",
+    "Drive temperature",
+    "Drives set up",
+    "Drive link speed",
+    "Battery wear",
+    "BIOS age",
+];
+
 /// Run every check. Findings within a result are ordered most severe first.
 pub fn run(ctx: &Context) -> Vec<CheckResult> {
     CHECKS
         .iter()
         .chain(power::CHECKS)
         .map(|&(name, category, check)| {
+            // Unit tests run every check on every platform.
+            if cfg!(not(any(windows, test))) && !LINUX_CHECKS.contains(&name) {
+                return CheckResult {
+                    name,
+                    category,
+                    outcome: Outcome::Skipped("Not checked on Linux yet".into()),
+                };
+            }
             let outcome = match check(ctx) {
                 Outcome::Findings(mut f) if !f.is_empty() => {
                     // The check's category is authoritative (e.g. Gaming groups GPU/System settings).
@@ -212,6 +247,14 @@ mod tests {
     use super::*;
     use crate::SystemInfo;
     use crate::sensors::SensorTable;
+
+    #[test]
+    fn linux_checks_exist() {
+        let names: Vec<&str> = CHECKS.iter().chain(power::CHECKS).map(|c| c.0).collect();
+        for n in LINUX_CHECKS {
+            assert!(names.contains(n), "{n} is not a check");
+        }
+    }
 
     #[test]
     fn gaming_checks_are_grouped() {

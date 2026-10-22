@@ -187,6 +187,8 @@ fn layout(
         Some("gpt") => PartitionStyle::Gpt,
         Some("dos") => PartitionStyle::Mbr,
         Some(_) => return None,
+        // A file system, LVM or LUKS straight on the disk (no partition table) is in use.
+        None if prop(props, "ID_FS_TYPE").is_some() => return None,
         None if parts.is_empty() && !props.is_empty() => PartitionStyle::Raw,
         None => return None,
     };
