@@ -262,6 +262,12 @@ pub fn drives(root: &Root) -> Vec<Drive> {
             },
             removable: root.read(&format!("{sys}/removable")).as_deref() == Some("1")
                 || bus == BusType::Usb,
+            // Needs root; `None` otherwise, like on Windows without administrator rights.
+            nvme_health: if bus == BusType::Nvme {
+                super::nvme::controller_of(&name).and_then(super::nvme::smart_log)
+            } else {
+                None
+            },
             volumes: volumes(root, &name, &parts, &mounts),
             layout: layout(root, &name, &parts, size_bytes, &props),
             ..Default::default()

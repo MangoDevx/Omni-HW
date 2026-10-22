@@ -48,6 +48,8 @@ windows = { workspace = true, features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# ioctl for the NVMe SMART log.
+libc = "0.2"
 # dlopen for NVIDIA's libnvidia-ml.so.1.
 libloading = "0.8"
 # statvfs for volume free space.

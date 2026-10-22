@@ -7,6 +7,7 @@
 pub mod block;
 pub mod dmi;
 pub mod drm;
+pub mod nvme;
 pub mod os;
 pub mod pciids;
 pub mod power_supply;
