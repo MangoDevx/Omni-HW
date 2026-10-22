@@ -2,7 +2,7 @@
 //! [`crate::eventlog`]): kernel crashes and hangs, hardware errors, GPU hangs, disk and file
 //! system errors, out-of-memory kills and overheating in the last 30 days.
 
-use super::helpers::{finding, plural};
+use super::helpers::{distro, finding, plural};
 use super::{Category, Context, Level, Outcome};
 use crate::eventlog::{EventCategory, EventLevel, LogEntry, VIEW_DAYS};
 
@@ -77,7 +77,10 @@ pub(super) fn kernel_crashes(ctx: &Context) -> Outcome {
         examples(&found),
         &[
             EVENT_LOG_STEP,
-            "Install all updates (sudo apt update && sudo apt full-upgrade): kernel and driver fixes often cure crashes.",
+            &format!(
+                "Install all updates ({}): kernel and driver fixes often cure crashes.",
+                distro(ctx).upgrade()
+            ),
             "If you overclock, undervolt or use XMP/EXPO, go back to stock settings and see whether the crashes stop.",
             "Test the memory: choose Memtest86+ in the boot menu (GRUB), or run MemTest86 from a USB stick, for a few passes.",
         ],
@@ -185,7 +188,7 @@ pub(super) fn out_of_memory(ctx: &Context) -> Outcome {
         examples(&found),
         &[
             "Close memory-hungry apps or browser tabs you don't need.",
-            "Add swap or zram (Ubuntu: a larger /swap.img, or install zram-tools) so the system slows down instead of killing apps.",
+            "Add swap or zram (compressed swap in RAM) so the system slows down instead of killing apps.",
             "If it keeps happening, add more RAM.",
         ],
     )])

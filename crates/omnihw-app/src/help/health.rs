@@ -49,7 +49,7 @@ fn check_description(name: &str) -> &'static str {
             "CPU thermal throttling or critical-temperature shutdowns the kernel logged."
         }
         "Pending restart" => {
-            "Updates (often a new kernel) installed and waiting for a restart, as Ubuntu's /run/reboot-required reports."
+            "Updates (often a new kernel) installed and waiting for a restart: /run/reboot-required on Debian and Ubuntu, /run/reboot-needed on openSUSE, and a replaced kernel elsewhere (its modules are gone from /usr/lib/modules)."
         }
         "Kernel problems since boot" => {
             "The kernel's taint flags show a machine check, bad memory page, oops, warning or soft lockup since this boot."
@@ -204,7 +204,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Live checks (memory pressure, temperatures, throttling) use roughly the last two minutes of readings and need at least a few seconds of data first.",
             "The throttling check needs some time with the CPU under heavy load (a game, a render) before it gives a verdict.",
             "Results also appear at the top of saved and copied reports.",
-            "The crash checks read the system journal once when Omni-HW starts; Refresh on the Event Log page reads it again. If you aren't in the adm group they only see your own messages.",
+            "The crash checks read the system journal once when Omni-HW starts; Refresh on the Event Log page reads it again. If you aren't in the systemd-journal (or adm) group they only see your own messages.",
         ],
     );
     h(ui, "All checks");

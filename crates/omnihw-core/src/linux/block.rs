@@ -79,7 +79,8 @@ pub fn unescape_octal(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// (device, mount point, file system) from `/proc/self/mounts`.
+/// (device, mount point, file system) from `/proc/self/mounts`. Read-only mounts are left out:
+/// nothing can be written to them, so their free space doesn't matter.
 pub fn parse_mounts(text: &str) -> Vec<(String, String, String)> {
     text.lines()
         .filter_map(|l| {
@@ -87,7 +88,8 @@ pub fn parse_mounts(text: &str) -> Vec<(String, String, String)> {
             let dev = f.next()?;
             let mount = f.next()?;
             let fs = f.next()?;
-            dev.starts_with("/dev/")
+            let read_only = f.next()?.split(',').any(|o| o == "ro");
+            (dev.starts_with("/dev/") && !read_only)
                 .then(|| (unescape_octal(dev), unescape_octal(mount), fs.to_string()))
         })
         .collect()
@@ -350,7 +352,7 @@ mod tests {
     #[test]
     fn mounts() {
         let m = parse_mounts(
-            "proc /proc proc rw 0 0\n/dev/nvme0n1p2 / ext4 rw 0 0\n/dev/sda1 /mnt/My\\040Data ntfs3 rw 0 0\n",
+            "proc /proc proc rw 0 0\n/dev/nvme0n1p2 / ext4 rw 0 0\n/dev/sda1 /mnt/My\\040Data ntfs3 rw 0 0\n/dev/sdb1 /usr/src ext4 ro,relatime 0 0\n",
         );
         assert_eq!(m.len(), 2);
         assert_eq!(m[1].1, "/mnt/My Data");

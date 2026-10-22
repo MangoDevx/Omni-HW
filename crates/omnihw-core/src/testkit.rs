@@ -257,6 +257,7 @@ pub fn desktop() -> SystemInfo {
             product: "Ubuntu 24.04.3 LTS".into(),
             computer_name: "desktop-test".into(),
             kernel: "6.14.0-33-generic".into(),
+            distro: crate::platform::Distro::Ubuntu,
         }),
         battery: None,
         battery_health: None,
@@ -389,6 +390,7 @@ pub fn laptop() -> SystemInfo {
             product: "Ubuntu 24.04.3 LTS".into(),
             computer_name: "laptop-test".into(),
             kernel: "6.14.0-33-generic".into(),
+            distro: crate::platform::Distro::Ubuntu,
         }),
         battery: Some(Battery {
             percent: 72,

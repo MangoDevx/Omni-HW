@@ -145,7 +145,7 @@ pub(super) fn event_log(ui: &mut Ui) {
         "eventlog",
         &[
             "Read with journalctl: messages at warning level and above, hardware error notices, and crash records from systemd-coredump and systemd-oomd, from the last 30 days. Newest first; other errors are limited to the newest 150 so they can't crowd out the important ones.",
-            "Without membership of the adm or systemd-journal group, journalctl only shows your own messages: the page says so, and sudo usermod -aG adm $USER (then signing in again) fixes it.",
+            "Without membership of the adm or systemd-journal group, journalctl only shows your own messages: the page says so, and sudo usermod -aG systemd-journal $USER (then signing in again) fixes it.",
             "Times are your local time.",
         ],
     );

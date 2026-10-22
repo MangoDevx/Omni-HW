@@ -1,7 +1,8 @@
 //! The Network page's adapters: addresses and routes from iproute2 (`ip -j addr`, `ip -j route`),
 //! link details from `/sys/class/net`, DNS servers from systemd-resolved (`resolvectl`, or
-//! `/etc/resolv.conf`), Wi-Fi from `iw`, the DHCP server from NetworkManager (`nmcli`) or
-//! systemd-networkd's lease files, and the fastest supported speed from the ethtool ioctl.
+//! NetworkManager or `/etc/resolv.conf`), Wi-Fi from `iw`, connection state and the DHCP server
+//! from NetworkManager (`nmcli`) or systemd-networkd's lease files, and the fastest supported
+//! speed from the ethtool ioctl.
 
 use super::Root;
 use super::net::adapter_model;
@@ -191,7 +192,9 @@ pub fn parse_iw_link(text: &str) -> Option<Wifi> {
     let rssi_dbm: Option<i32> = field("signal:")
         .and_then(|s| s.split_whitespace().next())
         .and_then(|s| s.parse().ok());
-    let rate = field("rx bitrate:").unwrap_or_default();
+    let rate = field("rx bitrate:")
+        .or_else(|| field("tx bitrate:"))
+        .unwrap_or_default();
     let band = freq_mhz.and_then(Band::from_mhz);
     let phy = if rate.contains("EHT-MCS") {
         phy_name(11)
@@ -207,7 +210,7 @@ pub fn parse_iw_link(text: &str) -> Option<Wifi> {
         phy_name(4)
     };
     Some(Wifi {
-        ssid: field("SSID:").map(str::to_string),
+        ssid: field("SSID:").map(unescape_ssid),
         signal_pct: rssi_dbm.map(signal_pct),
         rssi_dbm,
         channel: freq_mhz.and_then(channel_from_mhz),
@@ -217,6 +220,30 @@ pub fn parse_iw_link(text: &str) -> Option<Wifi> {
         rx_mbps: mbps("rx bitrate:"),
         tx_mbps: mbps("tx bitrate:"),
     })
+}
+
+/// An SSID as iw prints it: bytes other than printable ASCII (UTF-8 names), backslashes and
+/// leading or trailing spaces come as `\xNN`.
+fn unescape_ssid(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b
+            .get(i + 2..i + 4)
+            .filter(|_| b[i] == b'\\' && b[i + 1] == b'x');
+        match hex.and_then(|h| u8::from_str_radix(std::str::from_utf8(h).ok()?, 16).ok()) {
+            Some(v) => {
+                out.push(v);
+                i += 4;
+            }
+            None => {
+                out.push(b[i]);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// Signal quality from dBm, the way Windows shows it: -100 dBm is 0 %, -50 dBm and above 100 %.
@@ -245,6 +272,61 @@ fn proc_wireless(root: &Root, iface: &str) -> Option<Wifi> {
 }
 
 /// The DHCP server from NetworkManager (`nmcli -t -f DHCP4 device show`).
+/// A device as NetworkManager sees it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct NmDevice {
+    pub name: String,
+    /// `NM_DEVICE_STATE`: 10 unmanaged, 20 unavailable, 30 disconnected, 100 connected,
+    /// 120 failed (40-90 are the steps of connecting).
+    pub state: u32,
+    /// The active connection's name (empty when none).
+    pub connection: String,
+    pub dns: Vec<IpAddr>,
+}
+
+impl NmDevice {
+    /// Managed by NetworkManager but not connected (after Disconnect, or a failed attempt).
+    pub fn disconnected(&self) -> bool {
+        matches!(self.state, 30 | 120)
+    }
+}
+
+/// `nmcli -t -f GENERAL.DEVICE,GENERAL.STATE,GENERAL.CONNECTION,IP4.DNS,IP6.DNS device show`:
+/// one `FIELD:value` block per device, `:` in values escaped as `\:`.
+pub fn parse_nmcli_devices(text: &str) -> Vec<NmDevice> {
+    let mut out: Vec<NmDevice> = Vec::new();
+    for l in text.lines() {
+        let Some((key, value)) = l.split_once(':') else {
+            continue;
+        };
+        let value = value.replace(r"\:", ":").replace(r"\\", r"\");
+        match key {
+            "GENERAL.DEVICE" => out.push(NmDevice {
+                name: value,
+                ..Default::default()
+            }),
+            _ => {
+                let Some(d) = out.last_mut() else { continue };
+                match key {
+                    "GENERAL.STATE" => {
+                        d.state = value
+                            .split_whitespace()
+                            .next()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0);
+                    }
+                    "GENERAL.CONNECTION" => d.connection = value,
+                    k if k.starts_with("IP4.DNS[") || k.starts_with("IP6.DNS[") => {
+                        d.dns.extend(dns_addr(&value));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn parse_nmcli_dhcp_server(text: &str) -> Option<IpAddr> {
     text.lines().find_map(|l| {
         let v = l.split_once("dhcp_server_identifier")?.1;
@@ -431,6 +513,7 @@ pub fn adapters(
     links: Vec<Link>,
     gateways: &[(String, IpAddr)],
     dns: &DnsConfig,
+    nm: &[NmDevice],
 ) -> Vec<Adapter> {
     links
         .into_iter()
@@ -440,8 +523,12 @@ pub fn adapters(
             let p = format!("{NET}/{}", l.name);
             let (media, physical) = media(root, &l);
             let has_address = !l.ipv4.is_empty() || l.ipv6.iter().any(|e| !is_link_local(e.addr));
+            let nm_dev = nm.iter().find(|d| d.name == l.name);
             let status = if !l.up {
                 Status::Disabled
+            } else if nm_dev.is_some_and(NmDevice::disconnected) {
+                // NetworkManager's Disconnect leaves the link (and carrier) up.
+                Status::Disconnected
             } else if l.operstate == "UP" || (l.operstate == "UNKNOWN" && l.lower_up && has_address)
             {
                 Status::Up
@@ -458,7 +545,10 @@ pub fn adapters(
                 .iter()
                 .find(|(n, _)| *n == l.name)
                 .map(|(_, d)| d.clone());
-            // Global servers apply to the interfaces that carry the default route.
+            // Without systemd-resolved, NetworkManager knows each device's servers. Global
+            // servers apply to the interfaces that carry the default route.
+            let link_dns =
+                link_dns.or_else(|| nm_dev.filter(|d| !d.dns.is_empty()).map(|d| d.dns.clone()));
             let servers = match link_dns {
                 Some(d) => d,
                 None if !gws.is_empty() => dns.global.clone(),
@@ -530,7 +620,20 @@ pub fn gather(detailed: bool, previous: Option<&NetworkInfo>) -> NetworkInfo {
         (Some(d), domains) => parse_resolvectl(&d, &domains.unwrap_or_default()),
         _ => parse_resolv_conf(&root.read("/etc/resolv.conf").unwrap_or_default()),
     };
-    let mut adapters = adapters(&root, links, &gateways, &dns);
+    let nm = parse_nmcli_devices(
+        &output(
+            "nmcli",
+            &[
+                "-t",
+                "-f",
+                "GENERAL.DEVICE,GENERAL.STATE,GENERAL.CONNECTION,IP4.DNS,IP6.DNS",
+                "device",
+                "show",
+            ],
+        )
+        .unwrap_or_default(),
+    );
+    let mut adapters = adapters(&root, links, &gateways, &dns, &nm);
     for a in &mut adapters {
         let old = previous.and_then(|p| p.adapters.iter().find(|o| o.name == a.name));
         if a.media == Media::Ethernet && a.physical {
@@ -540,6 +643,30 @@ pub fn gather(detailed: bool, previous: Option<&NetworkInfo>) -> NetworkInfo {
             a.wifi = output("iw", &["dev", &a.name, "link"])
                 .and_then(|t| parse_iw_link(&t))
                 .or_else(|| proc_wireless(&root, &a.name));
+        }
+        let connection = nm
+            .iter()
+            .find(|d| d.name == a.name)
+            .map(|d| d.connection.as_str())
+            .unwrap_or_default();
+        if !connection.is_empty() {
+            // DNS servers typed in (vs from DHCP), as the Network page's DNS setting saves them.
+            a.dns_static = if detailed {
+                output(
+                    "nmcli",
+                    &[
+                        "-g",
+                        "ipv4.ignore-auto-dns",
+                        "connection",
+                        "show",
+                        "id",
+                        connection,
+                    ],
+                )
+                .is_some_and(|v| v.trim() == "yes")
+            } else {
+                old.is_some_and(|o| o.dns_static)
+            };
         }
         if a.dhcp_enabled && a.status == Status::Up {
             a.dhcp_server = if detailed {
@@ -602,7 +729,7 @@ mod tests {
             global: vec!["1.1.1.1".parse().unwrap()],
             ..Default::default()
         };
-        let a = adapters(&f.root(), links, &gws, &dns);
+        let a = adapters(&f.root(), links.clone(), &gws, &dns, &[]);
         assert_eq!(
             a.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
             ["enp5s0", "wlp6s0", "eno1", "wg0"],
@@ -629,6 +756,28 @@ mod tests {
             (Media::Tunnel, Status::Up, false)
         );
         assert!(a[3].dns.is_empty() && a[3].has_duplicate());
+
+        // NetworkManager: Disconnect leaves the link up; its DNS beats resolv.conf's.
+        let nm = parse_nmcli_devices(
+            "GENERAL.DEVICE:enp5s0\nGENERAL.STATE:30 (disconnected)\nGENERAL.CONNECTION:\n\n\
+             GENERAL.DEVICE:wg0\nGENERAL.STATE:100 (connected)\nGENERAL.CONNECTION:wg0\n\
+             IP4.DNS[1]:10.8.0.1\nIP6.DNS[1]:fd00\\:\\:1\n\n\
+             GENERAL.DEVICE:lo\nGENERAL.STATE:10 (unmanaged)\nGENERAL.CONNECTION:\n",
+        );
+        assert_eq!(nm.len(), 3);
+        assert_eq!(
+            (nm[1].state, nm[1].connection.as_str(), nm[1].dns.len()),
+            (100, "wg0", 2)
+        );
+        let a = adapters(&f.root(), links, &gws, &dns, &nm);
+        assert_eq!(a[0].status, Status::Disconnected);
+        assert_eq!(
+            a[3].dns,
+            [
+                "10.8.0.1".parse::<IpAddr>().unwrap(),
+                "fd00::1".parse().unwrap()
+            ]
+        );
     }
 
     #[test]
@@ -664,6 +813,17 @@ mod tests {
         assert_eq!((w.rx_mbps, w.tx_mbps), (Some(867), Some(780)));
         assert_eq!(w.phy, phy_name(8));
         assert_eq!(parse_iw_link("Not connected.\n"), None);
+
+        // Wi-Fi 7 multi-link: per-link lines are indented; a UTF-8 SSID comes escaped.
+        let w = parse_iw_link(
+            "Connected to 02:11:22:33:44:55 (on wlan0)\n\tSSID: Caf\\xc3\\xa9 5G\n\tLink 0 BSSID aa:bb:cc:dd:ee:01\n\t\tfreq: 6115.0\n\tRX: 1 bytes (1 packets)\n\tsignal: -60 dBm\n\ttx bitrate: 2882.3 MBit/s 160MHz EHT-MCS 11 EHT-NSS 2 EHT-GI 0\n",
+        )
+        .unwrap();
+        assert_eq!(w.ssid.as_deref(), Some("Café 5G"));
+        assert_eq!((w.freq_mhz, w.band), (Some(6115), Some(Band::G6)));
+        assert_eq!((w.rx_mbps, w.tx_mbps), (None, Some(2882)));
+        assert_eq!(w.phy, phy_name(11));
+        assert_eq!(unescape_ssid("\\x20lead\\\\x"), " lead\\\\x");
 
         assert_eq!(
             parse_nmcli_dhcp_server(

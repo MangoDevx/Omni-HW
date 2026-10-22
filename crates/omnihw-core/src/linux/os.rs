@@ -2,7 +2,7 @@
 
 use super::{Root, key_value, parse_int};
 use crate::checkup::Swap;
-use crate::platform::{MemoryStatus, OsInfo};
+use crate::platform::{Distro, MemoryStatus, OsInfo};
 
 /// Distribution name from os-release, kernel release and host name.
 pub fn os_info(root: &Root) -> Option<OsInfo> {
@@ -21,10 +21,17 @@ pub fn os_info(root: &Root) -> Option<OsInfo> {
     if release.is_none() && kernel.is_empty() {
         return None;
     }
+    let distro = release.as_deref().map_or(Distro::Other, |r| {
+        Distro::from_ids(
+            &key_value(r, "ID").unwrap_or_default(),
+            &key_value(r, "ID_LIKE").unwrap_or_default(),
+        )
+    });
     Some(OsInfo {
         product,
         kernel,
         computer_name,
+        distro,
     })
 }
 
@@ -126,7 +133,21 @@ pub fn nominal_mhz(root: &Root) -> Option<u32> {
 
 /// The packages waiting for a restart when the system asks for one (Debian/Ubuntu's
 /// `/run/reboot-required`, written by package scripts); `None` when no restart is pending.
+///
+/// Elsewhere: openSUSE's zypper leaves `/run/reboot-needed`, and Arch (and its derivatives)
+/// delete the running kernel's modules when a new kernel is installed, so a missing
+/// `/usr/lib/modules/<running release>` means the kernel was updated.
 pub fn reboot_required(root: &Root) -> Option<Vec<String>> {
+    if root.exists("/run/reboot-needed") {
+        return Some(Vec::new());
+    }
+    let kernel = root.read("/proc/sys/kernel/osrelease").unwrap_or_default();
+    if !kernel.is_empty()
+        && !root.list("/usr/lib/modules").is_empty()
+        && !root.exists(&format!("/usr/lib/modules/{kernel}"))
+    {
+        return Some(vec![format!("the kernel (running {kernel})")]);
+    }
     if !root.exists("/run/reboot-required") {
         return None;
     }
@@ -170,6 +191,39 @@ pub fn kernel_taint(root: &Root) -> Option<u64> {
 mod tests {
     use super::*;
     use crate::linux::Fixture;
+
+    #[test]
+    fn pending_restart_elsewhere() {
+        // Arch: the running kernel's modules were replaced by a newer kernel's.
+        let f = Fixture::new();
+        f.file("proc/sys/kernel/osrelease", "6.17.1-arch1-1\n")
+            .file("usr/lib/modules/6.17.1-arch1-1/modules.dep", "");
+        assert_eq!(reboot_required(&f.root()), None);
+        let f = Fixture::new();
+        f.file("proc/sys/kernel/osrelease", "6.17.1-arch1-1\n")
+            .file("usr/lib/modules/6.17.2-arch1-1/modules.dep", "");
+        assert_eq!(
+            reboot_required(&f.root()),
+            Some(vec!["the kernel (running 6.17.1-arch1-1)".to_string()])
+        );
+        // No modules folder at all (containers): no guess.
+        let f = Fixture::new();
+        f.file("proc/sys/kernel/osrelease", "6.17.1-arch1-1\n");
+        assert_eq!(reboot_required(&f.root()), None);
+        // openSUSE's zypper.
+        f.file("run/reboot-needed", "");
+        assert_eq!(reboot_required(&f.root()), Some(vec![]));
+    }
+
+    #[test]
+    fn distro_family() {
+        let f = Fixture::new();
+        f.file(
+            "etc/os-release",
+            "NAME=\"CachyOS Linux\"\nID=cachyos\nID_LIKE=arch\n",
+        );
+        assert_eq!(os_info(&f.root()).unwrap().distro, Distro::Arch);
+    }
 
     #[test]
     fn pending_restart_swap_and_taint() {

@@ -278,7 +278,7 @@ pub fn setting_step(board: &Board, s: BiosSetting, generic: &str, profile: &str)
 
 /// Step: save and leave the setup.
 pub fn save_step() -> Step {
-    Step::new("Save and exit (usually F10). The PC restarts into Windows.")
+    Step::new("Save and exit (usually F10). The PC restarts.")
 }
 
 /// The usual three steps for changing one UEFI setting on this PC.

@@ -636,7 +636,16 @@ fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
 pub fn apply(action: &NetAction) -> Result<(), String> {
     action.validate()?;
     let iface = match action {
-        NetAction::FlushDns => return run("resolvectl", &["flush-caches"]).map(drop),
+        NetAction::FlushDns => {
+            return run("resolvectl", &["flush-caches"]).map(drop).map_err(|e| {
+                if e.contains("isn't installed") || e.contains("resolve") {
+                    "This system doesn't run systemd-resolved, so there's no DNS cache to flush"
+                        .into()
+                } else {
+                    e
+                }
+            });
+        }
         NetAction::Connect { name } => return run("nmcli", &["device", "connect", name]).map(drop),
         NetAction::Disconnect { name } => {
             return run("nmcli", &["device", "disconnect", name]).map(drop);

@@ -6,6 +6,7 @@ User-visible changes in each Omni-HW for Linux release. The release workflow pub
 
 ### New
 - **Omni-HW for Linux**: the first Linux version, shipped as a `.tar.gz` for x86-64 (built on Ubuntu 22.04).
+- Works on Ubuntu, Debian, Arch (CachyOS, EndeavourOS, Manjaro), Fedora and openSUSE: fix steps show your distribution's package commands.
 - Hardware pages: CPU, caches, mainboard, memory, GPU and storage details from sysfs, procfs, SMBIOS and the PCI database, including NVMe drive health and PCIe links.
 - Live sensors: CPU clocks, load, temperature and power (RAPL), motherboard fans and voltages (hwmon), memory, battery, drive temperature and I/O, AMD and Intel GPU sensors, and NVIDIA GPUs through NVML.
 - **Read as root**: one click (with your password, through pkexec) adds memory module details and SATA/NVMe drive health that only root can read.

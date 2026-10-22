@@ -176,11 +176,17 @@ pub fn resolve_a(name: &str) -> Result<Vec<Ipv4Addr>, String> {
     parse_a(&exchange(system_dns(&Root::system()), name, TYPE::A)?)
 }
 
-/// Reverse-DNS (PTR) name for `ip`, from the system's DNS server. Used by the LAN Security
-/// Report to label devices; `None` when nothing answers.
-pub fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
-    let r = exchange(system_dns(&Root::system()), &reverse_name(ip), TYPE::PTR).ok()?;
-    parse_ptr(&r)
+/// Reverse-DNS (PTR) name for `ip`. Used by the LAN Security Report to label devices; asks the
+/// local network's own DNS servers in `lan_dns` first (usually the router, which knows the
+/// names its DHCP clients sent), then the system's. `None` when nothing answers.
+pub fn reverse_dns(ip: Ipv4Addr, lan_dns: &[IpAddr]) -> Option<String> {
+    let name = reverse_name(ip);
+    lan_dns
+        .iter()
+        .copied()
+        .filter(|&s| crate::network::is_local(s))
+        .chain([system_dns(&Root::system())])
+        .find_map(|s| parse_ptr(&exchange(s, &name, TYPE::PTR).ok()?))
 }
 
 /// Status code and body of an HTTP/1.x response (chunked bodies decoded).

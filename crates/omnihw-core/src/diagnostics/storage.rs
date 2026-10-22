@@ -1,6 +1,6 @@
 //! Storage checks: free space, SMART health, temperature, partitioning and link speeds.
 
-use super::helpers::{board_query, finding, guided, plural, summarize};
+use super::helpers::{board_query, distro, finding, guided, plural, summarize};
 use super::{Category, Context, Level, Outcome, RECENT, Step};
 use crate::format_bytes;
 use crate::storage::{BusType, PartitionStyle, sata_gen_speed};
@@ -39,9 +39,10 @@ pub(super) fn drive_free_space(ctx: &Context) -> Outcome {
                 Step::new(
                     "See what uses the space with Disk Usage Analyzer (baobab), or \"du -xh --max-depth=1 <folder> | sort -h\".",
                 ),
-                Step::new(
-                    "Clear the package cache (\"sudo apt clean\" on Ubuntu) and remove old snaps, flatpaks and kernels you no longer use.",
-                ),
+                Step::new(format!(
+                    "Clear the package cache ({}) and remove old snaps, flatpaks and kernels you no longer use.",
+                    distro(ctx).clean_cache()
+                )),
                 Step::new("Uninstall unused games/apps or move them to another drive."),
                 Step::new("SSDs also slow down when nearly full; keep 10-20 % free."),
             ],

@@ -2,7 +2,7 @@ use omnihw_core::{SystemInfo, format_bytes};
 
 pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
     if let Some(t) = &info.topology {
-        ui.label(egui::RichText::new("Cache instances (Windows topology)").strong());
+        ui.label(egui::RichText::new("Cache instances").strong());
         egui::Grid::new("cache_topo")
             .striped(true)
             .num_columns(5)

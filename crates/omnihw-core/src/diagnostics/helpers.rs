@@ -3,6 +3,12 @@
 
 use super::{Category, Context, Finding, Level, Outcome, Step};
 use crate::bios_help::Board;
+use crate::platform::Distro;
+
+/// The distribution family, for package-manager commands in steps.
+pub(super) fn distro(ctx: &Context) -> Distro {
+    ctx.info.os.as_ref().map_or(Distro::Other, |o| o.distro)
+}
 
 /// A finding whose steps are plain text.
 pub(super) fn finding(

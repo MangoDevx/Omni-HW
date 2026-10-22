@@ -31,6 +31,10 @@ fn journalctl(args: &[&str]) -> Result<(String, bool), String> {
             _ => e.to_string(),
         })?;
     let stderr = String::from_utf8_lossy(&out.stderr);
+    // With --grep, journalctl exits 1 and prints nothing when no message matches.
+    if !out.status.success() && out.stdout.is_empty() && stderr.trim().is_empty() {
+        return Ok((String::new(), false));
+    }
     if !out.status.success() {
         let first = stderr.lines().next().unwrap_or("journalctl failed").trim();
         return Err(first.to_string());
@@ -107,7 +111,7 @@ pub fn read() -> EventLog {
     }
     if own_only {
         log.errors.push(
-            "system journal: only your own messages could be read. Add yourself to the \"adm\" group (sudo usermod -aG adm $USER), then sign out and back in."
+            "system journal: only your own messages could be read. Add yourself to the \"systemd-journal\" group (sudo usermod -aG systemd-journal $USER), then sign out and back in."
                 .into(),
         );
     }

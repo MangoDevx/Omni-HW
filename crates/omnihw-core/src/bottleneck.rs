@@ -282,7 +282,7 @@ pub fn analyze(rec: &Recording, vram_total_mb: Option<f64>) -> Result<Analysis, 
     }
     if share(ram_full) >= FACTOR_SHARE {
         factors.push(format!(
-            "System memory was over 90 % used {:.0} % of the time. Windows may be paging to disk; close background apps or add RAM.",
+            "System memory was over 90 % used {:.0} % of the time. The system may be swapping to disk; close background apps or add RAM.",
             share(ram_full) * 100.0
         ));
     }

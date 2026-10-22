@@ -121,7 +121,7 @@ pub(super) fn network(ui: &mut Ui) {
         "network",
         &[
             "Addresses and routes come from iproute2 (ip -j addr, ip -j route), link details from /sys/class/net, the fastest supported speed from the ethtool interface, DNS from resolvectl (or /etc/resolv.conf), Wi-Fi from iw and the DHCP server from nmcli. They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
-            "Without iw installed, Wi-Fi shows the signal level only (sudo apt install iw).",
+            "Without the iw package installed, Wi-Fi shows the signal level only.",
             "Pings use unprivileged ICMP sockets, so no root is needed. Changes run nmcli; a page change to an interface NetworkManager doesn't manage shows NetworkManager's error.",
         ],
     );

@@ -1,11 +1,12 @@
 //! Linux system checks: pending restart, swap, kernel taint, the CPU frequency driver and
 //! governor, the power profile, PCIe power saving and the NVIDIA driver.
 
-use super::helpers::{finding, plural};
+use super::helpers::{distro, finding, plural};
 use super::{Category, Context, Level, Outcome};
 use crate::checkup::TAINT_PROBLEMS;
 use crate::cpuid::Vendor;
 use crate::format_bytes;
+use crate::platform::Distro;
 
 /// A laptop running on battery (desktops and plugged-in laptops count as on AC).
 fn on_battery(ctx: &Context) -> bool {
@@ -69,7 +70,16 @@ pub(super) fn swap_space(ctx: &Context) -> Outcome {
             format_bytes(mem.total_bytes)
         ),
         &[
-            "Turn on zram (compressed swap in RAM): sudo apt install zram-tools.",
+            &match distro(ctx) {
+                Distro::Ubuntu | Distro::Debian => {
+                    "Turn on zram (compressed swap in RAM): sudo apt install zram-tools.".into()
+                }
+                Distro::Other => "Turn on zram (compressed swap in RAM) with your distribution's zram-generator or zram-tools package.".into(),
+                d => format!(
+                    "Turn on zram (compressed swap in RAM): {}, then put a [zram0] section in /etc/systemd/zram-generator.conf and restart.",
+                    d.install("zram-generator")
+                ),
+            },
             "Or create a swap file: sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile, then add it to /etc/fstab.",
         ],
     )])
@@ -243,7 +253,26 @@ pub(super) fn nvidia_driver(ctx: &Context) -> Outcome {
                 .unwrap_or("no driver")
         ),
         &[
-            "Ubuntu: open Software & Updates > Additional Drivers and pick the recommended NVIDIA driver, or run sudo ubuntu-drivers install.",
+            match distro(ctx) {
+                Distro::Ubuntu => {
+                    "Open Software & Updates > Additional Drivers (Driver Manager on Linux Mint) and pick the recommended NVIDIA driver, or run sudo ubuntu-drivers install."
+                }
+                Distro::Debian => {
+                    "Enable the non-free and non-free-firmware components in /etc/apt/sources.list, then run sudo apt install nvidia-driver."
+                }
+                Distro::Arch => {
+                    "Run sudo pacman -S nvidia-open-dkms (GeForce GTX 16 / RTX 20 series and newer); CachyOS: sudo chwd -a."
+                }
+                Distro::Fedora => {
+                    "Enable the RPM Fusion repositories, then run sudo dnf install akmod-nvidia."
+                }
+                Distro::Suse => {
+                    "Run sudo zypper install-new-recommends (new openSUSE installs include NVIDIA's repository; otherwise add it in YaST > Software Repositories)."
+                }
+                Distro::Other => {
+                    "Install NVIDIA's driver from your distribution's repositories (often called nvidia or nvidia-driver)."
+                }
+            },
             "Restart after installing.",
         ],
     )])

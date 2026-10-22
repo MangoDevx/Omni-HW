@@ -373,8 +373,7 @@ fn system_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
     card(ui, SYS, "System", "", |ui| {
         let mut rows: Vec<(&str, String)> = Vec::new();
         if let Some(o) = &info.os {
-            let os = if o.kernel.is_empty() { "Windows" } else { "OS" };
-            rows.push((os, o.summary()));
+            rows.push(("OS", o.summary()));
             rows.push(("Computer", o.computer_name.clone()));
         }
         if let Some(u) = snap.uptime_secs {

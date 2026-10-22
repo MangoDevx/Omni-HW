@@ -453,7 +453,9 @@ pub fn scan(adapters: &[Adapter], progress: &Progress) -> LanScan {
         });
     }
 
-    // Build the per-subnet host lists.
+    // Build the per-subnet host lists. The pings above filled the neighbour table, so read it
+    // again for the MACs of the devices found.
+    let neighbours = imp::neighbours();
     let mac_of = |ip: Ipv4Addr| {
         neighbours
             .iter()
@@ -473,12 +475,16 @@ pub fn scan(adapters: &[Adapter], progress: &Progress) -> LanScan {
             .filter(|&&ip| same_subnet(ip, n.self_ip, n.prefix))
         {
             let is_self = ip == n.self_ip;
-            let mac = mac_of(ip);
+            let mac = if is_self {
+                n.adapter.mac.clone()
+            } else {
+                mac_of(ip)
+            };
             hosts.push(Host {
                 ip,
                 vendor: vendor_from_mac(&mac).unwrap_or_default().to_string(),
                 mac,
-                hostname: imp::reverse_dns(ip),
+                hostname: imp::reverse_dns(ip, &n.adapter.dns),
                 is_self,
                 is_gateway: gateway == Some(ip),
                 ports: open.get(&ip).cloned().unwrap_or_default(),
@@ -846,9 +852,9 @@ mod imp {
         netprobe::neighbours(&Root::system())
     }
 
-    /// Reverse-DNS name for `ip` (empty if none).
-    pub fn reverse_dns(ip: Ipv4Addr) -> String {
-        netprobe::reverse_dns(ip).unwrap_or_default()
+    /// Reverse-DNS name for `ip` (empty if none), asking the LAN's DNS servers first.
+    pub fn reverse_dns(ip: Ipv4Addr, lan_dns: &[std::net::IpAddr]) -> String {
+        netprobe::reverse_dns(ip, lan_dns).unwrap_or_default()
     }
 
     /// Read-only posture checks on this PC.
