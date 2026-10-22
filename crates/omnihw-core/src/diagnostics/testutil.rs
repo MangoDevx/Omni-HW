@@ -54,6 +54,7 @@ pub(super) fn ctx<'a>(info: &'a SystemInfo, sensors: &'a SensorTable) -> Context
         today: (2026, 10, 12),
         network: None,
         events: None,
+        power: None,
     }
 }
 

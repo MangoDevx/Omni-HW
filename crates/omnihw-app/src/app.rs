@@ -374,8 +374,10 @@ impl OmniApp {
         let sampler = Sampler::start(cc.egui_ctx.clone(), root_at_start);
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
-        // The Health Check's crash checks read the journal too: read it once in the background.
+        // The Health Check's crash and power checks need the journal and the power settings:
+        // read them once in the background.
         sampler.read_event_log();
+        sampler.read_power();
         let updates = crate::update::UpdateChecker::default();
         if settings.check_updates_at_start {
             updates.start(&cc.egui_ctx);

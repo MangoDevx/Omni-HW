@@ -33,6 +33,7 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         today: omnihw_core::civil_from_days(days),
         network: snap.network.as_ref(),
         events: snap.event_log.as_ref().map(|(log, _)| log.as_ref()),
+        power: snap.power.as_ref(),
     };
     diagnostics::run(&ctx)
 }

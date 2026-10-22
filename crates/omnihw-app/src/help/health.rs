@@ -18,6 +18,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             today: (2026, 1, 1),
             network: None,
             events: None,
+            power: None,
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -46,6 +47,30 @@ fn check_description(name: &str) -> &'static str {
         }
         "Overheating" => {
             "CPU thermal throttling or critical-temperature shutdowns the kernel logged."
+        }
+        "Pending restart" => {
+            "Updates (often a new kernel) installed and waiting for a restart, as Ubuntu's /run/reboot-required reports."
+        }
+        "Kernel problems since boot" => {
+            "The kernel's taint flags show a machine check, bad memory page, oops, warning or soft lockup since this boot."
+        }
+        "Power profile" => {
+            "power-profiles-daemon set to Power Saver while on mains power (a warning on desktops)."
+        }
+        "PCIe power saving" => {
+            "The deepest PCIe power saving (ASPM powersupersave) on a desktop, which can cause stutter and wake problems."
+        }
+        "CPU frequency driver" => {
+            "Ryzen 5000 and newer running on acpi-cpufreq instead of amd-pstate (a suggestion)."
+        }
+        "CPU governor" => {
+            "The powersave governor on acpi-cpufreq (CPU stuck at its lowest clock), or the userspace governor."
+        }
+        "Swap space" => {
+            "No swap or zram at all, so apps get killed when memory runs out (a warning with 16 GB of RAM or less)."
+        }
+        "NVIDIA driver" => {
+            "An NVIDIA card running on nouveau or no driver instead of NVIDIA's driver."
         }
         "CPU microcode (13th/14th Gen Intel stability)" => {
             "13th/14th Gen Intel desktop CPUs need microcode 0x12B or newer (a BIOS or intel-microcode update) to avoid degrading over time."

@@ -1,6 +1,7 @@
 //! Distribution, kernel, uptime, memory and CPU details from procfs and sysfs.
 
 use super::{Root, key_value, parse_int};
+use crate::checkup::Swap;
 use crate::platform::{MemoryStatus, OsInfo};
 
 /// Distribution name from os-release, kernel release and host name.
@@ -123,10 +124,83 @@ pub fn nominal_mhz(root: &Root) -> Option<u32> {
     brand_ghz_mhz(cpuinfo_value(&text, "model name")?)
 }
 
+/// The packages waiting for a restart when the system asks for one (Debian/Ubuntu's
+/// `/run/reboot-required`, written by package scripts); `None` when no restart is pending.
+pub fn reboot_required(root: &Root) -> Option<Vec<String>> {
+    if !root.exists("/run/reboot-required") {
+        return None;
+    }
+    let mut pkgs: Vec<String> = root
+        .read("/run/reboot-required.pkgs")
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    pkgs.dedup();
+    Some(pkgs)
+}
+
+/// Active swap from `/proc/swaps` ("Filename Type Size Used Priority", sizes in KiB).
+pub fn parse_swaps(text: &str) -> Swap {
+    let mut s = Swap::default();
+    for l in text.lines().skip(1) {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        let Some(kib) = f.get(2).and_then(|v| v.parse::<u64>().ok()) else {
+            continue;
+        };
+        s.total_bytes += kib * 1024;
+        if f[0].starts_with("/dev/zram") {
+            s.zram_bytes += kib * 1024;
+        }
+    }
+    s
+}
+
+pub fn swap_space(root: &Root) -> Option<Swap> {
+    root.read("/proc/swaps").map(|t| parse_swaps(&t))
+}
+
+/// The kernel's taint flags (`/proc/sys/kernel/tainted`).
+pub fn kernel_taint(root: &Root) -> Option<u64> {
+    root.read_u64("/proc/sys/kernel/tainted")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::linux::Fixture;
+
+    #[test]
+    fn pending_restart_swap_and_taint() {
+        let f = Fixture::new();
+        assert_eq!(reboot_required(&f.root()), None);
+        assert_eq!(swap_space(&f.root()), None);
+        f.file("run/reboot-required", "*** System restart required ***\n")
+            .file(
+                "run/reboot-required.pkgs",
+                "linux-base\nlinux-base\nlibc6\n",
+            )
+            .file(
+                "proc/swaps",
+                "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n\
+                 /swap.img                               file\t\t4194300\t\t0\t\t-2\n\
+                 /dev/zram0                              partition\t8388604\t\t1024\t\t100\n",
+            )
+            .file("proc/sys/kernel/tainted", "4609\n");
+        assert_eq!(
+            reboot_required(&f.root()),
+            Some(vec!["linux-base".to_string(), "libc6".to_string()])
+        );
+        let s = swap_space(&f.root()).unwrap();
+        assert_eq!(s.total_bytes, (4194300 + 8388604) * 1024);
+        assert_eq!(s.zram_bytes, 8388604 * 1024);
+        assert_eq!(kernel_taint(&f.root()), Some(4609));
+        assert_eq!(
+            parse_swaps("Filename Type Size Used Priority\n"),
+            Swap::default()
+        );
+    }
 
     #[test]
     fn os_release() {

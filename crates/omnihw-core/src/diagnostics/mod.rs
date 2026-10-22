@@ -9,6 +9,7 @@ mod cpu;
 mod crashes;
 mod gpu;
 mod helpers;
+mod linux;
 mod memory;
 mod storage;
 mod system;
@@ -52,6 +53,26 @@ const CHECKS: &[(&str, Category, Check)] = &[
         crashes::out_of_memory,
     ),
     ("Overheating", Category::Crashes, crashes::overheating),
+    ("Pending restart", Category::System, linux::pending_restart),
+    (
+        "Kernel problems since boot",
+        Category::System,
+        linux::kernel_taint,
+    ),
+    ("Power profile", Category::System, linux::power_profile),
+    (
+        "PCIe power saving",
+        Category::System,
+        linux::pcie_power_saving,
+    ),
+    (
+        "CPU frequency driver",
+        Category::Cpu,
+        linux::cpu_frequency_driver,
+    ),
+    ("CPU governor", Category::Cpu, linux::cpu_governor),
+    ("Swap space", Category::Memory, linux::swap_space),
+    ("NVIDIA driver", Category::Gpu, linux::nvidia_driver),
     (
         "CPU microcode (13th/14th Gen Intel stability)",
         Category::Cpu,

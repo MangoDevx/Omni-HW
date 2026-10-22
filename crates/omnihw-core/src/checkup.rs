@@ -12,7 +12,30 @@ pub struct Checkup {
     pub nics: Vec<NicLink>,
     /// PCIe links of NVMe drives.
     pub nvme_links: Vec<PcieLink>,
+    /// Packages waiting for a restart, when one is pending.
+    pub reboot_required: Option<Vec<String>>,
+    pub swap: Option<Swap>,
+    /// The kernel's taint flags at startup.
+    pub kernel_taint: Option<u64>,
 }
+
+/// Active swap space.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Swap {
+    pub total_bytes: u64,
+    /// The part of `total_bytes` that is compressed RAM (zram).
+    pub zram_bytes: u64,
+}
+
+/// Taint flags that mean the kernel hit a problem since boot (bit, what happened):
+/// <https://docs.kernel.org/admin-guide/tainted-kernels.html>.
+pub const TAINT_PROBLEMS: [(u32, &str); 5] = [
+    (4, "a machine check (hardware error)"),
+    (5, "a bad memory page"),
+    (7, "a kernel oops"),
+    (9, "a kernel warning"),
+    (14, "a soft lockup"),
+];
 
 /// Boot mode and platform security state.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
