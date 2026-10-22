@@ -1,4 +1,5 @@
-//! User settings, saved as `key=value` lines in `%APPDATA%/OmniHW/settings.ini`.
+//! User settings, saved as `key=value` lines in `settings.ini` in the config folder
+//! (`%APPDATA%/OmniHW` on Windows, `~/.config/omnihw` on Linux).
 //! Unknown keys and malformed values are ignored, so older/newer files stay readable.
 
 use std::path::PathBuf;
@@ -114,14 +115,26 @@ fn parse_bool(v: &str) -> Option<bool> {
     }
 }
 
+/// Omni-HW's config folder: `%APPDATA%/OmniHW` on Windows, `$XDG_CONFIG_HOME/omnihw` (default
+/// `~/.config/omnihw`) elsewhere.
+pub fn config_dir() -> Option<PathBuf> {
+    if cfg!(windows) {
+        return Some(PathBuf::from(std::env::var_os("APPDATA")?).join("OmniHW"));
+    }
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute());
+    let base = match xdg {
+        Some(p) => p,
+        None => PathBuf::from(std::env::var_os("HOME")?).join(".config"),
+    };
+    Some(base.join("omnihw"))
+}
+
 impl Settings {
-    /// `%APPDATA%/OmniHW/settings.ini`.
+    /// `settings.ini` in [`config_dir`].
     pub fn path() -> Option<PathBuf> {
-        Some(
-            PathBuf::from(std::env::var_os("APPDATA")?)
-                .join("OmniHW")
-                .join("settings.ini"),
-        )
+        Some(config_dir()?.join("settings.ini"))
     }
 
     pub fn to_ini(&self) -> String {
@@ -267,7 +280,7 @@ impl Settings {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let path = Self::path().ok_or("APPDATA is not set")?;
+        let path = Self::path().ok_or("No settings folder (APPDATA / HOME is not set)")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }

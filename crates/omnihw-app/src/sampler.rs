@@ -191,13 +191,9 @@ struct Shared {
     service_refresh: AtomicBool,
 }
 
-/// Where alert rules are saved: `%APPDATA%/OmniHW/alerts.tsv`.
+/// Where alert rules are saved: `alerts.tsv` in the config folder.
 fn alerts_path() -> Option<PathBuf> {
-    Some(
-        PathBuf::from(std::env::var_os("APPDATA")?)
-            .join("OmniHW")
-            .join("alerts.tsv"),
-    )
+    Some(crate::settings::config_dir()?.join("alerts.tsv"))
 }
 
 fn load_alert_rules() -> Vec<AlertRule> {
@@ -671,7 +667,7 @@ impl Sampler {
     pub fn set_alert_rules(&self, rules: Vec<AlertRule>) -> Result<(), String> {
         let text = alerts::to_config(&rules);
         self.snapshot().alerts.set_rules(rules);
-        let path = alerts_path().ok_or("APPDATA is not set")?;
+        let path = alerts_path().ok_or("No settings folder (APPDATA / HOME is not set)")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }

@@ -70,7 +70,8 @@ pub fn report_dir() -> PathBuf {
     {
         return d;
     }
-    let docs = std::env::var_os("USERPROFILE").map(|p| PathBuf::from(p).join("Documents"));
+    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let docs = std::env::var_os(home).map(|p| PathBuf::from(p).join("Documents"));
     match docs {
         Some(d) if d.is_dir() => d,
         _ => std::env::temp_dir(),
@@ -99,8 +100,15 @@ pub fn open_in_explorer(path: &std::path::Path, select: bool) {
         }
         let _ = cmd.spawn();
     }
+    // xdg-open has no "select in folder"; open the containing folder instead.
     #[cfg(not(windows))]
-    let _ = (path, select);
+    {
+        let target = match (select, path.parent()) {
+            (true, Some(dir)) => dir,
+            _ => path,
+        };
+        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+    }
 }
 
 #[cfg(test)]
