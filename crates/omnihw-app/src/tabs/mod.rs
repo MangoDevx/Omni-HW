@@ -216,6 +216,11 @@ mod ui_tests {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
 
+    /// Screenshot tests run locally only: GitHub's runners have no GPU to render them with.
+    fn screenshots_enabled() -> bool {
+        std::env::var_os("GITHUB_ACTIONS").is_none()
+    }
+
     fn cpu_section(ui: &mut egui::Ui) {
         super::section(
             ui,
@@ -238,6 +243,9 @@ mod ui_tests {
 
     #[test]
     fn section_snapshot() {
+        if !screenshots_enabled() {
+            return;
+        }
         let mut harness = Harness::builder()
             .with_size(egui::vec2(360.0, 90.0))
             .build_ui(cpu_section);

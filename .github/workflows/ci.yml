@@ -25,12 +25,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # Headers eframe/winit link against on Linux, and Mesa's software Vulkan driver (lavapipe)
-      # that renders the UI screenshot tests without a GPU.
+      # Headers eframe/winit link against on Linux. (UI screenshot tests skip themselves here.)
       - name: Install system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev mesa-vulkan-drivers
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
 
       - name: Install Rust toolchain
         run: |
