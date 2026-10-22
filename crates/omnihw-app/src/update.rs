@@ -1,8 +1,8 @@
 //! Update check: Omni-HW's only network request, made only when the user clicks
 //! "Check for updates" or has turned on the check at start (off by default).
 //!
-//! Sends one HEAD request to `github.com/<repo>/releases/latest` with redirects disabled and
-//! reads the release tag from the `Location` header, so nothing but the URL is sent and no
+//! Sends one HEAD request to `github.com/<repo>/releases/latest` through `curl`, without following
+//! the redirect, and reads the release tag from its target, so nothing but the URL is sent and no
 //! response body is downloaded. Runs on its own short-lived thread, never the UI thread.
 
 use std::sync::{Arc, Mutex};
@@ -92,109 +92,53 @@ fn tag_from_location(location: &str) -> Option<String> {
     (!tag.is_empty()).then(|| tag.to_string())
 }
 
-#[cfg(windows)]
 fn latest_tag() -> Result<String, String> {
-    use windows::Win32::Networking::WinHttp::*;
-    use windows::core::{HSTRING, PCWSTR, w};
-
-    /// Closes a WinHTTP handle on drop.
-    struct Handle(*mut core::ffi::c_void);
-    impl Drop for Handle {
-        fn drop(&mut self) {
-            // SAFETY: a valid handle from WinHttpOpen/Connect/OpenRequest, closed once.
-            unsafe {
-                let _ = WinHttpCloseHandle(self.0);
+    let url = format!("https://github.com/{REPO}/releases/latest");
+    let out = std::process::Command::new("curl")
+        .args([
+            "--silent",
+            "--show-error",
+            "--head",
+            // HTTPS only, no redirects followed: the tag is read from the redirect target.
+            "--proto",
+            "=https",
+            "--max-time",
+            "10",
+            "--output",
+            "/dev/null",
+            "--write-out",
+            "%{http_code} %{redirect_url}",
+            "--user-agent",
+            concat!("Omni-HW/", env!("CARGO_PKG_VERSION")),
+            &url,
+        ])
+        .output()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => {
+                "The update check needs curl; install it with your package manager".to_string()
             }
-        }
+            _ => format!("Could not run curl ({e})"),
+        })?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let err = err.trim().trim_start_matches("curl: ");
+        return Err(format!("Could not reach GitHub ({err})"));
     }
-    fn handle(h: *mut core::ffi::c_void) -> Result<Handle, String> {
-        if h.is_null() {
-            Err(format!(
-                "Could not reach GitHub ({})",
-                windows::core::Error::from_thread()
-            ))
-        } else {
-            Ok(Handle(h))
-        }
-    }
-    let net = |e: windows::core::Error| format!("Could not reach GitHub ({e})");
-
-    let agent = HSTRING::from(format!("Omni-HW/{}", env!("CARGO_PKG_VERSION")));
-    let path = HSTRING::from(format!("/{REPO}/releases/latest"));
-    // SAFETY: all strings are NUL-terminated and outlive the calls; handles are checked
-    // for null and closed by `Handle` in reverse order of creation.
-    unsafe {
-        let session = handle(WinHttpOpen(
-            &agent,
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            PCWSTR::null(),
-            PCWSTR::null(),
-            0,
-        ))?;
-        WinHttpSetTimeouts(session.0, 10_000, 10_000, 10_000, 10_000).map_err(net)?;
-        let connect = handle(WinHttpConnect(
-            session.0,
-            w!("github.com"),
-            INTERNET_DEFAULT_HTTPS_PORT,
-            0,
-        ))?;
-        let request = handle(WinHttpOpenRequest(
-            connect.0,
-            w!("HEAD"),
-            &path,
-            PCWSTR::null(),
-            PCWSTR::null(),
-            std::ptr::null(),
-            WINHTTP_FLAG_SECURE,
-        ))?;
-        // Read the redirect target ourselves instead of following it.
-        WinHttpSetOption(
-            Some(request.0),
-            WINHTTP_OPTION_DISABLE_FEATURE,
-            Some(&WINHTTP_DISABLE_REDIRECTS.to_ne_bytes()),
-        )
-        .map_err(net)?;
-        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(net)?;
-        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(net)?;
-
-        let mut code = 0u32;
-        let mut len = size_of::<u32>() as u32;
-        WinHttpQueryHeaders(
-            request.0,
-            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-            PCWSTR::null(),
-            Some((&raw mut code).cast()),
-            &mut len,
-            std::ptr::null_mut(),
-        )
-        .map_err(net)?;
-        if !(300..400).contains(&code) {
-            return Err(if code == 404 {
-                "No releases found on GitHub".into()
-            } else {
-                format!("GitHub answered with HTTP {code}")
-            });
-        }
-
-        let mut buf = [0u16; 1024];
-        let mut len = size_of_val(&buf) as u32;
-        WinHttpQueryHeaders(
-            request.0,
-            WINHTTP_QUERY_LOCATION,
-            PCWSTR::null(),
-            Some(buf.as_mut_ptr().cast()),
-            &mut len,
-            std::ptr::null_mut(),
-        )
-        .map_err(net)?;
-        let location = String::from_utf16_lossy(&buf[..len as usize / 2]);
-        tag_from_location(&location).ok_or_else(|| "No releases found on GitHub".into())
-    }
+    parse_curl_output(&String::from_utf8_lossy(&out.stdout))
 }
 
-#[cfg(not(windows))]
-fn latest_tag() -> Result<String, String> {
-    Err("Update checks are only supported on Windows".into())
+/// The tag from curl's `--write-out "%{http_code} %{redirect_url}"`.
+fn parse_curl_output(out: &str) -> Result<String, String> {
+    let (code, location) = out.trim().split_once(' ').unwrap_or((out.trim(), ""));
+    let code: u32 = code.parse().unwrap_or(0);
+    if !(300..400).contains(&code) {
+        return Err(if code == 404 {
+            "No releases found on GitHub".into()
+        } else {
+            format!("GitHub answered with HTTP {code}")
+        });
+    }
+    tag_from_location(location).ok_or_else(|| "No releases found on GitHub".into())
 }
 
 #[cfg(test)]
@@ -219,6 +163,23 @@ mod tests {
         );
         assert_eq!(compare("0.1.0", "v0.1.0-beta"), Status::UpToDate);
         assert!(matches!(compare("0.1.0", "nightly"), Status::Failed(_)));
+    }
+
+    #[test]
+    fn curl_output() {
+        assert_eq!(
+            parse_curl_output("302 https://github.com/MangoDevx/Omni-HW/releases/tag/v0.5.0"),
+            Ok("v0.5.0".into())
+        );
+        assert_eq!(
+            parse_curl_output("404 "),
+            Err("No releases found on GitHub".into())
+        );
+        assert_eq!(
+            parse_curl_output("200 "),
+            Err("GitHub answered with HTTP 200".into())
+        );
+        assert!(parse_curl_output("").is_err());
     }
 
     #[test]
