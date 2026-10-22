@@ -969,7 +969,10 @@ mod tests {
         );
         assert_eq!(
             a,
-            vec![("cpu".to_string(), 200, 1000), ("cpu0".to_string(), 100, 500)]
+            vec![
+                ("cpu".to_string(), 200, 1000),
+                ("cpu0".to_string(), 100, 500)
+            ]
         );
         assert_eq!(busy_pct((200, 1000), (300, 1200)), Some(50.0));
         assert_eq!(busy_pct((200, 1000), (200, 1000)), None);

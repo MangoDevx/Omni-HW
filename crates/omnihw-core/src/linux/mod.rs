@@ -154,8 +154,28 @@ pub mod imp {
     use super::Root;
     use crate::win::{Battery, MemoryStatus, OsInfo, PowerPlan};
 
+    /// DRM adapters, with NVML details (and NVML's names and VRAM) on NVIDIA cards.
     pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
-        super::drm::gpu_adapters(&Root::system())
+        let mut gpus = super::drm::gpu_adapters(&Root::system());
+        // (Windows too, only so `gpus` is used mutably there; this never runs on Windows.)
+        #[cfg(any(windows, target_os = "linux"))]
+        {
+            crate::win::nvml::attach_details(&mut gpus);
+            for g in &mut gpus {
+                if let Some(n) = &g.nvml {
+                    if !n.name.is_empty() {
+                        g.name = n.name.clone();
+                    }
+                    if g.dedicated_vram == 0 {
+                        g.dedicated_vram = n.memory_total;
+                    }
+                    if !n.driver_version.is_empty() {
+                        g.driver_version = n.driver_version.clone();
+                    }
+                }
+            }
+        }
+        gpus
     }
     pub fn drives() -> Vec<crate::storage::Drive> {
         super::block::drives(&Root::system())

@@ -15,7 +15,7 @@ pub mod events_viewer;
 pub(crate) mod memtest;
 #[cfg(windows)]
 pub mod network;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub mod nvml;
 #[cfg(windows)]
 pub mod pawnio;

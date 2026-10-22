@@ -782,6 +782,10 @@ fn backends(info: &SystemInfo) -> (Vec<Box<dyn SensorBackend>>, Vec<String>) {
         if !info.drives.is_empty() {
             list.push(Box::new(StorageBackend::new(Root::system(), &info.drives)));
         }
+        // Vendor sensors first so they lead each GPU's group in the sensor list.
+        if let Some(b) = omnihw_core::win::nvml::NvmlBackend::new(&info.gpus) {
+            list.push(Box::new(b));
+        }
         let drm = DrmGpuBackend::new(Root::system(), &info.gpus);
         if !drm.is_empty() {
             list.push(Box::new(drm));

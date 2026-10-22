@@ -1,15 +1,79 @@
-//! NVIDIA NVML, loaded at runtime from `nvml.dll` (ships with the driver).
-//! Absent library or missing entry points simply disable the related data.
+//! NVIDIA NVML, loaded at runtime from `nvml.dll` on Windows or `libnvidia-ml.so.1` on Linux
+//! (both ship with the driver). Absent library or missing entry points simply disable the
+//! related data.
 
 use crate::gpu::{GpuAdapter, NvmlDetails};
 use crate::sensors::{Reading, SensorBackend, Unit};
+use lib::Lib;
 use std::ffi::c_void;
 use std::ptr;
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::System::LibraryLoader::{
-    GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-};
-use windows::core::{Owned, s, w};
+
+#[cfg(windows)]
+mod lib {
+    use std::ffi::{CString, c_void};
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::{
+        GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
+    };
+    use windows::core::{Owned, PCSTR, w};
+
+    /// `nvml.dll`, freed on drop.
+    pub struct Lib(Owned<HMODULE>);
+
+    impl Lib {
+        pub fn open() -> Option<Lib> {
+            // SAFETY: literal names; System32-only search avoids DLL planting, and the
+            // legacy fallback is an absolute path.
+            let lib = unsafe {
+                LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).or_else(|_| {
+                    LoadLibraryExW(
+                        w!(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"),
+                        None,
+                        LOAD_LIBRARY_FLAGS(0),
+                    )
+                })
+            }
+            .ok()?;
+            // SAFETY: the module was just loaded and is freed exactly once, when this drops.
+            Some(Lib(unsafe { Owned::new(lib) }))
+        }
+
+        /// Address of the exported symbol `name`.
+        pub fn sym(&self, name: &str) -> Option<*const c_void> {
+            let name = CString::new(name).ok()?;
+            // SAFETY: valid module and NUL-terminated name.
+            unsafe { GetProcAddress(*self.0, PCSTR(name.as_ptr().cast())) }
+                .map(|p| p as *const c_void)
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod lib {
+    use std::ffi::c_void;
+
+    /// `libnvidia-ml.so.1`, unloaded on drop.
+    pub struct Lib(libloading::Library);
+
+    impl Lib {
+        pub fn open() -> Option<Lib> {
+            // SAFETY: NVML's load-time initializers have no preconditions. The versioned
+            // soname is what the driver installs (the bare .so is a dev-package symlink).
+            unsafe { libloading::Library::new("libnvidia-ml.so.1") }
+                .ok()
+                .map(Lib)
+        }
+
+        /// Address of the exported symbol `name`.
+        pub fn sym(&self, name: &str) -> Option<*const c_void> {
+            // SAFETY: the symbol is only taken as an address here; callers cast it to its
+            // nvml.h signature.
+            unsafe { self.0.get::<*const c_void>(name.as_bytes()) }
+                .ok()
+                .map(|s| *s)
+        }
+    }
+}
 
 // NVML is a third-party driver DLL with no `windows` crate bindings, so its handle type,
 // structs and entry-point signatures below stay hand-written (from nvml.h).
@@ -96,9 +160,9 @@ struct Fns {
 pub struct Nvml {
     f: Fns,
     devices: Vec<Device>,
-    /// Keeps `nvml.dll` loaded while the entry points in `f` are in use; freed on drop,
+    /// Keeps the library loaded while the entry points in `f` are in use; freed on drop,
     /// after `Drop for Nvml` has shut NVML down.
-    _lib: Owned<HMODULE>,
+    _lib: Lib,
 }
 
 // SAFETY: NVML is thread-safe; device handles are plain identifiers and the module handle
@@ -112,27 +176,12 @@ fn c_str(buf: &[u8]) -> String {
 
 impl Nvml {
     pub fn load() -> Option<Nvml> {
-        // SAFETY: literal names; System32-only search avoids DLL planting, and the
-        // legacy fallback is an absolute path.
-        let lib = unsafe {
-            LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).or_else(|_| {
-                LoadLibraryExW(
-                    w!(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"),
-                    None,
-                    LOAD_LIBRARY_FLAGS(0),
-                )
-            })
-        }
-        .ok()?;
-        // SAFETY: the module was just loaded and is freed exactly once, when this drops.
-        let lib = unsafe { Owned::new(lib) };
+        let lib = Lib::open()?;
         macro_rules! opt {
             ($name:literal, $t:ty) => {
-                // SAFETY: valid module and NUL-terminated name; NVML exports these
-                // symbols with the declared C signatures.
-                unsafe { GetProcAddress(*lib, s!($name)) }.map(|p| unsafe {
-                    std::mem::transmute::<unsafe extern "system" fn() -> isize, $t>(p)
-                })
+                lib.sym($name)
+                    // SAFETY: NVML exports these symbols with the declared C signatures.
+                    .map(|p| unsafe { std::mem::transmute::<*const c_void, $t>(p) })
             };
         }
         let (Some(init), Some(shutdown), Some(count), Some(handle)) = (
