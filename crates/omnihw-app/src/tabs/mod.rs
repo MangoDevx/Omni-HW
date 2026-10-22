@@ -62,6 +62,13 @@ pub fn section(ui: &mut Ui, title: &str, rows: &[(&str, String)]) {
     });
 }
 
+/// Placeholder for a page that only works on Windows so far.
+pub fn unsupported(ui: &mut Ui, page: &str) {
+    page_title(ui, page);
+    ui.add_space(8.0);
+    ui.label(format!("The {page} page isn't available on Linux yet."));
+}
+
 /// `s`, or "-" when it's empty.
 pub fn or_dash(s: &str) -> &str {
     if s.is_empty() { "-" } else { s }

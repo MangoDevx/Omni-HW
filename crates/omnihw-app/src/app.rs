@@ -114,6 +114,16 @@ impl Tab {
         }
     }
 
+    /// Whether the page works on this platform. The Windows-only pages (power plans, Windows
+    /// networking, the Event Log) stay in the navigation on Linux but show a notice instead.
+    pub fn supported(self) -> bool {
+        cfg!(windows)
+            || !matches!(
+                self,
+                Tab::Power | Tab::Network | Tab::LanSecurity | Tab::EventLog
+            )
+    }
+
     pub fn from_key(key: &str) -> Option<Tab> {
         Tab::ALL
             .into_iter()
@@ -124,8 +134,18 @@ impl Tab {
 
 const STATUS_DURATION: Duration = Duration::from_secs(6);
 /// Hover text of the "running as administrator" indicator, in every navigation style.
-const ADMIN_HOVER: &str = "Omni-HW has administrator rights: you approved its UAC prompt or \
-                           started it as administrator.";
+const ADMIN_HOVER: &str = if cfg!(windows) {
+    "Omni-HW has administrator rights: you approved its UAC prompt or started it as \
+     administrator."
+} else {
+    "Omni-HW runs as root, so it can read the full SMBIOS tables and the CPU power counters."
+};
+/// The "running as administrator" indicator's text.
+const ADMIN_LABEL: &str = if cfg!(windows) {
+    "Running as administrator"
+} else {
+    "Running as root"
+};
 /// Width of the navigation sidebar.
 const SIDEBAR_WIDTH: f32 = 190.0;
 /// Height of one sidebar row.
@@ -578,12 +598,7 @@ impl OmniApp {
         } else {
             let ink = crate::heat::ink(ui.visuals(), crate::heat::YELLOW);
             ui.add(
-                egui::Label::new(
-                    RichText::new("Running as administrator")
-                        .strong()
-                        .color(ink),
-                )
-                .selectable(false),
+                egui::Label::new(RichText::new(ADMIN_LABEL).strong().color(ink)).selectable(false),
             )
             .on_hover_text(ADMIN_HOVER);
         }
@@ -739,7 +754,7 @@ impl OmniApp {
                                 let ink = crate::heat::ink(ui.visuals(), crate::heat::GREEN);
                                 ui.add(
                                     egui::Label::new(
-                                        RichText::new("● Running as administrator")
+                                        RichText::new(format!("● {ADMIN_LABEL}"))
                                             .small()
                                             .color(ink),
                                     )
@@ -944,6 +959,9 @@ impl eframe::App for OmniApp {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
+                    if !self.tab.supported() {
+                        return tabs::unsupported(ui, self.tab.name());
+                    }
                     if self.tab == Tab::Alerts {
                         // Takes the snapshot lock itself.
                         return tabs::alerts::show(ui, info, &self.sampler, &mut self.alerts_view);
