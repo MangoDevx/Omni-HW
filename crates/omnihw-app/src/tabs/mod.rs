@@ -14,6 +14,7 @@ pub mod mainboard;
 pub mod memory;
 pub mod network;
 pub mod overview;
+pub mod power;
 pub mod recording;
 pub mod sensors;
 pub mod settings;

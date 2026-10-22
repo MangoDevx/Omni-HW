@@ -7,6 +7,7 @@ use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::disktest::{self, DiskTestResult};
 use omnihw_core::eventlog::{EventLog, LogEntry};
 use omnihw_core::lansec::{self, LanScan};
+use omnihw_core::linux::power::{self as power, PowerInfo, Setting};
 use omnihw_core::memtest::{self, MemTestResult};
 use omnihw_core::network::{self as net, NetAction, NetworkInfo, TestLine};
 use omnihw_core::recording::Recording;
@@ -79,6 +80,12 @@ pub struct Snapshot {
     pub event_log_busy: bool,
     /// Reading the root-only data (memory modules, drive health) through pkexec.
     pub root_read: RootRead,
+    /// Power page: the last read (`None` until the page is first opened).
+    pub power: Option<PowerInfo>,
+    /// A power read or change is running.
+    pub power_busy: bool,
+    /// The last change: what was done, or why it failed.
+    pub power_msg: Option<Result<String, String>>,
 }
 
 /// State of the root-only read (see [`Sampler::read_as_root`]).
@@ -464,6 +471,76 @@ impl Sampler {
         );
         if !ok {
             self.snapshot().mem_test.running = false;
+        }
+    }
+
+    /// Read the Power page's settings on a worker thread (when the page is opened and after a
+    /// change).
+    pub fn read_power(&self) {
+        {
+            let mut snap = self.snapshot();
+            if snap.power_busy {
+                return;
+            }
+            snap.power_busy = true;
+        }
+        self.power_job(|| None);
+    }
+
+    /// Switch the power-profiles-daemon profile, then re-read. Only on the user's click.
+    pub fn set_power_profile(&self, name: String) {
+        if !self.start_power_change() {
+            return;
+        }
+        self.power_job(move || {
+            Some(
+                power::set_power_profile(&name)
+                    .map(|()| format!("Power profile set to {name}"))
+                    .map_err(|e| format!("Couldn't set the power profile: {e}")),
+            )
+        });
+    }
+
+    /// Change a kernel power setting through the root helper (asks for the password), then
+    /// re-read. Only on the user's click.
+    pub fn set_power_setting(&self, setting: Setting, value: String) {
+        if !self.start_power_change() {
+            return;
+        }
+        self.power_job(move || {
+            Some(
+                crate::elevate::set_as_root(setting, &value)
+                    .map(|()| format!("{} set to {value}", setting.label()))
+                    .map_err(|e| format!("Couldn't change the {}: {e}", setting.label())),
+            )
+        });
+    }
+
+    fn start_power_change(&self) -> bool {
+        let mut snap = self.snapshot();
+        if snap.power_busy {
+            return false;
+        }
+        snap.power_busy = true;
+        snap.power_msg = None;
+        true
+    }
+
+    /// Run `change` (if any) and re-read the power settings on a worker thread.
+    fn power_job(&self, change: impl FnOnce() -> Option<Result<String, String>> + Send + 'static) {
+        let ok = self.worker(
+            "omnihw-power",
+            move || (change(), power::read()),
+            |(msg, info), snap| {
+                snap.power_busy = false;
+                if msg.is_some() {
+                    snap.power_msg = msg;
+                }
+                snap.power = Some(info);
+            },
+        );
+        if !ok {
+            self.snapshot().power_busy = false;
         }
     }
 

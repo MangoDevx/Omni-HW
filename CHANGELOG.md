@@ -10,6 +10,7 @@ User-visible changes in each Omni-HW for Linux release. The release workflow pub
 - Live sensors: CPU clocks, load, temperature and power (RAPL), motherboard fans and voltages (hwmon), memory, battery, drive temperature and I/O, AMD and Intel GPU sensors, and NVIDIA GPUs through NVML.
 - **Read as root**: one click (with your password, through pkexec) adds memory module details and SATA/NVMe drive health that only root can read.
 - **Event Log** page: kernel crashes and hangs, hardware errors, GPU hangs, disk problems, out-of-memory kills, app crashes and overheating from the system journal, in plain English.
+- **Power** page: power profile (power-profiles-daemon), CPU governor, energy/performance preference, boost and platform profile, plus PCIe and USB power saving, the sleep mode and the devices that can wake the PC. Kernel settings ask for your password.
 - Memory and disk tests warn when the kernel logged hardware errors while they ran.
 - Health Check with Linux checks, including UEFI, Secure Boot and TPM, Resizable BAR on AMD, Intel and NVIDIA GPUs, and wired link speed.
 - Alert notifications on the desktop, launch at sign-in, reports in your Documents folder, and the update check.

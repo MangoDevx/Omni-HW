@@ -1,15 +1,19 @@
 //! Root access. Omni-HW runs as the user; what only root can read (memory modules from the
 //! SMBIOS tables, NVMe and SATA drive health) comes from a short-lived copy of Omni-HW started
 //! through `pkexec` with `--root-read`. It prints the raw data (see
-//! [`omnihw_core::linux::rootdata`]) and exits without opening a window. pkexec asks for the
-//! password through the desktop's polkit agent. Nothing runs as root unless the user asks
-//! (a button, or the "read at start" setting).
+//! [`omnihw_core::linux::rootdata`]) and exits without opening a window. The Power page's
+//! kernel settings are changed the same way with `--root-set <setting> <value>` (see
+//! [`omnihw_core::linux::power::apply`], which only accepts its own settings and the values the
+//! kernel lists). pkexec asks for the password through the desktop's polkit agent. Nothing runs
+//! as root unless the user asks (a button, or the "read at start" setting).
 
+use omnihw_core::linux::power::{self, Setting};
 use omnihw_core::linux::{Root, rootdata};
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
 
 const ROOT_READ_FLAG: &str = "--root-read";
+const ROOT_SET_FLAG: &str = "--root-set";
 
 /// Whether this process runs as root (asked once; it can't change while running).
 pub fn elevated() -> bool {
@@ -25,7 +29,19 @@ pub fn run_helper() -> Option<i32> {
             print!("{}", rootdata::collect(&Root::system()));
             Some(0)
         }
-        [flag, ..] if flag == ROOT_READ_FLAG => Some(2),
+        [flag, key, value] if flag == ROOT_SET_FLAG => {
+            let Some(setting) = Setting::from_key(key) else {
+                return Some(2);
+            };
+            match power::apply(&Root::system(), setting, value) {
+                Ok(()) => Some(0),
+                Err(e) => {
+                    eprintln!("{e}");
+                    Some(1)
+                }
+            }
+        }
+        [flag, ..] if flag == ROOT_READ_FLAG || flag == ROOT_SET_FLAG => Some(2),
         _ => None,
     }
 }
@@ -37,11 +53,25 @@ pub fn read_as_root() -> Result<String, String> {
     if elevated() {
         return Ok(rootdata::collect(&Root::system()));
     }
+    pkexec_helper(&[ROOT_READ_FLAG])
+}
+
+/// Change a Power page kernel setting: directly when already root, else through the pkexec
+/// helper. Blocks, so call it off the UI thread.
+pub fn set_as_root(setting: Setting, value: &str) -> Result<(), String> {
+    if elevated() {
+        return power::apply(&Root::system(), setting, value);
+    }
+    pkexec_helper(&[ROOT_SET_FLAG, setting.key(), value]).map(|_| ())
+}
+
+/// Run this executable through pkexec with `args`; its standard output on success.
+fn pkexec_helper(args: &[&str]) -> Result<String, String> {
     let exe =
         std::env::current_exe().map_err(|e| format!("Can't find Omni-HW's executable: {e}"))?;
     let out = Command::new("pkexec")
         .arg(exe)
-        .arg(ROOT_READ_FLAG)
+        .args(args)
         .stdin(Stdio::null())
         .output()
         .map_err(|e| match e.kind() {
@@ -67,7 +97,13 @@ fn pkexec_result(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<Stri
                 e => format!("Authentication failed ({e})"),
             })
         }
-        Some(c) => Err(format!("The root helper failed (exit code {c})")),
+        Some(c) => {
+            let e = String::from_utf8_lossy(stderr);
+            Err(match e.trim() {
+                "" => format!("The root helper failed (exit code {c})"),
+                e => e.to_string(),
+            })
+        }
         None => Err("The root helper was stopped".into()),
     }
 }

@@ -12,6 +12,7 @@ pub mod net;
 pub mod nvme;
 pub mod os;
 pub mod pciids;
+pub mod power;
 pub mod power_supply;
 pub mod rootdata;
 pub mod sensors;

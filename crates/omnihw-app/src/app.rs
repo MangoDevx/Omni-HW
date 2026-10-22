@@ -17,6 +17,7 @@ pub enum Tab {
     Storage,
     Network,
     LanSecurity,
+    Power,
     Sensors,
     Recording,
     Alerts,
@@ -26,7 +27,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    pub const ALL: [Tab; 15] = [
+    pub const ALL: [Tab; 16] = [
         Tab::Overview,
         Tab::Health,
         Tab::Cpu,
@@ -37,6 +38,7 @@ impl Tab {
         Tab::Storage,
         Tab::Network,
         Tab::LanSecurity,
+        Tab::Power,
         Tab::Sensors,
         Tab::Recording,
         Tab::Alerts,
@@ -56,6 +58,7 @@ impl Tab {
             Tab::Storage => "Storage",
             Tab::Network => "Network",
             Tab::LanSecurity => "LAN Security Report",
+            Tab::Power => "Power",
             Tab::Sensors => "Sensors",
             Tab::Recording => "Recording",
             Tab::Alerts => "Alerts",
@@ -78,6 +81,7 @@ impl Tab {
             Tab::Storage => "🖴",
             Tab::Network => "🌐",
             Tab::LanSecurity => "🛡",
+            Tab::Power => "🔌",
             Tab::Sensors => "📈",
             Tab::Recording => "⏺",
             Tab::Alerts => "🔔",
@@ -100,6 +104,7 @@ impl Tab {
             Tab::Storage => "storage",
             Tab::Network => "network",
             Tab::LanSecurity => "lansecurity",
+            Tab::Power => "power",
             Tab::Sensors => "sensors",
             Tab::Recording => "recording",
             Tab::Alerts => "alerts",
@@ -884,6 +889,10 @@ impl eframe::App for OmniApp {
                 self.sampler.read_event_log();
             }
         }
+        // Read the power settings whenever the Power page is opened (Refresh re-reads).
+        if self.tab == Tab::Power && self.last_tab != Some(Tab::Power) {
+            self.sampler.read_power();
+        }
         self.last_tab = Some(self.tab);
 
         egui::CentralPanel::default_margins().show(ui, |ui| {
@@ -920,6 +929,10 @@ impl eframe::App for OmniApp {
                     if self.tab == Tab::Alerts {
                         // Takes the snapshot lock itself.
                         return tabs::alerts::show(ui, info, &self.sampler, &mut self.alerts_view);
+                    }
+                    if self.tab == Tab::Power {
+                        // Takes the snapshot lock itself, briefly.
+                        return tabs::power::show(ui, &self.sampler);
                     }
                     if self.tab == Tab::EventLog {
                         // Takes the snapshot lock itself, briefly.
@@ -962,6 +975,7 @@ impl eframe::App for OmniApp {
                         | Tab::Recording
                         | Tab::Alerts
                         | Tab::EventLog
+                        | Tab::Power
                         | Tab::Settings
                         | Tab::Health => {
                             unreachable!()
