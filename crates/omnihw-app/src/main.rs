@@ -1,6 +1,3 @@
-// Hide the console window in release builds.
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
 mod app;
 mod autostart;
 mod dismissed;
@@ -14,14 +11,11 @@ mod icon;
 mod nav;
 mod net_ops;
 mod notify;
-mod pawnio;
 mod power_ops;
 mod retro;
 mod sampler;
-mod sensor_service;
 mod settings;
 mod tabs;
-mod tray;
 mod update;
 
 fn main() -> eframe::Result {
@@ -37,13 +31,6 @@ fn main() -> eframe::Result {
     if let Some(code) = dump_ops::run_helper() {
         std::process::exit(code);
     }
-    // The sensor service (started by Windows), and the elevated helper that sets it up.
-    if let Some(code) = sensor_service::run_if_service() {
-        std::process::exit(code);
-    }
-    if let Some(code) = pawnio::run_helper() {
-        std::process::exit(code);
-    }
     if elevate::relaunch_elevated_if_useful() {
         return Ok(());
     }
@@ -51,7 +38,8 @@ fn main() -> eframe::Result {
         .with_title("Omni-HW")
         // Wayland app id / X11 WM_CLASS, matching packaging/linux/omnihw.desktop.
         .with_app_id("omnihw")
-        .with_inner_size(initial_size())
+        // Window managers shrink it to fit smaller screens.
+        .with_inner_size([1080.0, 900.0])
         .with_min_inner_size([440.0, 400.0]);
     if let Some(icon) = icon::window_icon() {
         viewport = viewport.with_icon(icon);
@@ -65,45 +53,4 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| Ok(Box::new(app::OmniApp::new(cc)))),
     )
-}
-
-/// Preferred window size (logical points), shrunk to fit the screen's work area so the
-/// Overview fits without scrolling on typical displays.
-fn initial_size() -> [f32; 2] {
-    const PREFERRED: [f32; 2] = [1080.0, 900.0];
-    match work_area_points() {
-        Some([w, h]) => [PREFERRED[0].min(w * 0.92), PREFERRED[1].min(h * 0.92)],
-        None => PREFERRED,
-    }
-}
-
-#[cfg(windows)]
-fn work_area_points() -> Option<[f32; 2]> {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::HiDpi::GetDpiForSystem;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
-    };
-    let mut r = RECT::default();
-    // SAFETY: valid RECT out pointer.
-    unsafe {
-        SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some((&raw mut r).cast()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-    }
-    .ok()?;
-    // SAFETY: trivially safe.
-    let scale = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0;
-    Some([
-        (r.right - r.left) as f32 / scale,
-        (r.bottom - r.top) as f32 / scale,
-    ])
-}
-
-#[cfg(not(windows))]
-fn work_area_points() -> Option<[f32; 2]> {
-    None
 }

@@ -3,7 +3,6 @@
 use super::{group_box, page_title, temp};
 use crate::autostart;
 use crate::heat::ORANGE;
-use crate::pawnio::{self, Installer, Job};
 use crate::sampler::Sampler;
 use crate::settings::{INTERVALS_MS, NavStyle, PAGES, Settings, Theme, UI_SCALE_RANGE};
 use crate::update::{RELEASES_URL, Status, UpdateChecker};
@@ -20,12 +19,8 @@ fn temp_id(key: &str) -> egui::Id {
     egui::Id::new(("settings", key))
 }
 
-/// The theme option that follows the OS's light/dark setting.
-const SYSTEM_THEME: &str = if cfg!(windows) {
-    "Match Windows"
-} else {
-    "Match system"
-};
+/// The theme option that follows the desktop's light/dark setting.
+const SYSTEM_THEME: &str = "Match system";
 
 /// Transient per-page text kept in egui memory (editing buffer, last error).
 fn temp_string(ui: &Ui, key: &str) -> String {
@@ -61,13 +56,7 @@ fn parse_percent(text: &str) -> Option<f64> {
 }
 
 /// Returns true when a setting changed; the caller saves and applies them.
-pub fn show(
-    ui: &mut Ui,
-    s: &mut Settings,
-    sampler: &Sampler,
-    updates: &UpdateChecker,
-    pawnio: &Installer,
-) -> bool {
+pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateChecker) -> bool {
     let before = s.clone();
     page_title(ui, "Settings");
     ui.weak("Changes apply immediately and are saved automatically.");
@@ -144,20 +133,15 @@ pub fn show(
                     });
                 ui.end_row();
 
-                ui.label(if cfg!(windows) { "Windows startup" } else { "Startup" });
+                ui.label("Startup");
                 ui.vertical(|ui| {
                     let mut launch = s.launch_at_startup;
                     let mut minimized = s.start_minimized;
-                    let a = ui.checkbox(
-                        &mut launch,
-                        if cfg!(windows) {
-                            "Launch Omni-HW when I sign in to Windows"
-                        } else {
-                            "Launch Omni-HW when I sign in"
-                        },
+                    let a = ui.checkbox(&mut launch, "Launch Omni-HW when I sign in");
+                    let b = ui.add_enabled(
+                        launch,
+                        egui::Checkbox::new(&mut minimized, "Start minimized"),
                     );
-                    let b = ui
-                        .add_enabled(launch, egui::Checkbox::new(&mut minimized, "Start minimized"));
                     if a.changed() || b.changed() {
                         match autostart::set(launch, minimized) {
                             Ok(()) => {
@@ -172,33 +156,8 @@ pub fn show(
                     if !err.is_empty() {
                         ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), err);
                     }
-                    if cfg!(windows) {
-                        ui.weak("Launches at sign-in never show the administrator prompt.");
-                    }
                 });
                 ui.end_row();
-
-                // The tray icon and the administrator prompt exist only on Windows so far.
-                if cfg!(windows) {
-                    ui.label("System tray");
-                    ui.vertical(|ui| {
-                        ui.checkbox(&mut s.minimize_to_tray, "Minimize to the system tray");
-                        ui.weak("Minimizing hides Omni-HW next to the clock; click its icon to bring it back. Monitoring and alerts keep running.");
-                    });
-                    ui.end_row();
-
-                    ui.label("Administrator");
-                    ui.vertical(|ui| {
-                        ui.checkbox(
-                            &mut s.ask_admin_at_start,
-                            "Ask for administrator rights at start when SATA drives are present",
-                        );
-                        ui.weak(
-                            "Reading SATA drive health (SMART) needs administrator rights. NVMe drives don't.",
-                        );
-                    });
-                    ui.end_row();
-                }
             });
     });
 
@@ -224,18 +183,15 @@ pub fn show(
                 });
                 ui.end_row();
 
-                // Notifications and the taskbar flash are Windows-only so far.
-                if cfg!(windows) {
-                    ui.label("Alert notifications");
-                    ui.vertical(|ui| {
-                        ui.checkbox(
-                            &mut s.alert_notifications,
-                            "Show Windows notifications for alerts",
-                        );
-                        ui.weak("Fired alerts always appear in the app; this controls the Windows notification and taskbar flash.");
-                    });
-                    ui.end_row();
-                }
+                ui.label("Alert notifications");
+                ui.vertical(|ui| {
+                    ui.checkbox(
+                        &mut s.alert_notifications,
+                        "Show desktop notifications for alerts",
+                    );
+                    ui.weak("Fired alerts always appear in the app; this controls the desktop notification and the taskbar highlight.");
+                });
+                ui.end_row();
             });
     });
 
@@ -326,22 +282,13 @@ pub fn show(
         }
     });
 
-    // PawnIO is a Windows driver.
-    if cfg!(windows) {
-        group(ui, "Extra sensors (PawnIO)", |ui| {
-            pawnio_group(ui, s, sampler, pawnio)
-        });
-    }
-
     group(ui, "Updates", |ui| {
         ui.horizontal_wrapped(|ui| {
             let status = updates.status();
             let checking = status == Status::Checking;
-            // The check uses WinHTTP; Linux only gets the release notes link so far.
-            if cfg!(windows)
-                && ui
-                    .add_enabled(!checking, egui::Button::new("Check for updates"))
-                    .clicked()
+            if ui
+                .add_enabled(!checking, egui::Button::new("Check for updates"))
+                .clicked()
             {
                 updates.start(ui.ctx());
             }
@@ -384,9 +331,6 @@ pub fn show(
                 }
             }
         });
-        if !cfg!(windows) {
-            return;
-        }
         ui.checkbox(
             &mut s.check_updates_at_start,
             "Check for updates when Omni-HW starts",
@@ -405,145 +349,9 @@ pub fn show(
     if changed {
         sampler.set_interval_ms(s.sample_interval_ms);
         sampler.set_alert_notifications(s.alert_notifications);
-        sampler.set_use_pawnio(s.use_pawnio);
         crate::export::set_data_dir(s.data_dir.clone());
     }
     changed
-}
-
-/// The optional extra sensors (PawnIO driver + Omni-HW sensor service): state, setup and removal
-/// buttons, the on/off setting, and the driver's licences.
-fn pawnio_group(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, installer: &Installer) {
-    use omnihw_core::sensor_service::ServiceState;
-    ui.label(
-        "Per-core CPU temperatures, CPU voltage, and motherboard fan speeds, temperatures and voltages, read through PawnIO, a small signed open-source driver used by several hardware monitors. It's optional: everything else works without it.",
-    );
-    ui.weak(
-        "Setup installs PawnIO and a small Omni-HW sensor service, which is the only part that talks to the driver. It only reads sensors (it never changes clocks, voltages or fan speeds) and only hands readings out, so Omni-HW itself doesn't need administrator rights.",
-    );
-    ui.add_space(4.0);
-
-    if let Some(set_up) = installer.take_finished() {
-        // Turn the readings on after a successful setup, and re-check the service either way.
-        if set_up {
-            s.use_pawnio = true;
-        }
-        sampler.refresh_sensor_service();
-    }
-    let job = installer.job();
-    let status = sampler.snapshot().sensor_service.clone();
-    let warn = crate::heat::ink(ui.visuals(), ORANGE);
-    let pawnio = status
-        .as_ref()
-        .and_then(|st| st.pawnio_version.clone())
-        .map(|v| format!("PawnIO {v}"));
-    // (offer setup / repair, offer removal)
-    let (setup_label, can_remove) = match status.as_ref().map(|st| &st.state) {
-        None => {
-            ui.weak("Checking...");
-            (None, false)
-        }
-        Some(ServiceState::NotSetUp) => {
-            match &pawnio {
-                Some(p) => ui.label(format!(
-                    "{p} is installed (by another app), but Omni-HW's sensor service isn't set up."
-                )),
-                None => ui.label("Not set up."),
-            };
-            (Some("Set up extra sensors..."), false)
-        }
-        Some(ServiceState::NotRunning(e)) => {
-            ui.colored_label(warn, format!("The sensor service isn't answering: {e}."));
-            (Some("Repair..."), true)
-        }
-        Some(ServiceState::Outdated { version }) => {
-            ui.colored_label(
-                warn,
-                format!("The sensor service is from Omni-HW {version} and needs updating."),
-            );
-            (Some("Update sensor service..."), true)
-        }
-        Some(ServiceState::Ready {
-            sources, errors, ..
-        }) => {
-            let via = pawnio.unwrap_or_else(|| "PawnIO".into());
-            if !s.use_pawnio {
-                ui.label(format!("Set up ({via}), but turned off below."));
-            } else if sources.is_empty() {
-                ui.colored_label(
-                    warn,
-                    format!(
-                        "The sensor service found no sensors: {}.",
-                        errors.join("; ")
-                    ),
-                );
-            } else {
-                ui.label(format!("Working ({via}): {}.", sources.join(", ")));
-            }
-            (None, true)
-        }
-    };
-
-    ui.horizontal_wrapped(|ui| {
-        let busy = matches!(job, Job::Running(_));
-        if let Some(label) = setup_label
-            && ui
-                .add_enabled(!busy, egui::Button::new(label))
-                .on_hover_text(
-                    "Installs PawnIO (if needed) and the Omni-HW sensor service. Windows asks for administrator permission once.",
-                )
-                .clicked()
-        {
-            installer.start(ui.ctx(), true);
-        }
-        if can_remove
-            && ui
-                .add_enabled(!busy, egui::Button::new("Remove extra sensors..."))
-                .on_hover_text(
-                    "Removes the sensor service, and PawnIO too if Omni-HW installed it. Asks for administrator permission.",
-                )
-                .clicked()
-        {
-            installer.start(ui.ctx(), false);
-        }
-        match &job {
-            Job::Idle => {}
-            Job::Running(what) => {
-                ui.spinner();
-                ui.label(format!("{what}..."));
-            }
-            Job::Done(Ok(msg)) => {
-                ui.label(msg);
-            }
-            Job::Done(Err(e)) => {
-                ui.colored_label(warn, e);
-            }
-        }
-    });
-    ui.checkbox(&mut s.use_pawnio, "Use extra sensors");
-
-    ui.collapsing("Licences and source code", |ui| {
-        ui.horizontal_wrapped(|ui| {
-            ui.hyperlink_to("pawnio.eu", pawnio::SITE_URL);
-            ui.hyperlink_to("Driver source", pawnio::DRIVER_SOURCE_URL);
-            ui.hyperlink_to("Installer source", pawnio::SETUP_SOURCE_URL);
-            ui.hyperlink_to("Modules source", pawnio::MODULES_SOURCE_URL);
-        });
-        ui.weak(
-            "Omni-HW includes the official, unmodified PawnIO installer (GNU GPL 2 with an exception for programs that use its device interface, as Omni-HW does) and PawnIO modules (GNU LGPL 2.1).",
-        );
-        for (title, text) in [
-            ("PawnIO driver licence (GPL 2)", pawnio::DRIVER_LICENSE),
-            ("PawnIO modules licence (LGPL 2.1)", pawnio::MODULES_LICENSE),
-        ] {
-            ui.collapsing(title, |ui| {
-                egui::ScrollArea::vertical()
-                    .id_salt(title)
-                    .max_height(260.0)
-                    .show(ui, |ui| ui.monospace(text));
-            });
-        }
-    });
 }
 
 #[cfg(test)]

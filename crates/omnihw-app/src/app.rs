@@ -134,18 +134,10 @@ impl Tab {
 
 const STATUS_DURATION: Duration = Duration::from_secs(6);
 /// Hover text of the "running as administrator" indicator, in every navigation style.
-const ADMIN_HOVER: &str = if cfg!(windows) {
-    "Omni-HW has administrator rights: you approved its UAC prompt or started it as \
-     administrator."
-} else {
-    "Omni-HW runs as root, so it can read the full SMBIOS tables and the CPU power counters."
-};
+const ADMIN_HOVER: &str =
+    "Omni-HW runs as root, so it can read the full SMBIOS tables and the CPU power counters.";
 /// The "running as administrator" indicator's text.
-const ADMIN_LABEL: &str = if cfg!(windows) {
-    "Running as administrator"
-} else {
-    "Running as root"
-};
+const ADMIN_LABEL: &str = "Running as root";
 /// Width of the navigation sidebar.
 const SIDEBAR_WIDTH: f32 = 190.0;
 /// Height of one sidebar row.
@@ -358,14 +350,11 @@ pub struct OmniApp {
     rec_view: tabs::recording::ViewState,
     alerts_view: tabs::alerts::ViewState,
     event_log_view: tabs::eventlog::ViewState,
-    /// Window handle passed to the sampler for notifications.
-    hwnd_sent: bool,
     /// Started with `--minimized` (launch at startup); minimize on the first frame.
     minimize_on_start: bool,
     /// In-app documentation window.
     help: crate::help::HelpState,
     updates: crate::update::UpdateChecker,
-    pawnio: crate::pawnio::Installer,
     /// Health Check results, shared by the Health tab and the Overview banner.
     health: tabs::health::HealthCache,
     /// Width of the Tabs bar's actions last frame, to right-align them.
@@ -384,9 +373,7 @@ impl OmniApp {
         crate::settings::apply_visuals(&cc.egui_ctx, &settings);
         crate::export::set_data_dir(settings.data_dir.clone());
         crate::dismissed::load(&settings.dismissed);
-        crate::tray::start(cc.egui_ctx.clone());
-        crate::tray::set_icon_visible(settings.minimize_to_tray);
-        let sampler = Sampler::start(cc.egui_ctx.clone(), settings.use_pawnio);
+        let sampler = Sampler::start(cc.egui_ctx.clone());
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
         let updates = crate::update::UpdateChecker::default();
@@ -404,11 +391,9 @@ impl OmniApp {
             rec_view: Default::default(),
             alerts_view: Default::default(),
             event_log_view: Default::default(),
-            hwnd_sent: false,
             minimize_on_start: crate::autostart::launch_flags().1,
             help: Default::default(),
             updates,
-            pawnio: Default::default(),
             health: Default::default(),
             actions_width: 0.0,
             settings_unsaved: false,
@@ -836,8 +821,6 @@ impl OmniApp {
 
 impl Drop for OmniApp {
     fn drop(&mut self) {
-        // Remove the tray icon before the process exits.
-        crate::tray::shutdown();
         if self.settings_unsaved {
             let _ = self.settings.save();
         }
@@ -845,25 +828,7 @@ impl Drop for OmniApp {
 }
 
 impl eframe::App for OmniApp {
-    /// Runs even while the window is minimized or hidden (unlike `ui`), so minimize-to-tray works.
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        crate::tray::set_icon_visible(self.settings.minimize_to_tray);
-        if self.settings.minimize_to_tray && ctx.input(|i| i.viewport().minimized) == Some(true) {
-            crate::tray::hide_main_window();
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        if !self.hwnd_sent {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(h) = frame.window_handle()
-                && let RawWindowHandle::Win32(w) = h.as_raw()
-            {
-                self.sampler.set_window_handle(w.hwnd.get());
-                crate::tray::set_main_window(w.hwnd.get());
-            }
-            self.hwnd_sent = true;
-        }
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if std::mem::take(&mut self.minimize_on_start) {
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
@@ -980,7 +945,6 @@ impl eframe::App for OmniApp {
                             &mut self.settings,
                             &self.sampler,
                             &self.updates,
-                            &self.pawnio,
                         ) {
                             crate::settings::apply_visuals(ui.ctx(), &self.settings);
                             self.settings_unsaved = true;

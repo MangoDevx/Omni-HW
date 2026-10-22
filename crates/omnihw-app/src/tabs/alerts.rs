@@ -102,7 +102,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, sampler: &Sampler, state: &mut ViewS
     });
 
     super::page_title(ui, "Alerts");
-    ui.weak("Get a Windows notification when a sensor stays above or below a limit. Alerts are checked on every sample while Omni-HW is running, on any tab.");
+    ui.weak("Get a desktop notification when a sensor stays above or below a limit. Alerts are checked on every sample while Omni-HW is running, on any tab.");
     ui.add_space(6.0);
     let mut test = false;
     ui.horizontal_wrapped(|ui| {
@@ -124,7 +124,7 @@ pub fn show(ui: &mut Ui, info: &SystemInfo, sampler: &Sampler, state: &mut ViewS
         }
         test = ui
             .button("Test notification")
-            .on_hover_text("Shows a sample Windows notification")
+            .on_hover_text("Shows a sample desktop notification")
             .clicked();
     });
     ui.add_space(8.0);

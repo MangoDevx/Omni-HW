@@ -1,12 +1,12 @@
 //! User settings, saved as `key=value` lines in `settings.ini` in the config folder
-//! (`%APPDATA%/OmniHW` on Windows, `~/.config/omnihw` on Linux).
+//! (`~/.config/omnihw`).
 //! Unknown keys and malformed values are ignored, so older/newer files stay readable.
 
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Theme {
-    /// Follow Windows' light/dark setting.
+    /// Follow the desktop's light/dark setting.
     System,
     Dark,
     Light,
@@ -56,13 +56,12 @@ pub struct Settings {
     pub start_page: String,
     pub sample_interval_ms: u64,
     pub launch_at_startup: bool,
-    /// Start minimized when launched at Windows startup.
+    /// Start minimized when launched at login.
     pub start_minimized: bool,
-    /// Minimizing hides the window to the notification area (system tray) instead of the taskbar.
-    pub minimize_to_tray: bool,
     /// Ask for administrator rights at start (SATA drive health).
     pub ask_admin_at_start: bool,
-    /// Windows notifications and taskbar flash for fired alerts (they always show in-app).
+    /// Desktop notifications and an attention request for fired alerts (they always show
+    /// in-app).
     pub alert_notifications: bool,
     /// Where recordings and reports are saved; `None` = Documents.
     pub data_dir: Option<PathBuf>,
@@ -72,9 +71,6 @@ pub struct Settings {
     pub remember_dismissed: bool,
     /// Show the Gaming category and gaming suggestions in Health Check and on Overview.
     pub show_gaming: bool,
-    /// Show the extra sensors (per-core temperatures, fans, voltages) from the PawnIO sensor
-    /// service. Off until the user sets the service up (which turns it on).
-    pub use_pawnio: bool,
     /// Keys of dismissed Health Check findings (see `dismissed::key`). Only saved to disk when
     /// `remember_dismissed` is on.
     pub dismissed: Vec<String>,
@@ -90,14 +86,12 @@ impl Default for Settings {
             sample_interval_ms: 1000,
             launch_at_startup: false,
             start_minimized: false,
-            minimize_to_tray: true,
             ask_admin_at_start: true,
             alert_notifications: true,
             data_dir: None,
             check_updates_at_start: false,
             remember_dismissed: true,
             show_gaming: true,
-            use_pawnio: false,
             dismissed: Vec::new(),
         }
     }
@@ -115,12 +109,8 @@ fn parse_bool(v: &str) -> Option<bool> {
     }
 }
 
-/// Omni-HW's config folder: `%APPDATA%/OmniHW` on Windows, `$XDG_CONFIG_HOME/omnihw` (default
-/// `~/.config/omnihw`) elsewhere.
+/// Omni-HW's config folder: `$XDG_CONFIG_HOME/omnihw` (default `~/.config/omnihw`).
 pub fn config_dir() -> Option<PathBuf> {
-    if cfg!(windows) {
-        return Some(PathBuf::from(std::env::var_os("APPDATA")?).join("OmniHW"));
-    }
     let xdg = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute());
@@ -172,27 +162,23 @@ impl Settings {
              sample_interval_ms={}\n\
              launch_at_startup={}\n\
              start_minimized={}\n\
-             minimize_to_tray={}\n\
              ask_admin_at_start={}\n\
              alert_notifications={}\n\
              data_dir={data_dir}\n\
              check_updates_at_start={}\n\
              remember_dismissed={}\n\
              show_gaming={}\n\
-             use_pawnio={}\n\
              {dismissed}",
             self.ui_scale,
             self.start_page,
             self.sample_interval_ms,
             bool_str(self.launch_at_startup),
             bool_str(self.start_minimized),
-            bool_str(self.minimize_to_tray),
             bool_str(self.ask_admin_at_start),
             bool_str(self.alert_notifications),
             bool_str(self.check_updates_at_start),
             bool_str(self.remember_dismissed),
             bool_str(self.show_gaming),
-            bool_str(self.use_pawnio),
         )
     }
 
@@ -249,9 +235,6 @@ impl Settings {
                 "ask_admin_at_start" => {
                     s.ask_admin_at_start = parse_bool(v).unwrap_or(s.ask_admin_at_start)
                 }
-                "minimize_to_tray" => {
-                    s.minimize_to_tray = parse_bool(v).unwrap_or(s.minimize_to_tray)
-                }
                 "alert_notifications" => {
                     s.alert_notifications = parse_bool(v).unwrap_or(s.alert_notifications)
                 }
@@ -263,7 +246,6 @@ impl Settings {
                     s.remember_dismissed = parse_bool(v).unwrap_or(s.remember_dismissed)
                 }
                 "show_gaming" => s.show_gaming = parse_bool(v).unwrap_or(s.show_gaming),
-                "use_pawnio" => s.use_pawnio = parse_bool(v).unwrap_or(s.use_pawnio),
                 "dismissed" if !v.is_empty() => s.dismissed.push(v.to_string()),
                 _ => {}
             }
@@ -280,7 +262,7 @@ impl Settings {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let path = Self::path().ok_or("No settings folder (APPDATA / HOME is not set)")?;
+        let path = Self::path().ok_or("No settings folder (HOME is not set)")?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
@@ -326,15 +308,13 @@ mod tests {
             sample_interval_ms: 500,
             launch_at_startup: true,
             start_minimized: true,
-            minimize_to_tray: false,
             ask_admin_at_start: false,
             alert_notifications: false,
-            data_dir: Some(PathBuf::from(r"D:\Omni HW\data")),
+            data_dir: Some(PathBuf::from("/home/user/Omni HW/data")),
             check_updates_at_start: true,
             remember_dismissed: true,
             show_gaming: false,
-            use_pawnio: true,
-            dismissed: vec!["Uptime|Info|Windows has been running for  days".into()],
+            dismissed: vec!["Uptime|Info|The system has been running for  days".into()],
         };
         assert_eq!(Settings::from_ini(&s.to_ini()), s);
         for theme in [Theme::System, Theme::Dark, Theme::Light, Theme::Retro] {
