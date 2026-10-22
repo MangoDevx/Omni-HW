@@ -52,6 +52,8 @@ pub struct Snapshot {
     /// Backend errors from the most recent poll.
     pub errors: Vec<String>,
     pub samples: u64,
+    /// Seconds since boot, read with each sample.
+    pub uptime_secs: Option<u64>,
     /// Active recording, appended to on every sample.
     pub recording: Option<Recorder>,
     /// The most recently stopped recording, kept for viewing.
@@ -170,6 +172,22 @@ struct Shared {
     network_reading: AtomicBool,
 }
 
+impl Shared {
+    fn new(snapshot: Snapshot) -> Shared {
+        Shared {
+            info: RwLock::new(None),
+            snapshot: Mutex::new(snapshot),
+            interval_ms: AtomicU64::new(DEFAULT_INTERVAL_MS),
+            reset: AtomicBool::new(false),
+            test_notification: AtomicBool::new(false),
+            alert_notifications: AtomicBool::new(true),
+            network_page: AtomicBool::new(false),
+            network_refresh: AtomicBool::new(false),
+            network_reading: AtomicBool::new(false),
+        }
+    }
+}
+
 /// Where alert rules are saved: `alerts.tsv` in the config folder.
 fn alerts_path() -> Option<PathBuf> {
     Some(crate::settings::config_dir()?.join("alerts.tsv"))
@@ -192,20 +210,10 @@ pub struct Sampler {
 impl Sampler {
     /// `root_at_start`: read the root-only data through pkexec once the info is gathered.
     pub fn start(ctx: egui::Context, root_at_start: bool) -> Self {
-        let shared = Arc::new(Shared {
-            info: RwLock::new(None),
-            snapshot: Mutex::new(Snapshot {
-                alerts: Alerts::new(load_alert_rules()),
-                ..Default::default()
-            }),
-            interval_ms: AtomicU64::new(DEFAULT_INTERVAL_MS),
-            reset: AtomicBool::new(false),
-            test_notification: AtomicBool::new(false),
-            alert_notifications: AtomicBool::new(true),
-            network_page: AtomicBool::new(false),
-            network_refresh: AtomicBool::new(false),
-            network_reading: AtomicBool::new(false),
-        });
+        let shared = Arc::new(Shared::new(Snapshot {
+            alerts: Alerts::new(load_alert_rules()),
+            ..Default::default()
+        }));
         let (stop, stop_rx) = mpsc::channel::<()>();
         let s = shared.clone();
         let c = ctx.clone();
@@ -217,6 +225,19 @@ impl Sampler {
             shared,
             ctx,
             _stop: stop,
+        }
+    }
+
+    /// A sampler for page tests: serves `info` and `snapshot` as they are, with no sampling
+    /// thread.
+    #[cfg(test)]
+    pub fn fake(info: SystemInfo, snapshot: Snapshot) -> Self {
+        let shared = Arc::new(Shared::new(snapshot));
+        *shared.info.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(info));
+        Sampler {
+            shared,
+            ctx: egui::Context::default(),
+            _stop: mpsc::channel().0,
         }
     }
 
@@ -789,6 +810,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_a
         }
         snap.errors = errors;
         snap.samples += 1;
+        snap.uptime_secs = omnihw_core::platform::uptime_secs();
         let s = &mut *snap;
         if let Some(r) = &mut s.recording {
             let i = r.rec.push(r.started.elapsed().as_secs_f64(), &s.table);

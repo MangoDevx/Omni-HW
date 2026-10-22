@@ -26,6 +26,8 @@ pub mod sensors;
 pub mod smart;
 pub mod smbios;
 pub mod storage;
+#[cfg(any(test, feature = "testkit"))]
+pub mod testkit;
 pub mod topology;
 
 use codename::Codename;

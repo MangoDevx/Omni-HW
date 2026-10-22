@@ -6,6 +6,10 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# Fake machines (`testkit` module) for the app's page tests.
+testkit = []
+
 [dependencies]
 # Hex encoding of the raw data the root helper prints (see linux::rootdata).
 hex = "0.4"
