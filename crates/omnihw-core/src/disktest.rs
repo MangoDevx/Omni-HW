@@ -1,10 +1,10 @@
 //! Quick disk speed self-test: sequential and 4K random read/write through a temporary file,
 //! compared with what the drive and its link should deliver. This module picks the target,
-//! sizes the test and judges the result; the I/O itself isn't implemented on Linux yet.
+//! sizes the test and judges the result; the I/O runs in [`crate::linux::diskio`].
 
 use crate::checkup::PcieLink;
 use crate::storage::{BusType, Drive, Volume, sata_gen_speed};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::time::Duration;
 
@@ -114,7 +114,6 @@ impl Progress {
     }
 
     /// Fraction of the current phase done, 0..=1.
-    #[allow(dead_code)] // Used by the disk test, which isn't ported to Linux yet.
     pub(crate) fn set(&self, frac: f64) {
         self.done
             .store((frac.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);
@@ -224,46 +223,65 @@ pub fn expectation(drive: &Drive, nvme_link: Option<&PcieLink>) -> Option<DiskEx
     }
 }
 
-/// `%SystemDrive%`, e.g. "C:".
-fn system_drive() -> String {
-    std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into())
+/// File systems the test writes to (all support direct I/O).
+const FILE_SYSTEMS: [&str; 9] = [
+    "ext4", "ext3", "xfs", "btrfs", "f2fs", "jfs", "exfat", "vfat", "ntfs3",
+];
+
+/// The mount point holding `path`: the longest mount that is `path` or one of its parents.
+fn mount_of<'a>(path: &Path, mounts: impl Iterator<Item = &'a str>) -> Option<&'a str> {
+    mounts
+        .filter(|m| path.starts_with(m))
+        .max_by_key(|m| m.len())
 }
 
-fn pick_volume_on<'a>(drive: &'a Drive, system: &str) -> Option<&'a Volume> {
-    const FILE_SYSTEMS: [&str; 4] = ["NTFS", "ReFS", "exFAT", "FAT32"];
-    let need = needed_free_bytes(drive);
-    let mut ok = drive.volumes.iter().filter(|v| {
-        !v.mount.is_empty()
-            && FILE_SYSTEMS
-                .iter()
-                .any(|f| f.eq_ignore_ascii_case(v.file_system.trim()))
-            && v.free_bytes >= need
-    });
-    let first = ok.clone().next();
-    ok.find(|v| v.mount.eq_ignore_ascii_case(system)).or(first)
-}
-
-/// A writable volume on `drive` for the test file: mounted, NTFS/ReFS/exFAT/FAT32, with room
-/// for the file plus 2 GiB. Prefers the Windows system volume.
-pub fn pick_volume(drive: &Drive) -> Option<&Volume> {
-    pick_volume_on(drive, &system_drive())
-}
-
-/// Where the test file goes on `volume`: the temp folder on the system volume (writable without
-/// administrator rights), else the volume's root.
-fn target_path(volume: &Volume) -> PathBuf {
-    let name = format!("omnihw-disktest-{}.tmp", std::process::id());
-    let mount = volume.mount.trim_end_matches('\\');
-    let temp = std::env::temp_dir();
-    let on_volume = temp
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .starts_with(&mount.to_ascii_lowercase());
-    if mount.eq_ignore_ascii_case(&system_drive()) && on_volume {
-        temp.join(name)
-    } else {
-        PathBuf::from(format!(r"{mount}\{name}"))
+/// A folder on `volume` the test file can go in: the home folder when it's on this volume,
+/// else the mount point itself if it's writable.
+fn target_dir(volume: &Volume) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let mount = Path::new(&volume.mount);
+    let dev = std::fs::metadata(mount).ok()?.dev();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+        && std::fs::metadata(&home).is_ok_and(|m| m.dev() == dev)
+    {
+        return Some(home);
     }
+    rustix::fs::access(mount, rustix::fs::Access::WRITE_OK)
+        .is_ok()
+        .then(|| mount.to_path_buf())
+}
+
+/// A volume on `drive` for the test file: mounted, a supported file system, room for the file
+/// plus 2 GiB, and `writable`. Prefers the volume holding `home`.
+fn pick_volume_on<'a>(
+    drive: &'a Drive,
+    home: Option<&Path>,
+    writable: impl Fn(&Volume) -> bool,
+) -> Option<&'a Volume> {
+    let need = needed_free_bytes(drive);
+    let ok: Vec<&Volume> = drive
+        .volumes
+        .iter()
+        .filter(|v| {
+            !v.mount.is_empty()
+                && FILE_SYSTEMS
+                    .iter()
+                    .any(|f| f.eq_ignore_ascii_case(v.file_system.trim()))
+                && v.free_bytes >= need
+                && writable(v)
+        })
+        .collect();
+    let home_mount = home.and_then(|h| mount_of(h, ok.iter().map(|v| v.mount.as_str())));
+    ok.iter()
+        .find(|v| Some(v.mount.as_str()) == home_mount)
+        .or(ok.first())
+        .copied()
+}
+
+/// A writable volume on `drive` for the test file. Prefers the one holding the home folder.
+pub fn pick_volume(drive: &Drive) -> Option<&Volume> {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    pick_volume_on(drive, home.as_deref(), |v| target_dir(v).is_some())
 }
 
 /// Run the test on `drive`, reporting progress as it goes. Blocks for roughly 10-30 seconds;
@@ -280,8 +298,10 @@ pub fn run(
             needed_free_bytes(drive) as f64 / 1e9
         ));
     };
-    let path = target_path(volume);
-    let speeds = measure(
+    let dir =
+        target_dir(volume).ok_or_else(|| format!("Can't write a test file to {}", volume.mount))?;
+    let path = dir.join(format!(".omnihw-disktest-{}.tmp", std::process::id()));
+    let speeds = crate::linux::diskio::measure(
         &path,
         &volume.mount,
         bytes,
@@ -310,17 +330,6 @@ pub(crate) struct Speeds {
     pub rnd_read_q32: f64,
     pub rnd_read: f64,
     pub rnd_write: f64,
-}
-
-fn measure(
-    _: &std::path::Path,
-    _: &str,
-    _: u64,
-    _: u64,
-    _: Duration,
-    _: &Progress,
-) -> Result<Speeds, String> {
-    Err("The disk speed test isn't available on Linux yet".into())
 }
 
 #[cfg(test)]
@@ -443,27 +452,39 @@ mod tests {
 
     #[test]
     fn volume_choice() {
+        let all = |_: &Volume| true;
+        let home = Some(Path::new("/home/sam"));
         let mut d = drive(BusType::Nvme, Some(true));
-        d.volumes = vec![vol("D:", "NTFS", 100), vol("C:", "NTFS", 100)];
-        assert_eq!(pick_volume_on(&d, "C:").unwrap().mount, "C:");
-        assert_eq!(pick_volume_on(&d, "E:").unwrap().mount, "D:");
-        // System volume too full: fall back to another one.
-        d.volumes[1].free_bytes = 2 * GIB;
-        assert_eq!(pick_volume_on(&d, "C:").unwrap().mount, "D:");
+        d.volumes = vec![vol("/mnt/data", "ext4", 100), vol("/", "ext4", 100)];
+        assert_eq!(pick_volume_on(&d, home, all).unwrap().mount, "/");
+        d.volumes.push(vol("/home", "btrfs", 100));
+        assert_eq!(pick_volume_on(&d, home, all).unwrap().mount, "/home");
+        assert_eq!(pick_volume_on(&d, None, all).unwrap().mount, "/mnt/data");
+        // A read-only volume is skipped.
+        assert_eq!(
+            pick_volume_on(&d, home, |v| v.mount != "/home")
+                .unwrap()
+                .mount,
+            "/"
+        );
         // Needs file (1 GiB) + 2 GiB free.
-        d.volumes = vec![vol("D:", "NTFS", 3)];
-        assert!(pick_volume_on(&d, "C:").is_some());
+        d.volumes = vec![vol("/mnt/data", "xfs", 3)];
+        assert!(pick_volume_on(&d, home, all).is_some());
         d.volumes[0].free_bytes = 3 * GIB - 1;
-        assert!(pick_volume_on(&d, "C:").is_none());
+        assert!(pick_volume_on(&d, home, all).is_none());
         // Unsupported file systems and unmounted volumes are skipped.
         d.volumes = vec![
-            vol("E:", "RAW", 100),
-            vol("", "NTFS", 100),
-            vol("F:", "exfat", 100),
+            vol("/boot/efi", "squashfs", 100),
+            vol("", "ext4", 100),
+            vol("/media/usb", "exfat", 100),
         ];
-        assert_eq!(pick_volume_on(&d, "C:").unwrap().mount, "F:");
+        assert_eq!(pick_volume_on(&d, home, all).unwrap().mount, "/media/usb");
         d.volumes.pop();
-        assert!(pick_volume_on(&d, "C:").is_none());
+        assert!(pick_volume_on(&d, home, all).is_none());
+        assert_eq!(
+            mount_of(Path::new("/home/sam"), ["/", "/home", "/ho"].into_iter()),
+            Some("/home")
+        );
     }
 
     #[test]

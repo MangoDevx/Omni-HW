@@ -5,6 +5,7 @@
 
 pub mod ata;
 pub mod block;
+pub mod diskio;
 pub mod dmi;
 pub mod drm;
 pub mod firmware;
