@@ -1,7 +1,8 @@
 //! Omni-HW core: hardware detection and data model.
 //!
 //! Parsers (`cpuid`, `codename`, `topology`, `smbios`) are platform-agnostic;
-//! Windows calls live in [`win`] with non-Windows stubs.
+//! Windows calls live in [`win`], Linux readers in [`linux`] (exposed through `win`'s API),
+//! with stubs for other platforms.
 
 pub mod alerts;
 pub mod battery;
@@ -16,6 +17,7 @@ pub mod eventlog;
 pub mod gpu;
 pub mod lansec;
 mod le;
+pub mod linux;
 pub mod lowlevel;
 pub mod memtest;
 pub mod minidump;
@@ -84,6 +86,12 @@ impl SystemInfo {
         let cpu = cpuid::decode(&cpuid::NativeCpuid);
         let codename = codename::lookup(cpu.vendor, cpu.family, cpu.model);
 
+        #[cfg(target_os = "linux")]
+        let topology = linux::topology::topology(&linux::Root::system()).or_else(|| {
+            warnings.push("Topology: /sys/devices/system/cpu unreadable".into());
+            None
+        });
+        #[cfg(not(target_os = "linux"))]
         let topology = match win::topology_buffer().map(|b| Topology::parse(&b)) {
             Some(Ok(t)) => Some(t),
             Some(Err(e)) => {
@@ -102,6 +110,10 @@ impl SystemInfo {
                 warnings.push(format!("SMBIOS: {e}"));
                 None
             }
+            // Without root, Linux only offers the BIOS/board names in /sys/class/dmi/id.
+            #[cfg(target_os = "linux")]
+            None => linux::dmi::from_dmi_id(&linux::Root::system()),
+            #[cfg(not(target_os = "linux"))]
             None => {
                 warnings.push("SMBIOS: firmware table unavailable".into());
                 None

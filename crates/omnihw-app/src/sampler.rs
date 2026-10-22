@@ -757,7 +757,37 @@ fn backends(info: &SystemInfo) -> (Vec<Box<dyn SensorBackend>>, Vec<String>) {
             }
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        use omnihw_core::linux::Root;
+        use omnihw_core::linux::sensors::{
+            BatteryBackend, CpuBackend, DrmGpuBackend, HwmonBackend, MemoryBackend, StorageBackend,
+        };
+        list.push(Box::new(CpuBackend::new(
+            Root::system(),
+            info.topology.as_ref(),
+        )));
+        let hwmon = HwmonBackend::new(Root::system(), info.topology.as_ref());
+        if !hwmon.is_empty() {
+            list.push(Box::new(hwmon));
+        }
+        list.push(Box::new(MemoryBackend {
+            root: Root::system(),
+        }));
+        if info.battery.is_some() {
+            list.push(Box::new(BatteryBackend {
+                root: Root::system(),
+            }));
+        }
+        if !info.drives.is_empty() {
+            list.push(Box::new(StorageBackend::new(Root::system(), &info.drives)));
+        }
+        let drm = DrmGpuBackend::new(Root::system(), &info.gpus);
+        if !drm.is_empty() {
+            list.push(Box::new(drm));
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     let _ = info;
     (list, errors)
 }

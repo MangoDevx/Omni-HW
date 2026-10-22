@@ -93,6 +93,7 @@ pub fn os_info() -> Option<OsInfo> {
         build,
         ubr: registry::dword(Hive::LocalMachine, KEY, "UBR").unwrap_or(0),
         computer_name,
+        kernel: String::new(),
     })
 }
 

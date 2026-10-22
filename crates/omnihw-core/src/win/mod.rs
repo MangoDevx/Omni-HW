@@ -1,5 +1,6 @@
-//! Windows data sources. Every function has a non-Windows stub returning `None`
-//! so the crate (and its parser tests) build anywhere.
+//! Platform data sources behind one API: Windows calls here, Linux readers in
+//! [`crate::linux`], and stubs returning `None` elsewhere so the crate (and its parser tests)
+//! build anywhere.
 
 #[cfg(windows)]
 mod device;
@@ -46,11 +47,17 @@ pub struct OsInfo {
     /// Update build revision.
     pub ubr: u32,
     pub computer_name: String,
+    /// Kernel release on Linux, e.g. "6.8.0-45-generic"; empty on Windows.
+    pub kernel: String,
 }
 
 impl OsInfo {
-    /// "Windows 11 Pro 24H2 (build 26100.2033)"
+    /// "Windows 11 Pro 24H2 (build 26100.2033)", or on Linux
+    /// "Ubuntu 24.04.1 LTS (kernel 6.8.0-45-generic)".
     pub fn summary(&self) -> String {
+        if !self.kernel.is_empty() {
+            return format!("{} (kernel {})", self.product, self.kernel);
+        }
         let mut s = self.product.clone();
         if !self.display_version.is_empty() {
             s.push(' ');
@@ -107,7 +114,10 @@ pub struct MemoryStatus {
 #[cfg(windows)]
 use system as imp;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use crate::linux::imp;
+
+#[cfg(not(any(windows, target_os = "linux")))]
 mod imp {
     use super::MemoryStatus;
     pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
@@ -172,10 +182,12 @@ pub use imp::{battery, microcode_revision, os_info, power_plan, uptime_secs};
 mod battery_wear;
 /// Data collectors for the setup checks of the Health Check.
 pub mod checkup;
+#[cfg(target_os = "linux")]
+pub use crate::linux::imp::battery_health;
 /// Battery design vs full-charge capacity (None on desktops).
 #[cfg(windows)]
 pub use battery_wear::battery_health;
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn battery_health() -> Option<crate::battery::BatteryHealth> {
     None
 }

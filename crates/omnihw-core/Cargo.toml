@@ -46,3 +46,11 @@ windows = { workspace = true, features = [
     "Win32_System_WindowsProgramming",
     "Win32_System_Wmi",
 ] }
+
+# statvfs for volume free space.
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[dev-dependencies]
+# Fake sysfs/procfs trees for the Linux readers' tests.
+tempfile = "3"
