@@ -18,3 +18,8 @@ egui = "0.36"
 notify-rust = "4"
 # The "Browse…" folder chooser, through the XDG desktop portal.
 rfd = "0.15"
+
+[dev-dependencies]
+# Headless UI tests: draw pages without a window, query them through the accessibility tree,
+# and compare screenshots (rendered with wgpu) against the PNGs in tests/snapshots.
+egui_kittest = { version = "0.36", features = ["snapshot", "wgpu"] }

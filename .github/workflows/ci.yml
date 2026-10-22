@@ -25,11 +25,12 @@ jobs:
         with:
           persist-credentials: false
 
-      # Headers eframe/winit link against on Linux.
+      # Headers eframe/winit link against on Linux, and Mesa's software Vulkan driver (lavapipe)
+      # that renders the UI screenshot tests without a GPU.
       - name: Install system libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev mesa-vulkan-drivers
 
       - name: Install Rust toolchain
         run: |
@@ -44,6 +45,11 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Unused dependencies
+        run: |
+          cargo install cargo-machete --locked
+          cargo machete
 
       - name: Tests
         run: cargo test --workspace
