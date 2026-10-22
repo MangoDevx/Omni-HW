@@ -450,8 +450,10 @@ fn culprit(b: &[u8], params: &[u64; 4]) -> Option<Culprit> {
             let end = off.saturating_add(size.min(MAX_STACK)).min(b.len());
             b.get(off..end)
                 .unwrap_or(&[])
-                .chunks_exact(8)
-                .map(|c| u64::from_le_bytes(c.try_into().unwrap_or_default()))
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|&c| u64::from_le_bytes(c))
                 .collect()
         }
         _ => Vec::new(),

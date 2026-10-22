@@ -10,8 +10,10 @@ pub(crate) fn from_wide(w: &[u16]) -> String {
 
 /// Little-endian UTF-16 code units from a byte buffer (a trailing odd byte is ignored).
 pub(crate) fn units(b: &[u8]) -> Vec<u16> {
-    b.chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+    b.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&c| u16::from_le_bytes(c))
         .collect()
 }
 

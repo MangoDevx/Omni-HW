@@ -36,8 +36,13 @@ pub fn decode_ico(b: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
         for y in 0..h {
             let src = &pixels[(h - 1 - y) * w * 4..(h - y) * w * 4];
             let dst = &mut rgba[y * w * 4..(y + 1) * w * 4];
-            for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-                d.copy_from_slice(&[s[2], s[1], s[0], s[3]]);
+            for (d, s) in dst
+                .as_chunks_mut::<4>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<4>().0)
+            {
+                *d = [s[2], s[1], s[0], s[3]];
             }
         }
         if best.as_ref().is_none_or(|(_, bw, _)| (w as u32) > *bw) {
@@ -67,7 +72,7 @@ mod tests {
         assert_eq!((w, h), (256, 256));
         assert_eq!(rgba.len(), 256 * 256 * 4);
         assert!(
-            rgba.chunks_exact(4).any(|p| p[3] > 0),
+            rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0),
             "not fully transparent"
         );
     }

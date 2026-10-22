@@ -42,5 +42,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: Unused dependencies
+        run: |
+          cargo install cargo-machete --locked
+          cargo machete
+
       - name: Tests
         run: cargo test --workspace

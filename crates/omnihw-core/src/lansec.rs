@@ -528,13 +528,13 @@ fn read_banner(stream: &mut TcpStream, port: u16) -> String {
 /// Turn raw banner bytes into a short printable string. For HTTP, pull out the Server header.
 fn tidy_banner(bytes: &[u8], port: u16) -> String {
     let text = String::from_utf8_lossy(bytes);
-    if matches!(port, 80 | 8080 | 5000 | 7547) {
-        if let Some(server) = text.lines().find_map(|l| {
+    if matches!(port, 80 | 8080 | 5000 | 7547)
+        && let Some(server) = text.lines().find_map(|l| {
             l.strip_prefix("Server:")
                 .or_else(|| l.strip_prefix("server:"))
-        }) {
-            return clean(server.trim());
-        }
+        })
+    {
+        return clean(server.trim());
     }
     clean(text.lines().next().unwrap_or("").trim())
 }

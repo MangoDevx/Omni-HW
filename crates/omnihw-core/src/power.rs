@@ -701,7 +701,7 @@ impl Action {
 
     /// Decode [`Action::to_arg`]; `None` for anything malformed or not allowed.
     pub fn from_arg(arg: &str) -> Option<Action> {
-        if arg.len() % 2 != 0 {
+        if !arg.len().is_multiple_of(2) {
             return None;
         }
         let bytes: Option<Vec<u8>> = (0..arg.len())

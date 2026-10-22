@@ -213,7 +213,7 @@ pub(super) fn privacy(ui: &mut Ui) {
     h(ui, "Administrator rights");
     p(
         ui,
-        "Administrator rights are used to read SATA drive health (SMART) and link speed and, on some systems, the NVMe health log.          Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline.          The Restart into UEFI / BIOS button and power changes that need them (Fast Startup, adapter power saving, wake devices) ask separately, only when you click them.",
+        "Administrator rights are used to read SATA drive health (SMART) and link speed and, on some systems, the NVMe health log. Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline. The Restart into UEFI / BIOS button and power changes that need them (Fast Startup, adapter power saving, wake devices) ask separately, only when you click them.",
     );
     p(
         ui,

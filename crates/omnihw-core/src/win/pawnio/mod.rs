@@ -108,16 +108,21 @@ impl Module {
         }
         let mut buf = vec![0u8; FN_NAME_LEN + input.len() * 8];
         buf[..func.len()].copy_from_slice(func.as_bytes());
-        for (chunk, v) in buf[FN_NAME_LEN..].chunks_exact_mut(8).zip(input) {
-            chunk.copy_from_slice(&v.to_le_bytes());
+        for (chunk, v) in buf[FN_NAME_LEN..]
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
+            .zip(input)
+        {
+            *chunk = v.to_le_bytes();
         }
         let mut raw = vec![0u8; out.len() * 8];
         let got = self
             .handle
             .try_ioctl(IOCTL_EXECUTE_FN, buf.as_slice(), &mut raw)
             .map_err(|e| format!("{} {func}: {}", self.name, e.message()))?;
-        for (v, chunk) in out.iter_mut().zip(raw.chunks_exact(8)) {
-            *v = u64::from_le_bytes(chunk.try_into().unwrap_or_default());
+        for (v, chunk) in out.iter_mut().zip(raw.as_chunks::<8>().0) {
+            *v = u64::from_le_bytes(*chunk);
         }
         Ok(got / 8)
     }

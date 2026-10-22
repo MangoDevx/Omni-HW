@@ -159,3 +159,46 @@ mod tests {
         assert_eq!(or_dash("x"), "x");
     }
 }
+
+#[cfg(test)]
+mod ui_tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// Screenshot tests run locally only: GitHub's runners have no GPU to render them with.
+    fn screenshots_enabled() -> bool {
+        std::env::var_os("GITHUB_ACTIONS").is_none()
+    }
+
+    fn cpu_section(ui: &mut egui::Ui) {
+        super::section(
+            ui,
+            "Processor",
+            &[
+                ("Name", "AMD Ryzen 7 9800X3D".into()),
+                ("Stepping", String::new()),
+            ],
+        );
+    }
+
+    #[test]
+    fn section_shows_values_and_dashes() {
+        let harness = Harness::new_ui(cpu_section);
+        harness.get_by_label("Processor");
+        harness.get_by_label("AMD Ryzen 7 9800X3D");
+        // Empty values show a dash.
+        harness.get_by_label("-");
+    }
+
+    #[test]
+    fn section_snapshot() {
+        if !screenshots_enabled() {
+            return;
+        }
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(360.0, 90.0))
+            .build_ui(cpu_section);
+        harness.run();
+        harness.snapshot("section");
+    }
+}

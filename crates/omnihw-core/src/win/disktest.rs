@@ -172,7 +172,7 @@ pub(crate) fn measure(
         ));
     }
     let align = sector_size(mount).unwrap_or(512).max(4096) as usize;
-    if SEQ_BLOCK % align != 0 || RND_BLOCK % align != 0 {
+    if !SEQ_BLOCK.is_multiple_of(align) || !RND_BLOCK.is_multiple_of(align) {
         return Err(format!(
             "Unsupported sector size ({align} bytes) on {mount}"
         ));

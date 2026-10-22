@@ -17,6 +17,11 @@
 OmniHW-Recording-*.csv
 OmniHW-Report-*.html
 
+# UI screenshot test output written when a snapshot doesn't match
+*.new.png
+*.diff.png
+*.old.png
+
 # Editors and OS
 .vscode/
 .idea/

@@ -7,6 +7,8 @@ license.workspace = true
 rust-version.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+# NVIDIA NVML (GPU details and sensors), loaded at runtime from the driver's nvml.dll.
+nvml-wrapper = "0.13"
 windows = { workspace = true, features = [
     "Wdk_Graphics_Direct3D",
     "Wdk_System_SystemInformation",
@@ -32,7 +34,6 @@ windows = { workspace = true, features = [
     "Win32_System_EventLog",
     "Win32_System_IO",
     "Win32_System_Ioctl",
-    "Win32_System_LibraryLoader",
     "Win32_System_Ole",
     "Win32_System_Performance",
     "Win32_System_Pipes",
