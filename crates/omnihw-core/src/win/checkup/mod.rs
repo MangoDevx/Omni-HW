@@ -32,7 +32,16 @@ pub fn gather() -> Checkup {
     }
 }
 
-#[cfg(not(windows))]
+/// Linux: only the NVMe PCIe links so far; the rest are Windows sources.
+#[cfg(target_os = "linux")]
+pub fn gather() -> Checkup {
+    Checkup {
+        nvme_links: crate::linux::block::nvme_links(&crate::linux::Root::system()),
+        ..Default::default()
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn gather() -> Checkup {
     Checkup::default()
 }

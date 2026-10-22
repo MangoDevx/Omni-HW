@@ -2,6 +2,7 @@
 //! labels and partition tables, and `/proc/self/mounts` for volumes.
 
 use super::Root;
+use crate::checkup::PcieLink;
 use crate::storage::{BusType, DiskLayout, Drive, PartitionStyle, Volume, largest_gap};
 
 const BLOCK: &str = "/sys/block";
@@ -276,6 +277,40 @@ pub fn drives(root: &Root) -> Vec<Drive> {
     out
 }
 
+/// PCIe generation for a sysfs link speed such as "16.0 GT/s PCIe".
+pub fn pcie_gen(speed: &str) -> Option<u32> {
+    let gts: f64 = speed.split_whitespace().next()?.parse().ok()?;
+    Some(match gts {
+        g if g < 4.0 => 1,
+        g if g < 7.0 => 2,
+        g if g < 12.0 => 3,
+        g if g < 24.0 => 4,
+        g if g < 48.0 => 5,
+        _ => 6,
+    })
+}
+
+/// PCIe links of NVMe controllers (`/sys/class/nvme/nvmeN/device`), as (generation, lanes).
+pub fn nvme_links(root: &Root) -> Vec<PcieLink> {
+    const NVME: &str = "/sys/class/nvme";
+    root.list(NVME)
+        .into_iter()
+        .filter_map(|c| {
+            let p = format!("{NVME}/{c}");
+            let link = |kind: &str| {
+                let speed = root.read(&format!("{p}/device/{kind}_link_speed"))?;
+                let width = root.read_u64(&format!("{p}/device/{kind}_link_width"))?;
+                Some((pcie_gen(&speed)?, width as u32))
+            };
+            Some(PcieLink {
+                device: root.read_nonempty(&format!("{p}/model"))?,
+                current: link("current")?,
+                max: link("max")?,
+            })
+        })
+        .collect()
+}
+
 /// sysfs block device names of the drives, in [`Drive::index`] order (for live sensors).
 pub fn drive_names(root: &Root) -> Vec<String> {
     root.list(BLOCK)
@@ -293,6 +328,24 @@ pub fn drive_names(root: &Root) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::linux::Fixture;
+
+    #[test]
+    fn pcie_links() {
+        assert_eq!(pcie_gen("16.0 GT/s PCIe"), Some(4));
+        assert_eq!(pcie_gen("2.5 GT/s PCIe"), Some(1));
+        assert_eq!(pcie_gen("Unknown"), None);
+        let f = Fixture::new();
+        let d = "sys/class/nvme/nvme0";
+        f.file(&format!("{d}/model"), "WD_BLACK SN850X 2000GB   \n")
+            .file(&format!("{d}/device/current_link_speed"), "8.0 GT/s PCIe\n")
+            .file(&format!("{d}/device/current_link_width"), "4\n")
+            .file(&format!("{d}/device/max_link_speed"), "16.0 GT/s PCIe\n")
+            .file(&format!("{d}/device/max_link_width"), "4\n");
+        let l = nvme_links(&f.root());
+        assert_eq!(l.len(), 1);
+        assert_eq!(l[0].device, "WD_BLACK SN850X 2000GB");
+        assert_eq!((l[0].current, l[0].max), ((3, 4), (4, 4)));
+    }
 
     #[test]
     fn escapes() {
