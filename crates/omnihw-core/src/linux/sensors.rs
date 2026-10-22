@@ -64,7 +64,7 @@ pub fn energy_delta(prev: u64, cur: u64, max: u64) -> u64 {
     if cur >= prev {
         cur - prev
     } else {
-        max.saturating_sub(prev) + cur
+        max.saturating_sub(prev).saturating_add(cur)
     }
 }
 
