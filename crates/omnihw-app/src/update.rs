@@ -1,14 +1,16 @@
 //! Update check: Omni-HW's only network request, made only when the user clicks
 //! "Check for updates" or has turned on the check at start (off by default).
 //!
-//! Sends one HEAD request to `github.com/<repo>/releases/latest` through `curl`, without following
-//! the redirect, and reads the release tag from its target, so nothing but the URL is sent and no
-//! response body is downloaded. Runs on its own short-lived thread, never the UI thread.
+//! Asks GitHub's API for the repository's release list through `curl` and picks the newest
+//! `linux-v*` tag (the Windows releases share the repository). Nothing but the URL is sent.
+//! Runs on its own short-lived thread, never the UI thread.
 
 use std::sync::{Arc, Mutex};
 
 const REPO: &str = "MangoDevx/Omni-HW";
-pub const RELEASES_URL: &str = "https://github.com/MangoDevx/Omni-HW/releases/latest";
+/// The repository's releases, filtered to the Linux ones.
+pub const RELEASES_URL: &str =
+    "https://github.com/MangoDevx/Omni-HW/releases?q=linux-v&expanded=true";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Status {
@@ -85,29 +87,20 @@ fn compare(current: &str, latest_tag: &str) -> Status {
     }
 }
 
-/// The tag in a `.../releases/tag/<tag>` redirect target.
-fn tag_from_location(location: &str) -> Option<String> {
-    let (_, tag) = location.split_once("/releases/tag/")?;
-    let tag = tag.split(['?', '#', '/']).next()?.trim();
-    (!tag.is_empty()).then(|| tag.to_string())
-}
-
+/// The newest `linux-v*` release tag, as "v<version>".
 fn latest_tag() -> Result<String, String> {
-    let url = format!("https://github.com/{REPO}/releases/latest");
+    let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
     let out = std::process::Command::new("curl")
         .args([
             "--silent",
             "--show-error",
-            "--head",
-            // HTTPS only, no redirects followed: the tag is read from the redirect target.
+            "--fail",
             "--proto",
             "=https",
             "--max-time",
             "10",
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{http_code} %{redirect_url}",
+            "--header",
+            "Accept: application/vnd.github+json",
             "--user-agent",
             concat!("Omni-HW/", env!("CARGO_PKG_VERSION")),
             &url,
@@ -124,21 +117,34 @@ fn latest_tag() -> Result<String, String> {
         let err = err.trim().trim_start_matches("curl: ");
         return Err(format!("Could not reach GitHub ({err})"));
     }
-    parse_curl_output(&String::from_utf8_lossy(&out.stdout))
+    newest_linux_tag(&String::from_utf8_lossy(&out.stdout))
+        .ok_or_else(|| "No Linux releases found on GitHub".into())
 }
 
-/// The tag from curl's `--write-out "%{http_code} %{redirect_url}"`.
-fn parse_curl_output(out: &str) -> Result<String, String> {
-    let (code, location) = out.trim().split_once(' ').unwrap_or((out.trim(), ""));
-    let code: u32 = code.parse().unwrap_or(0);
-    if !(300..400).contains(&code) {
-        return Err(if code == 404 {
-            "No releases found on GitHub".into()
-        } else {
-            format!("GitHub answered with HTTP {code}")
-        });
+/// The highest-versioned `linux-v*` `tag_name` in a GitHub releases list (JSON), returned as
+/// "v<version>". Only the tag names are needed, so they're scanned for directly.
+fn newest_linux_tag(json: &str) -> Option<String> {
+    let mut best: Option<(Vec<u64>, String)> = None;
+    let mut rest = json;
+    while let Some(i) = rest.find("\"tag_name\"") {
+        rest = &rest[i + "\"tag_name\"".len()..];
+        let value = rest.trim_start().strip_prefix(':')?.trim_start();
+        let Some(value) = value.strip_prefix('"') else {
+            continue;
+        };
+        let Some(end) = value.find('"') else {
+            break;
+        };
+        let tag = &value[..end];
+        if let Some(v) = tag.strip_prefix("linux-")
+            && v.starts_with(['v', 'V'])
+            && let Some(parts) = parse_version(v)
+            && best.as_ref().is_none_or(|(b, _)| parts > *b)
+        {
+            best = Some((parts, v.to_string()));
+        }
     }
-    tag_from_location(location).ok_or_else(|| "No releases found on GitHub".into())
+    best.map(|(_, tag)| tag)
 }
 
 #[cfg(test)]
@@ -166,31 +172,13 @@ mod tests {
     }
 
     #[test]
-    fn curl_output() {
-        assert_eq!(
-            parse_curl_output("302 https://github.com/MangoDevx/Omni-HW/releases/tag/v0.5.0"),
-            Ok("v0.5.0".into())
-        );
-        assert_eq!(
-            parse_curl_output("404 "),
-            Err("No releases found on GitHub".into())
-        );
-        assert_eq!(
-            parse_curl_output("200 "),
-            Err("GitHub answered with HTTP 200".into())
-        );
-        assert!(parse_curl_output("").is_err());
-    }
-
-    #[test]
-    fn location_tag() {
-        assert_eq!(
-            tag_from_location("https://github.com/MangoDevx/Omni-HW/releases/tag/v0.1.0"),
-            Some("v0.1.0".into())
-        );
-        assert_eq!(
-            tag_from_location("https://github.com/MangoDevx/Omni-HW/releases"),
-            None
-        );
+    fn linux_tags() {
+        let json = r#"[{"tag_name": "v0.9.0", "name": "Omni-HW 0.9.0"},
+            {"tag_name":"linux-v0.5.10","draft":false},
+            {"tag_name": "linux-v0.5.2"}, {"tag_name": "linux-nightly"}]"#;
+        assert_eq!(newest_linux_tag(json), Some("v0.5.10".into()));
+        assert_eq!(newest_linux_tag(r#"[{"tag_name": "v0.9.0"}]"#), None);
+        assert_eq!(newest_linux_tag("[]"), None);
+        assert_eq!(newest_linux_tag(r#"{"tag_name": "#), None);
     }
 }

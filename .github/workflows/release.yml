@@ -1,8 +1,11 @@
 name: Release
 
+# Linux releases are tagged `linux-v<version>`, so they never trigger (or get mistaken for) the
+# Windows releases tagged `v<version>` on main. They are never marked "latest": the Windows
+# update check and the website read the latest release.
 on:
   push:
-    tags: ['v*']
+    tags: ['linux-v*']
 
 permissions: {}
 
@@ -11,21 +14,27 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     defaults:
       run:
-        shell: pwsh
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # Headers eframe/winit link against on Linux.
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev
+
       - name: Install Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup toolchain install stable --profile minimal
           rustup default stable
 
       - name: Cache cargo
@@ -33,97 +42,77 @@ jobs:
 
       - name: Verify tag matches workspace version
         run: |
-          $meta = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
-          $version = ($meta.packages | Where-Object { $_.name -eq 'omnihw-app' }).version
-          if (-not $version) {
-            Write-Host "::error::Could not read the omnihw-app version from cargo metadata."
+          set -euo pipefail
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "omnihw-app") | .version')"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the omnihw-app version from cargo metadata."
             exit 1
-          }
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
-            Write-Host "::error::Tag $env:GITHUB_REF_NAME does not match the workspace version v$version. Bump Cargo.toml or retag."
+          fi
+          if [ "$GITHUB_REF_NAME" != "linux-v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match the workspace version linux-v$version. Bump Cargo.toml or retag."
             exit 1
-          }
-          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - name: Extract release notes from CHANGELOG.md
         run: |
-          $version = $env:VERSION
-          if (-not (Test-Path CHANGELOG.md)) {
-            Write-Host "::error::CHANGELOG.md not found."
+          set -euo pipefail
+          # The lines after "## <version>" up to the next "## " heading.
+          awk -v h="## $VERSION" '
+            $0 == h { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '^[[:space:]]*- ' notes.md; then
+            echo "::error::CHANGELOG.md has no '- ' bullets under '## $VERSION'. Rename '## Unreleased' to '## $VERSION'."
             exit 1
-          }
-          $lines = Get-Content -LiteralPath CHANGELOG.md
-          $start = -1
-          for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i].TrimEnd() -eq "## $version") { $start = $i; break }
-          }
-          if ($start -lt 0) {
-            Write-Host "::error::CHANGELOG.md has no '## $version' section. Rename '## Unreleased' to '## $version'."
-            exit 1
-          }
-          $body = @()
-          for ($i = $start + 1; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match '^## ') { break }
-            $body += $lines[$i]
-          }
-          if (-not ($body | Where-Object { $_ -match '^\s*- ' })) {
-            Write-Host "::error::The '## $version' section in CHANGELOG.md has no '- ' bullets."
-            exit 1
-          }
-          $text = ($body -join "`n").Trim()
-          [IO.File]::WriteAllText("$PWD/notes.md", $text + "`n", [Text.UTF8Encoding]::new($false))
+          fi
 
+      # Built on the oldest supported Ubuntu runner so the binary runs on older glibc too.
       - name: Build release
         run: cargo build --release -p omnihw-app --locked
 
-      # Enabled once SignPath approves the project. It will submit
-      # target/release/omnihw.exe to SignPath, replace it with the signed
-      # binary, then run `signtool verify /pa` on the result.
-      - name: Sign (SignPath)
-        if: ${{ false }}
-        run: echo "not configured"
-
       - name: Package and hash
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/omnihw.exe dist/omnihw.exe
-          $hash = (Get-FileHash -Algorithm SHA256 dist/omnihw.exe).Hash.ToLowerInvariant()
-          [IO.File]::WriteAllText("$PWD/dist/omnihw.exe.sha256", "$hash *omnihw.exe`n", [Text.UTF8Encoding]::new($false))
-          "HASH=$hash" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          set -euo pipefail
+          name="omnihw-$VERSION-linux-x86_64"
+          mkdir -p "dist/$name"
+          install -m755 target/release/omnihw "dist/$name/omnihw"
+          install -m644 packaging/linux/omnihw.desktop packaging/linux/omnihw.png LICENSE "dist/$name/"
+          install -m644 packaging/linux/README.md "dist/$name/INSTALL.md"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          echo "ARCHIVE=$name.tar.gz" >> "$GITHUB_ENV"
+          echo "HASH=$(cut -d' ' -f1 "dist/$name.tar.gz.sha256")" >> "$GITHUB_ENV"
 
       - name: Build release body
         run: |
-          $notes = (Get-Content -Raw -LiteralPath notes.md).Trim()
-          # Remove the SmartScreen bullet (and the "Still applies" heading if empty) once signing is on.
-          $body = @(
-            '## Download'
-            ''
-            "**``omnihw.exe``** is a single portable executable for Windows 10 and 11 (x64). There's no installer: download it and double-click (your settings and alert rules carry over from earlier versions)."
-            ''
-            "SHA-256: ``$($env:HASH)``"
-            ''
-            '## What''s new'
-            ''
-            $notes
-            ''
-            '## Still applies'
-            ''
-            ('- **SmartScreen warning.** The exe isn''t code-signed yet, so Windows may show "Windows protected your PC". Click **More info {0} Run anyway**.' -f [char]0x2192)
-          ) -join "`n"
-          [IO.File]::WriteAllText("$PWD/dist/body.md", $body + "`n", [Text.UTF8Encoding]::new($false))
+          set -euo pipefail
+          {
+            echo '## Download'
+            echo ''
+            echo "**\`$ARCHIVE\`** holds the \`omnihw\` executable for x86-64 Linux, plus a menu entry and icon. Unpack it and run \`./omnihw\`; \`INSTALL.md\` inside shows how to add it to your menu."
+            echo ''
+            echo "SHA-256: \`$HASH\`"
+            echo ''
+            echo "## What's new"
+            echo ''
+            cat notes.md
+          } > dist/body.md
 
       - name: Upload release files
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release
           path: |
-            dist/omnihw.exe
-            dist/omnihw.exe.sha256
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
             dist/body.md
           if-no-files-found: error
           retention-days: 7
 
-  # The checks run once, in ci.yml, on the push to main. Wait for that run on this exact commit.
+  # The checks run once, in ci.yml, on the push to linux-support. Wait for that run on this
+  # exact commit.
   ci-passed:
     runs-on: ubuntu-latest
     permissions:
@@ -160,7 +149,7 @@ jobs:
               echo "CI run $id is $status; waiting... ($elapsed s)"
             else
               if [ "$elapsed" -ge "$NO_RUN_LIMIT" ]; then
-                echo "::error::No CI run found for $GITHUB_SHA. Push the commit to main (CI runs on main pushes) before tagging, or run CI on it manually (Actions > CI > Run workflow)."
+                echo "::error::No CI run found for $GITHUB_SHA. Push the commit to linux-support (CI runs on its pushes) before tagging, or run CI on it manually (Actions > CI > Run workflow)."
                 exit 1
               fi
               echo "No CI run for $GITHUB_SHA yet; waiting... ($elapsed s)"
@@ -193,33 +182,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # A re-run (e.g. after a failed redeploy) finds the release already there: refresh its files.
+          set -euo pipefail
+          files=(dist/*.tar.gz dist/*.tar.gz.sha256)
+          # A re-run finds the release already there: refresh its files.
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/omnihw.exe dist/omnihw.exe.sha256 \
-              --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$GITHUB_REF_NAME" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
             exit 0
           fi
-          gh release create "$GITHUB_REF_NAME" dist/omnihw.exe dist/omnihw.exe.sha256 \
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Omni-HW ${GITHUB_REF_NAME#v}" \
+            --title "Omni-HW for Linux ${GITHUB_REF_NAME#linux-v}" \
             --notes-file dist/body.md \
+            --latest=false \
             --verify-tag
-
-      - name: Redeploy website
-        env:
-          HOOK: ${{ secrets.PAGES_DEPLOY_HOOK }}
-        run: |
-          # Strip whitespace, line breaks and quotes a pasted secret may carry. Never print the hook.
-          HOOK="$(printf '%s' "$HOOK" | tr -d "[:space:]\"'")"
-          if [ -z "$HOOK" ]; then
-            echo "::warning::PAGES_DEPLOY_HOOK is not set; the site was not redeployed."
-            exit 0
-          fi
-          case "$HOOK" in
-            https://api.cloudflare.com/*) ;;
-            *)
-              echo "::error::PAGES_DEPLOY_HOOK isn't a Cloudflare deploy hook URL (it should start with https://api.cloudflare.com/). Re-copy it from Pages > Settings > Builds > Deploy hooks."
-              exit 1
-              ;;
-          esac
-          curl -fsS -X POST "$HOOK" -o /dev/null

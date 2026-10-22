@@ -356,7 +356,7 @@ pub fn show(ui: &mut Ui, s: &mut Settings, sampler: &Sampler, updates: &UpdateCh
         );
         ui.weak(
             "Update checks are Omni-HW's only network request and happen only when you click the button or turn this on. \
-             They ask GitHub for the latest release's version number; nothing about your PC is sent.",
+             They ask GitHub for its list of releases to find the newest Linux version; nothing about your PC is sent.",
         );
     });
 
