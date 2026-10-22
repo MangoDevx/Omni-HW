@@ -6,6 +6,7 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 
 ### Fixed
 - Overview: the Storage card said "1 drives" on PCs with one drive.
+- LAN Security Report: most devices showed no MAC address or maker, because the address table was read before the scan found them.
 
 ## 0.5.0
 

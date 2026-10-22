@@ -453,7 +453,9 @@ pub fn scan(adapters: &[Adapter], progress: &Progress) -> LanScan {
         });
     }
 
-    // Build the per-subnet host lists.
+    // Build the per-subnet host lists. The pings above filled the neighbour table, so read it
+    // again for the MACs of the devices found.
+    let neighbours = imp::neighbours();
     let mac_of = |ip: Ipv4Addr| {
         neighbours
             .iter()
@@ -473,7 +475,11 @@ pub fn scan(adapters: &[Adapter], progress: &Progress) -> LanScan {
             .filter(|&&ip| same_subnet(ip, n.self_ip, n.prefix))
         {
             let is_self = ip == n.self_ip;
-            let mac = mac_of(ip);
+            let mac = if is_self {
+                n.adapter.mac.clone()
+            } else {
+                mac_of(ip)
+            };
             hosts.push(Host {
                 ip,
                 vendor: vendor_from_mac(&mac).unwrap_or_default().to_string(),
