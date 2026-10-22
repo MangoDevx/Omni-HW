@@ -4,6 +4,7 @@
 use std::fmt::Write;
 
 use crate::SystemInfo;
+use crate::eventlog::EventLog;
 use crate::network::NetworkInfo;
 use crate::sensors::SensorTable;
 
@@ -221,6 +222,8 @@ pub struct Context<'a> {
     pub today: (i64, u32, u32),
     /// Network adapters, once gathered.
     pub network: Option<&'a NetworkInfo>,
+    /// The system journal's last 30 days, once read.
+    pub events: Option<&'a EventLog>,
 }
 
 /// How many recent samples count as "sustained" for live checks (~2 minutes at 1 s).

@@ -6,6 +6,7 @@
 //! listed in.
 
 mod cpu;
+mod crashes;
 mod gpu;
 mod helpers;
 mod memory;
@@ -25,6 +26,32 @@ pub use types::{
 type Check = fn(&Context) -> Outcome;
 
 const CHECKS: &[(&str, Category, Check)] = &[
+    (
+        "Kernel crashes and hangs",
+        Category::Crashes,
+        crashes::kernel_crashes,
+    ),
+    (
+        "Hardware errors (CPU, memory, PCIe)",
+        Category::Crashes,
+        crashes::hardware_errors,
+    ),
+    (
+        "GPU hangs and resets",
+        Category::Crashes,
+        crashes::gpu_hangs,
+    ),
+    (
+        "Disk and file system errors",
+        Category::Crashes,
+        crashes::disk_errors,
+    ),
+    (
+        "Out-of-memory kills",
+        Category::Crashes,
+        crashes::out_of_memory,
+    ),
+    ("Overheating", Category::Crashes, crashes::overheating),
     (
         "CPU microcode (13th/14th Gen Intel stability)",
         Category::Cpu,

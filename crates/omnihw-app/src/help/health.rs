@@ -17,6 +17,7 @@ fn all_checks() -> &'static [(&'static str, Category)] {
             sensors: &sensors,
             today: (2026, 1, 1),
             network: None,
+            events: None,
         };
         diagnostics::run(&ctx)
             .into_iter()
@@ -28,23 +29,41 @@ fn all_checks() -> &'static [(&'static str, Category)] {
 /// One-line explanation of a Health Check rule, by its name.
 fn check_description(name: &str) -> &'static str {
     match name {
+        "Kernel crashes and hangs" => {
+            "Kernel panics, oopses, CPU lockups and tasks hung for minutes in the system journal over the last 30 days."
+        }
+        "Hardware errors (CPU, memory, PCIe)" => {
+            "Machine checks, EDAC memory errors and PCIe errors the kernel logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock. The memory and disk tests also report any logged while they ran."
+        }
+        "GPU hangs and resets" => {
+            "Times the amdgpu, i915/xe, nouveau or NVIDIA driver reset a GPU that stopped responding (including NVIDIA Xid errors) in the last 30 days."
+        }
+        "Disk and file system errors" => {
+            "I/O errors, bad sectors, NVMe timeouts, SATA link resets and ext4/btrfs/XFS errors in the last 30 days."
+        }
+        "Out-of-memory kills" => {
+            "Apps the kernel's OOM killer or systemd-oomd stopped because memory ran out."
+        }
+        "Overheating" => {
+            "CPU thermal throttling or critical-temperature shutdowns the kernel logged."
+        }
         "CPU microcode (13th/14th Gen Intel stability)" => {
-            "13th/14th Gen Intel desktop CPUs need microcode 0x12B or newer (a BIOS update) to avoid degrading over time."
+            "13th/14th Gen Intel desktop CPUs need microcode 0x12B or newer (a BIOS or intel-microcode update) to avoid degrading over time."
         }
         "CPU clocks under load" => {
             "While the CPU is busy, its average clock should stay near base clock; lower means thermal or power throttling."
         }
         "CPU temperature" => {
-            "CPU temperature averaged over the last couple of minutes (needs the optional extra sensors, Settings > Extra sensors)."
+            "CPU temperature (coretemp or k10temp) averaged over the last couple of minutes: warning from 88 °C, critical from 95 °C."
         }
         "Memory speed (XMP / EXPO)" => {
-            "Compares the speed your RAM runs at with the speed its part number is rated for (XMP/EXPO off is common)."
+            "Compares the speed your RAM runs at with the speed its part number is rated for (XMP/EXPO off is common). Needs the memory details from Read as root."
         }
         "Memory channel layout" => {
             "Flags a single module or modules sharing one channel (half the bandwidth), and mixed modules."
         }
         "Memory pressure" => {
-            "RAM nearly full over the last couple of minutes, which causes stutters."
+            "RAM nearly full over the last couple of minutes, which causes stutters or swapping."
         }
         "Installed memory" => "Less than 16 GB is flagged as a suggestion.",
         "Monitor connected to the graphics card" => {
@@ -59,115 +78,38 @@ fn check_description(name: &str) -> &'static str {
         "GPU memory (VRAM) pressure" => {
             "Video memory almost full (95 % or more), which makes games stutter."
         }
-        "GPU driver age" => "Graphics driver more than a year old.",
-        "Resizable BAR" => {
-            "Resizable BAR off on a card that supports it (NVIDIA cards; AMD and Intel can't be read yet)."
+        "GPU power and thermal slowdown" => {
+            "NVIDIA cards that hit their hardware power brake or thermal slowdown under load (often a loose or daisy-chained power cable)."
         }
-        "Drive free space" => "Drive letters with less than 10 % free (critical below 5 %).",
+        "Resizable BAR" => {
+            "Resizable BAR off on a card that supports it (NVIDIA through NVML; AMD and Intel from the card's PCI memory window)."
+        }
+        "Drive free space" => "Mounted file systems with less than 10 % free (critical below 5 %).",
         "Drive health (NVMe SMART)" => {
             "NVMe wear, critical warnings and media errors from the drive's own health log."
         }
         "Drive health (SATA SMART)" => {
-            "Reallocated, pending or uncorrectable sectors, SSD life left and cable errors (needs administrator)."
+            "Reallocated, pending or uncorrectable sectors, SSD life left and cable errors (needs Read as root)."
         }
         "Drive temperature" => "Drives averaging 70 °C or more (critical from 80 °C).",
+        "Drives set up" => {
+            "Drives with no partitions (not formatted or mounted yet), or large unallocated space."
+        }
+        "Drive link speed" => {
+            "NVMe drives on fewer PCIe lanes or a lower generation than they support, and SATA drives below 6 Gb/s."
+        }
         "Battery wear" => {
             "Laptop battery capacity lost compared with new (warning from 30 %, critical from 50 %)."
-        }
-        "Power plan" => "Windows Power saver plan active, which limits performance.",
-        "USB selective suspend" => {
-            "On while USB audio interfaces, capture cards, VR headsets or game controllers are connected (drop-outs, crackling)."
-        }
-        "Network adapter power saving" => {
-            "Windows allowed to turn off a network adapter, Energy-Efficient Ethernet on, or high Wi-Fi power saving while plugged in."
-        }
-        "Bluetooth power saving" => {
-            "Windows allowed to turn off the Bluetooth adapter, a common cause of controller and headset disconnects."
-        }
-        "PCI Express power saving" => {
-            "Link State Power Management at maximum savings on a desktop (GPU/NVMe stutter, wake problems)."
-        }
-        "Sleep timer" => {
-            "Sleep after less than 10 minutes when plugged in, or sleep set sooner than the display timeout."
-        }
-        "Waking from sleep" => {
-            "The PC woke by itself (wake timers or a network adapter) in the last 2 weeks; shows the wake source."
-        }
-        "Fast Startup" => {
-            "Fast Startup on with Windows running for a week or more: shutdowns don't start Windows fresh."
-        }
-        "Hard disk turn-off timer" => {
-            "Hard disks set to turn off after less than 10 minutes while plugged in (spin-up freezes)."
-        }
-        "Processor state limits" => {
-            "Maximum processor state below 100 % when plugged in, or minimum at 100 % on battery."
-        }
-        "Apps keeping the PC awake" => {
-            "Apps or drivers with active power requests that stop sleep (needs administrator; use Check now on the Power page)."
         }
         "BIOS age" => {
             "BIOS three or more years old; newer versions often fix stability and security issues."
         }
-        "Uptime" => "Windows running for 14 days or more without a restart.",
-        "Pending restart" => "Windows Update or a system component is waiting for a restart.",
-        "Memory Integrity (VBS)" => {
-            "Core isolation's Memory Integrity is on: a security feature that costs a little gaming performance."
-        }
-        "Hardware-accelerated GPU scheduling" => {
-            "Off: turning it on can lower latency and is needed for DLSS Frame Generation."
-        }
-        "Game Mode" => "Windows Game Mode is off.",
-        "Pagefile" => {
-            "The pagefile is disabled, so programs crash instead of slowing down when RAM runs out."
-        }
-        "Memory diagnostic results" => {
-            "Errors reported by a Windows Memory Diagnostic run in the last 90 days."
-        }
-        "Monitor refresh rate" => {
-            "A monitor set below the best refresh rate Windows offers for it (e.g. a 144 Hz monitor left at 60 Hz)."
-        }
-        "Graphics driver installed" => {
-            "A graphics card running on Microsoft's Basic Display driver instead of the NVIDIA/AMD/Intel driver."
-        }
-        "GPU power and thermal slowdown" => {
-            "NVIDIA cards that hit their hardware power brake or thermal slowdown under load (often a loose or daisy-chained power cable)."
-        }
-        "Leftover graphics drivers" => {
-            "Driver packages for a graphics card brand that is no longer installed."
-        }
-        "Drives set up" => {
-            "New drives that were never initialized (they don't show in File Explorer), or large unallocated space."
-        }
-        "Windows drive type" => {
-            "Windows installed on a hard drive, especially when an SSD is present."
-        }
-        "Drive link speed" => {
-            "NVMe drives on fewer PCIe lanes or a lower generation than they support, and SATA drives below 6 Gb/s (needs administrator)."
-        }
-        "Device drivers" => {
-            "Devices with a problem in Device Manager, usually missing chipset, network or audio drivers."
-        }
-        "Hardware errors (WHEA)" => {
-            "CPU, memory and PCIe hardware errors logged in the last 30 days, usually from an unstable XMP/EXPO profile or overclock. New ones are picked up live while Omni-HW runs, with the CPU core (APIC ID) or PCIe device they came from."
-        }
-        "Blue screens and unexpected restarts" => {
-            "Blue screens (with their stop codes) and restarts without a clean shutdown in the last 30 days. On a blue screen finding, \"Analyze crash dumps\" reads C:\\Windows\\Minidump (Windows asks for administrator permission) to show each crash's parameters and the driver it points at."
-        }
-        "GPU driver timeouts (TDR)" => {
-            "Times Windows reset a graphics driver that stopped responding in the last 30 days (Display 4101, LiveKernelEvent 141/117): one is a note, two or more a warning."
-        }
         "Ethernet link speed" => {
             "Wired network connected at 100 Mbps or less (a bad cable or port), or below the adapter's maximum (e.g. 1 Gbps on a 2.5 Gbps adapter, a suggestion)."
         }
-        "Network address (DHCP and DNS)" => {
-            "A connected adapter with only a self-assigned 169.254.x.x address (no DHCP), an IP address conflict, or no DNS servers."
-        }
-        "Wi-Fi signal" => "Wi-Fi signal below 40 %, with tips for 2.4 GHz connections.",
         "Secure Boot, TPM and UEFI boot" => {
-            "Legacy (CSM) boot, Secure Boot off or no TPM 2.0: needed for Windows 11 and some games' anti-cheat."
+            "Legacy (CSM) boot, Secure Boot off or no TPM 2.0, as notes: Linux runs fine without them, but they protect the boot chain."
         }
-        "Windows activation" => "Windows is not activated.",
-        "Startup apps" => "More than 15 apps starting with Windows.",
         _ => "",
     }
 }
@@ -177,8 +119,8 @@ pub(super) fn health_check(ui: &mut Ui) {
     p(
         ui,
         "The Health Check runs a set of rules over your hardware information and recent sensor readings, and reports \
-         anything that looks wrong or could be better, in plain language with steps to fix it. Nothing is changed \
-         automatically: you decide what to do, and only a Fix button you click changes a setting.",
+         anything that looks wrong or could be better, in plain language with steps to fix it. Nothing is changed: \
+         you decide what to do.",
     );
     h(ui, "Reading the results");
     bullets(
@@ -187,7 +129,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Critical (red): fix soon, e.g. a failing drive or outdated CPU microcode with a known stability problem.",
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
             "Suggestion (blue, shown as Info): optional improvements.",
-            "The tiles at the top show each category (Crashes (BSOD), System, CPU, Memory, GPU, Storage, Network, Power Management and Gaming): OK, not checked, or how many findings it has in the colour of the most serious one. Click a tile to list only that category, and click it again (or All) to show everything.",
+            "The tiles at the top show each category (Crashes, System, CPU, Memory, GPU, Storage, Network and Gaming): OK, not checked, or how many findings it has in the colour of the most serious one. Click a tile to list only that category, and click it again (or All) to show everything.",
             "The list on the left groups findings into Fix these (critical issues and warnings), Suggestions and For gaming, most serious first. Click one to see its details, steps and buttons on the right, or use the Up and Down arrow keys to move through the list.",
             "Passed checks lists each category's checks that found nothing: OK rows found nothing wrong (with what was measured) and dash rows don't apply to this PC (with the reason, e.g. no battery).",
         ],
@@ -195,8 +137,7 @@ pub(super) fn health_check(ui: &mut Ui) {
     h(ui, "Gaming section");
     p(
         ui,
-        "Settings that mainly matter for games (Resizable BAR, Memory Integrity, hardware GPU scheduling, Game Mode) are \
-         grouped in the Gaming category and listed under For gaming, separate from the main summary. Turn off Show \
+        "Settings that mainly matter for games (such as Resizable BAR) are grouped in the Gaming category and listed under For gaming, separate from the main summary. Turn off Show \
          gaming suggestions in Settings > Health Check to hide the Gaming category and its count everywhere.",
     );
     h(ui, "Dismissing issues");
@@ -220,9 +161,9 @@ pub(super) fn health_check(ui: &mut Ui) {
         ui,
         &[
             "Each finding has numbered steps. Tick a step's box as you finish it; the header shows how many are done (ticks reset when Omni-HW closes).",
-            "Search Google opens a search in your browser built from your hardware, e.g. your motherboard model plus \"enable EXPO\". Open Settings opens the right Windows Settings page, and Open website goes to the official download page. Nothing is opened unless you click.",
+            "Search Google opens a search in your browser built from your hardware, e.g. your motherboard model plus \"enable EXPO\". Open website goes to the official page. Nothing is opened unless you click.",
             "BIOS steps name the key that opens the setup and the menu path your board maker uses (ASUS, MSI, Gigabyte, ASRock, Dell, HP, Lenovo), read from the motherboard's SMBIOS data.",
-            "On UEFI PCs, BIOS-related findings have a Restart into UEFI / BIOS button: after you confirm, Windows asks for administrator rights and restarts straight into the setup, so there's no key to catch. Save your work first.",
+            "On UEFI PCs, BIOS-related findings have a Restart into UEFI / BIOS button: after you confirm, your desktop may ask for your password and the PC restarts straight into the setup, so there's no key to catch. Save your work first.",
         ],
     );
     h(ui, "Using it");
@@ -234,7 +175,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Live checks (memory pressure, temperatures, throttling) use roughly the last two minutes of readings and need at least a few seconds of data first.",
             "The throttling check needs some time with the CPU under heavy load (a game, a render) before it gives a verdict.",
             "Results also appear at the top of saved and copied reports.",
-            "Some power findings have a Fix button that changes the setting for you. Changes that affect networking or shutdown ask first, and ones that need administrator rights show the Windows permission prompt.",
+            "The crash checks read the system journal once when Omni-HW starts; Refresh on the Event Log page reads it again. If you aren't in the adm group they only see your own messages.",
         ],
     );
     h(ui, "All checks");
