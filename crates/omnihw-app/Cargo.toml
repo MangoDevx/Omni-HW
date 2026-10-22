@@ -33,6 +33,7 @@ windows-service = "0.8.1"
 embed-resource = "3"
 
 [dev-dependencies]
+omnihw-core = { path = "../omnihw-core", features = ["testkit"] }
 # Headless UI tests: draw pages without a window, query them through the accessibility tree,
 # and compare screenshots (rendered with wgpu) against the PNGs in tests/snapshots.
 egui_kittest = { version = "0.36", features = ["snapshot", "wgpu"] }

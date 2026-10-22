@@ -376,7 +376,7 @@ fn system_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
             rows.push(("Windows", o.summary()));
             rows.push(("Computer", o.computer_name.clone()));
         }
-        if let Some(u) = omnihw_core::win::uptime_secs() {
+        if let Some(u) = snap.uptime_secs {
             rows.push(("Uptime", format_uptime(u)));
         }
         if let Some(c) = val(snap, "battery/charge") {
@@ -432,8 +432,8 @@ fn storage_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
     }
     let total: u64 = info.drives.iter().map(|d| d.size_bytes).sum();
     let sub = format!(
-        "{} drives  ·  {} total",
-        info.drives.len(),
+        "{}  ·  {} total",
+        super::plural(info.drives.len(), "drive"),
         format_bytes(total)
     );
     card(ui, DISK, "Storage", &sub, |ui| {

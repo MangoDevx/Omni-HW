@@ -2,6 +2,11 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
+## Unreleased
+
+### Fixed
+- Overview: the Storage card said "1 drives" on PCs with one drive.
+
 ## 0.5.0
 
 ### New

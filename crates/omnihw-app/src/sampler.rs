@@ -61,6 +61,8 @@ pub struct Snapshot {
     /// Backend errors from the most recent poll.
     pub errors: Vec<String>,
     pub samples: u64,
+    /// Seconds since Windows started, read with each sample.
+    pub uptime_secs: Option<u64>,
     /// Active recording, appended to on every sample.
     pub recording: Option<Recorder>,
     /// The most recently stopped recording, kept for viewing.
@@ -191,6 +193,26 @@ struct Shared {
     service_refresh: AtomicBool,
 }
 
+impl Shared {
+    fn new(use_pawnio: bool, snapshot: Snapshot) -> Shared {
+        Shared {
+            info: OnceLock::new(),
+            snapshot: Mutex::new(snapshot),
+            interval_ms: AtomicU64::new(DEFAULT_INTERVAL_MS),
+            reset: AtomicBool::new(false),
+            hwnd: AtomicIsize::new(0),
+            test_notification: AtomicBool::new(false),
+            alert_notifications: AtomicBool::new(true),
+            power_refresh: AtomicBool::new(false),
+            network_page: AtomicBool::new(false),
+            network_refresh: AtomicBool::new(false),
+            network_reading: AtomicBool::new(false),
+            use_pawnio: AtomicBool::new(use_pawnio),
+            service_refresh: AtomicBool::new(false),
+        }
+    }
+}
+
 /// Where alert rules are saved: `%APPDATA%/OmniHW/alerts.tsv`.
 fn alerts_path() -> Option<PathBuf> {
     Some(
@@ -217,24 +239,13 @@ pub struct Sampler {
 impl Sampler {
     /// `use_pawnio`: read the extra sensors from the sensor service if it is set up.
     pub fn start(ctx: egui::Context, use_pawnio: bool) -> Self {
-        let shared = Arc::new(Shared {
-            info: OnceLock::new(),
-            snapshot: Mutex::new(Snapshot {
+        let shared = Arc::new(Shared::new(
+            use_pawnio,
+            Snapshot {
                 alerts: Alerts::new(load_alert_rules()),
                 ..Default::default()
-            }),
-            interval_ms: AtomicU64::new(DEFAULT_INTERVAL_MS),
-            reset: AtomicBool::new(false),
-            hwnd: AtomicIsize::new(0),
-            test_notification: AtomicBool::new(false),
-            alert_notifications: AtomicBool::new(true),
-            power_refresh: AtomicBool::new(false),
-            network_page: AtomicBool::new(false),
-            network_refresh: AtomicBool::new(false),
-            network_reading: AtomicBool::new(false),
-            use_pawnio: AtomicBool::new(use_pawnio),
-            service_refresh: AtomicBool::new(false),
-        });
+            },
+        ));
         let (stop, stop_rx) = mpsc::channel::<()>();
         let s = shared.clone();
         let c = ctx.clone();
@@ -246,6 +257,19 @@ impl Sampler {
             shared,
             ctx,
             _stop: stop,
+        }
+    }
+
+    /// A sampler for page tests: serves `info` and `snapshot` as they are, with no sampling
+    /// thread.
+    #[cfg(test)]
+    pub fn fake(info: SystemInfo, snapshot: Snapshot) -> Self {
+        let shared = Arc::new(Shared::new(false, snapshot));
+        let _ = shared.info.set(info);
+        Sampler {
+            shared,
+            ctx: egui::Context::default(),
+            _stop: mpsc::channel().0,
         }
     }
 
@@ -884,6 +908,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
         }
         snap.errors = errors;
         snap.samples += 1;
+        snap.uptime_secs = omnihw_core::win::uptime_secs();
         let s = &mut *snap;
         if let Some(r) = &mut s.recording {
             let i = r.rec.push(r.started.elapsed().as_secs_f64(), &s.table);

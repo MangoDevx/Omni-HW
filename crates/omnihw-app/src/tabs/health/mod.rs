@@ -31,7 +31,7 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
         info,
         sensors: &snap.table,
         today: omnihw_core::civil_from_days(days),
-        uptime_secs: omnihw_core::win::uptime_secs(),
+        uptime_secs: snap.uptime_secs,
         power: snap.power.as_ref(),
         network: snap.network.as_ref(),
         whea_live: &snap.whea_live,
