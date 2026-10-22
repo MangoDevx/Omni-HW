@@ -255,7 +255,7 @@ pub fn run(
         .map(|n| n.get().saturating_sub(1))
         .unwrap_or(1)
         .max(1);
-    let topology = crate::win::topology_buffer().and_then(|b| Topology::parse(&b).ok());
+    let topology = crate::linux::topology::topology(&crate::linux::Root::system());
     let cpus = Cpus {
         single: topology.as_ref().and_then(read_core),
         all: topology.as_ref().map_or_else(Vec::new, worker_cpus),
@@ -407,15 +407,26 @@ fn read_single_core(
     })
 }
 
-/// Pin the calling thread to `id`, at high priority if `boost`; false if pinning failed.
-#[cfg(windows)]
+/// Pin the calling thread to `id` so the scheduler doesn't migrate it mid-pass, and with
+/// `boost` try to raise its priority so it isn't preempted either (that needs root; without it
+/// the thread keeps its normal priority). False if the affinity couldn't be set.
 fn pin(id: LogicalId, boost: bool) -> bool {
-    crate::win::memtest::pin_current_thread(id, boost)
-}
-
-#[cfg(not(windows))]
-fn pin(_: LogicalId, _: bool) -> bool {
-    false
+    let cpu = crate::linux::topology::cpu_number(id) as usize;
+    if cpu >= libc::CPU_SETSIZE as usize {
+        return false;
+    }
+    // SAFETY: `set` is a plain bit set initialised by CPU_ZERO and outlives both calls; pid 0
+    // and PRIO_PROCESS who=0 mean the calling thread on Linux.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_ZERO(&mut set);
+        libc::CPU_SET(cpu, &mut set);
+        let pinned = libc::sched_setaffinity(0, size_of::<libc::cpu_set_t>(), &set) == 0;
+        if boost {
+            let _ = libc::setpriority(libc::PRIO_PROCESS, 0, -10);
+        }
+        pinned
+    }
 }
 
 /// A 64-byte cache line, aligned so the kernels can use aligned vector loads.

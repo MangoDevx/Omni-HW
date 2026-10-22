@@ -1,8 +1,8 @@
 //! Live sensors on Linux: `/proc/stat` and cpufreq (CPU), RAPL through powercap, hwmon
 //! (temperatures, fans, voltages), `/proc/diskstats` and DRM sysfs (amdgpu, i915).
 //!
-//! Sensor ids match the Windows backends where the meaning is the same, so alerts,
-//! recordings and the overview work unchanged.
+//! Sensor ids follow the scheme of the original Windows backends (`cpu/load/total`,
+//! `power/RAPL_Package0_PKG`, ...), so saved alert rules and recordings stay compatible.
 
 use super::topology::{cpu_number, logical_id, online_cpus};
 use super::{Root, key_value, parse_int};
@@ -10,9 +10,21 @@ use crate::gpu::GpuAdapter;
 use crate::sensors::{CPU_TEMP, Reading, SensorBackend, Unit};
 use crate::storage::Drive;
 use crate::topology::Topology;
-use crate::win::perf::energy_label;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
+
+/// Friendly label for a RAPL zone id such as "RAPL_Package0_PKG".
+pub fn energy_label(instance: &str) -> String {
+    let domain = instance.rsplit('_').next().unwrap_or(instance);
+    match domain {
+        "PKG" => "CPU Package Power".into(),
+        "PP0" => "CPU Cores Power".into(),
+        "PP1" => "CPU Graphics Power".into(),
+        "DRAM" => "DRAM Power".into(),
+        "PSYS" => "Platform Power".into(),
+        _ => instance.to_string(),
+    }
+}
 
 fn reading(
     id: impl Into<String>,
@@ -961,6 +973,13 @@ impl SensorBackend for DrmGpuBackend {
 mod tests {
     use super::*;
     use crate::linux::Fixture;
+
+    #[test]
+    fn energy_labels() {
+        assert_eq!(energy_label("RAPL_Package0_PKG"), "CPU Package Power");
+        assert_eq!(energy_label("RAPL_Package0_DRAM"), "DRAM Power");
+        assert_eq!(energy_label("Foo"), "Foo");
+    }
 
     #[test]
     fn proc_stat() {

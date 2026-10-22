@@ -1,41 +1,9 @@
-//! Platform data sources behind one API: Windows calls here, Linux readers in
-//! [`crate::linux`], and stubs returning `None` elsewhere so the crate (and its parser tests)
-//! build anywhere.
+//! Platform data sources behind one API, implemented by the readers in [`crate::linux`].
 
-#[cfg(windows)]
-mod device;
-#[cfg(windows)]
-pub(crate) mod disktest;
-#[cfg(windows)]
-mod dxgi;
-#[cfg(windows)]
-mod eventlog;
 pub mod events_viewer;
-#[cfg(windows)]
-pub(crate) mod memtest;
-#[cfg(windows)]
-pub mod network;
-#[cfg(any(windows, target_os = "linux"))]
 pub mod nvml;
-#[cfg(windows)]
-pub mod pawnio;
-#[cfg(windows)]
-mod pdh;
-pub mod perf;
 pub mod power;
-#[cfg(windows)]
-pub(crate) mod registry;
 pub mod settings;
-#[cfg(windows)]
-pub mod storage;
-#[cfg(windows)]
-mod system;
-#[cfg(windows)]
-pub mod whea;
-#[cfg(windows)]
-pub(crate) mod wide;
-#[cfg(windows)]
-mod wmi;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OsInfo {
@@ -111,83 +79,24 @@ pub struct MemoryStatus {
     pub available_bytes: u64,
 }
 
-#[cfg(windows)]
-use system as imp;
-
-#[cfg(target_os = "linux")]
 use crate::linux::imp;
 
-#[cfg(not(any(windows, target_os = "linux")))]
-mod imp {
-    use super::MemoryStatus;
-    pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
-        Vec::new()
-    }
-    pub fn drives() -> Vec<crate::storage::Drive> {
-        Vec::new()
-    }
-    pub fn has_smart_capable_drive() -> bool {
-        false
-    }
-    pub fn is_elevated() -> bool {
-        false
-    }
-    pub fn os_info() -> Option<super::OsInfo> {
-        None
-    }
-    pub fn uptime_secs() -> Option<u64> {
-        None
-    }
-    pub fn battery() -> Option<super::Battery> {
-        None
-    }
-    pub fn microcode_revision() -> Option<u32> {
-        None
-    }
-    pub fn power_plan() -> Option<super::PowerPlan> {
-        None
-    }
-    pub fn topology_buffer() -> Option<Vec<u8>> {
-        None
-    }
-    pub fn smbios_buffer() -> Option<Vec<u8>> {
-        None
-    }
-    pub fn nominal_mhz() -> Option<u32> {
-        None
-    }
-    pub fn memory_status() -> Option<MemoryStatus> {
-        None
-    }
-}
-
+/// Battery design vs full-charge capacity (None on desktops).
+pub use imp::battery_health;
 /// Physical drives with volumes (and NVMe health when permitted).
 pub use imp::drives;
-/// Hardware display adapters (DXGI), with NVML details on NVIDIA cards.
+/// Display adapters (DRM), with NVML details on NVIDIA cards.
 pub use imp::gpu_adapters;
-/// Whether a drive could report ATA SMART (needs administrator rights).
+/// Whether a drive could report ATA SMART (needs root).
 pub use imp::has_smart_capable_drive;
-/// Whether this process runs elevated (administrator).
+/// Whether this process runs as root.
 pub use imp::is_elevated;
 pub use imp::memory_status;
-/// Nominal (base) clock from `CallNtPowerInformation`, max over all logical processors.
+/// Nominal (base) clock in MHz.
 pub use imp::nominal_mhz;
-/// Raw `RSMB` firmware table (RawSMBIOSData).
+/// Raw SMBIOS table wrapped as RawSMBIOSData (root only).
 pub use imp::smbios_buffer;
-/// Raw `GetLogicalProcessorInformationEx(RelationAll)` buffer.
-pub use imp::topology_buffer;
 pub use imp::{battery, microcode_revision, os_info, power_plan, uptime_secs};
 
-#[cfg(windows)]
-mod battery_wear;
 /// Data collectors for the setup checks of the Health Check.
 pub mod checkup;
-#[cfg(target_os = "linux")]
-pub use crate::linux::imp::battery_health;
-/// Battery design vs full-charge capacity (None on desktops).
-#[cfg(windows)]
-pub use battery_wear::battery_health;
-#[cfg(not(any(windows, target_os = "linux")))]
-pub fn battery_health() -> Option<crate::battery::BatteryHealth> {
-    None
-}

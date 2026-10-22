@@ -1,6 +1,6 @@
 //! Power management: power plans and their settings, Fast Startup, wake sources, power
 //! requests and per-device power saving. The data model and parsers are platform-agnostic;
-//! reads and writes live in `win::power` (non-Windows builds return empty data).
+//! reads and writes live in `win::power`, which returns empty data on Linux so far.
 //!
 //! Gathering is split in two: [`PowerInfo::gather_settings`] (power plans and Fast Startup,
 //! cheap registry reads) and [`PowerInfo::gather`] (also devices, wake history and power

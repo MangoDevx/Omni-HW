@@ -18,14 +18,12 @@ pub mod gpu;
 pub mod lansec;
 mod le;
 pub mod linux;
-pub mod lowlevel;
 pub mod memtest;
 pub mod minidump;
 pub mod network;
 pub mod power;
 pub mod recording;
 pub mod report;
-pub mod sensor_service;
 pub mod sensors;
 pub mod smart;
 pub mod smbios;
@@ -86,23 +84,10 @@ impl SystemInfo {
         let cpu = cpuid::decode(&cpuid::NativeCpuid);
         let codename = codename::lookup(cpu.vendor, cpu.family, cpu.model);
 
-        #[cfg(target_os = "linux")]
         let topology = linux::topology::topology(&linux::Root::system()).or_else(|| {
             warnings.push("Topology: /sys/devices/system/cpu unreadable".into());
             None
         });
-        #[cfg(not(target_os = "linux"))]
-        let topology = match win::topology_buffer().map(|b| Topology::parse(&b)) {
-            Some(Ok(t)) => Some(t),
-            Some(Err(e)) => {
-                warnings.push(format!("Topology: {e}"));
-                None
-            }
-            None => {
-                warnings.push("Topology: GetLogicalProcessorInformationEx unavailable".into());
-                None
-            }
-        };
 
         let smbios = match win::smbios_buffer().map(|b| Smbios::parse_raw(&b)) {
             Some(Ok(s)) => Some(s),
@@ -110,14 +95,8 @@ impl SystemInfo {
                 warnings.push(format!("SMBIOS: {e}"));
                 None
             }
-            // Without root, Linux only offers the BIOS/board names in /sys/class/dmi/id.
-            #[cfg(target_os = "linux")]
+            // Without root, only the BIOS/board names in /sys/class/dmi/id are readable.
             None => linux::dmi::from_dmi_id(&linux::Root::system()),
-            #[cfg(not(target_os = "linux"))]
-            None => {
-                warnings.push("SMBIOS: firmware table unavailable".into());
-                None
-            }
         };
 
         SystemInfo {

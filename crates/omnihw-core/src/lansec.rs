@@ -805,42 +805,6 @@ pub fn vendor_from_mac(mac: &str) -> Option<&'static str> {
 
 // ---- Platform backend -----------------------------------------------------------------------
 
-#[cfg(windows)]
-mod imp {
-    use super::LocalPosture;
-    use crate::win::network::probe;
-    use crate::win::registry::{self, Hive};
-    use std::net::Ipv4Addr;
-
-    /// Is `ip` alive? One ICMP echo with a short timeout.
-    pub fn alive(ip: Ipv4Addr, scope: u32) -> bool {
-        probe::ping_series(std::net::IpAddr::V4(ip), scope, 1, 0).received() > 0
-    }
-
-    /// The IPv4 neighbour (ARP) table: (address, 6-byte MAC).
-    pub fn neighbours() -> Vec<(Ipv4Addr, [u8; 6])> {
-        probe::neighbours()
-    }
-
-    /// Reverse-DNS name for `ip` (empty if none).
-    pub fn reverse_dns(ip: Ipv4Addr) -> String {
-        probe::reverse_dns(ip).unwrap_or_default()
-    }
-
-    /// Read-only posture checks on this PC.
-    pub fn local_posture() -> LocalPosture {
-        // mrxsmb10 is the SMBv1 client driver; Start = 4 means disabled.
-        let smb1 = registry::dword(
-            Hive::LocalMachine,
-            r"SYSTEM\CurrentControlSet\Services\mrxsmb10",
-            "Start",
-        )
-        .map(|start| start != 4);
-        LocalPosture { smb1_enabled: smb1 }
-    }
-}
-
-#[cfg(not(windows))]
 mod imp {
     use super::LocalPosture;
     use std::net::Ipv4Addr;

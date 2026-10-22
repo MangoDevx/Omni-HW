@@ -726,9 +726,6 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
     ctx.request_repaint();
 
     let mut backends = backends(info);
-    // Past WHEA errors come from the startup query; this sees only new ones.
-    #[cfg(windows)]
-    let mut whea = omnihw_core::win::whea::WheaWatcher::new();
     let mut readings = Vec::new();
     let started = Instant::now();
     let mut notifier = Notifier::default();
@@ -749,9 +746,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
             }
         }
 
-        #[cfg(windows)]
-        let new_whea = whea.as_mut().map(|w| w.poll()).unwrap_or_default();
-        #[cfg(not(windows))]
+        // Hardware error events aren't watched on Linux yet.
         let new_whea: Vec<WheaEvent> = Vec::new();
 
         let mut snap = shared.snapshot.lock().unwrap_or_else(|e| e.into_inner());

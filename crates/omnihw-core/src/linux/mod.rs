@@ -1,8 +1,7 @@
 //! Linux data sources: sysfs, procfs and udev's database.
 //!
-//! Everything reads files under a [`Root`] (`/` on a real system), so the readers compile on
-//! every platform and are unit-tested against fake trees. Only the few calls that need a syscall
-//! (e.g. free space) live in `cfg(target_os = "linux")` code.
+//! Everything reads files under a [`Root`] (`/` on a real system), so the readers are
+//! unit-tested against fake trees.
 
 pub mod block;
 pub mod dmi;
@@ -158,21 +157,17 @@ pub mod imp {
     /// DRM adapters, with NVML details (and NVML's names and VRAM) on NVIDIA cards.
     pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
         let mut gpus = super::drm::gpu_adapters(&Root::system());
-        // (Windows too, only so `gpus` is used mutably there; this never runs on Windows.)
-        #[cfg(any(windows, target_os = "linux"))]
-        {
-            crate::win::nvml::attach_details(&mut gpus);
-            for g in &mut gpus {
-                if let Some(n) = &g.nvml {
-                    if !n.name.is_empty() {
-                        g.name = n.name.clone();
-                    }
-                    if g.dedicated_vram == 0 {
-                        g.dedicated_vram = n.memory_total;
-                    }
-                    if !n.driver_version.is_empty() {
-                        g.driver_version = n.driver_version.clone();
-                    }
+        crate::win::nvml::attach_details(&mut gpus);
+        for g in &mut gpus {
+            if let Some(n) = &g.nvml {
+                if !n.name.is_empty() {
+                    g.name = n.name.clone();
+                }
+                if g.dedicated_vram == 0 {
+                    g.dedicated_vram = n.memory_total;
+                }
+                if !n.driver_version.is_empty() {
+                    g.driver_version = n.driver_version.clone();
                 }
             }
         }
@@ -203,10 +198,6 @@ pub mod imp {
     }
     /// Linux has no Windows-style power plans.
     pub fn power_plan() -> Option<PowerPlan> {
-        None
-    }
-    /// Linux builds its topology from sysfs instead; see [`super::topology::topology`].
-    pub fn topology_buffer() -> Option<Vec<u8>> {
         None
     }
     pub fn smbios_buffer() -> Option<Vec<u8>> {

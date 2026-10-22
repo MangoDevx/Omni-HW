@@ -1,6 +1,5 @@
-//! NVIDIA NVML, loaded at runtime from `nvml.dll` on Windows or `libnvidia-ml.so.1` on Linux
-//! (both ship with the driver). Absent library or missing entry points simply disable the
-//! related data.
+//! NVIDIA NVML, loaded at runtime from `libnvidia-ml.so.1` (ships with the driver). An absent
+//! library or missing entry points simply disable the related data.
 
 use crate::gpu::{GpuAdapter, NvmlDetails};
 use crate::sensors::{Reading, SensorBackend, Unit};
@@ -8,47 +7,6 @@ use lib::Lib;
 use std::ffi::c_void;
 use std::ptr;
 
-#[cfg(windows)]
-mod lib {
-    use std::ffi::{CString, c_void};
-    use windows::Win32::Foundation::HMODULE;
-    use windows::Win32::System::LibraryLoader::{
-        GetProcAddress, LOAD_LIBRARY_FLAGS, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-    };
-    use windows::core::{Owned, PCSTR, w};
-
-    /// `nvml.dll`, freed on drop.
-    pub struct Lib(Owned<HMODULE>);
-
-    impl Lib {
-        pub fn open() -> Option<Lib> {
-            // SAFETY: literal names; System32-only search avoids DLL planting, and the
-            // legacy fallback is an absolute path.
-            let lib = unsafe {
-                LoadLibraryExW(w!("nvml.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).or_else(|_| {
-                    LoadLibraryExW(
-                        w!(r"C:\Program Files\NVIDIA Corporation\NVSMI\nvml.dll"),
-                        None,
-                        LOAD_LIBRARY_FLAGS(0),
-                    )
-                })
-            }
-            .ok()?;
-            // SAFETY: the module was just loaded and is freed exactly once, when this drops.
-            Some(Lib(unsafe { Owned::new(lib) }))
-        }
-
-        /// Address of the exported symbol `name`.
-        pub fn sym(&self, name: &str) -> Option<*const c_void> {
-            let name = CString::new(name).ok()?;
-            // SAFETY: valid module and NUL-terminated name.
-            unsafe { GetProcAddress(*self.0, PCSTR(name.as_ptr().cast())) }
-                .map(|p| p as *const c_void)
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
 mod lib {
     use std::ffi::c_void;
 
@@ -75,8 +33,8 @@ mod lib {
     }
 }
 
-// NVML is a third-party driver DLL with no `windows` crate bindings, so its handle type,
-// structs and entry-point signatures below stay hand-written (from nvml.h).
+// The handle type, structs and entry-point signatures below are hand-written from nvml.h,
+// so only the entry points used here are loaded (missing ones just disable that reading).
 type Device = *mut c_void;
 type Ret = i32;
 const SUCCESS: Ret = 0;

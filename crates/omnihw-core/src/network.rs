@@ -1,7 +1,6 @@
 //! Network adapters: the data model behind the Network page, the changes it can make (encoded
 //! for the elevated helper and validated again there), and the logic of the local and internet
-//! tests. Everything here is platform-agnostic and unit-tested; the Windows calls live in
-//! `win::network`.
+//! tests. The adapter reads and changes aren't implemented on Linux yet (empty data).
 //!
 //! Nothing in this module talks to the network by itself. The local tests only contact the
 //! adapter's own gateway and DNS servers on the local network; the internet tests (see
@@ -31,10 +30,6 @@ impl NetworkInfo {
     }
 }
 
-#[cfg(windows)]
-use crate::win::network as imp;
-
-#[cfg(not(windows))]
 mod imp {
     use super::NetworkInfo;
     pub fn gather(_detailed: bool, _previous: Option<&NetworkInfo>) -> NetworkInfo {
@@ -929,16 +924,10 @@ impl NetAction {
     }
 }
 
-/// Apply a change (needs administrator rights except [`NetAction::FlushDns`]). Blocks.
-#[cfg(windows)]
+/// Apply a change. Blocks.
 pub fn apply(action: &NetAction) -> Result<(), String> {
     action.validate()?;
-    crate::win::network::apply(action)
-}
-
-#[cfg(not(windows))]
-pub fn apply(_action: &NetAction) -> Result<(), String> {
-    Err("Only supported on Windows".into())
+    Err("Not supported on Linux yet".into())
 }
 
 // ---- Tests (ping, DNS, HTTP) -------------------------------------------------------------
@@ -1302,10 +1291,6 @@ pub fn internet_results(p: &InternetProbes) -> Vec<TestLine> {
     out
 }
 
-#[cfg(windows)]
-use crate::win::network::probe as imp_probe;
-
-#[cfg(not(windows))]
 mod imp_probe {
     use super::PingStats;
     use std::net::{IpAddr, Ipv4Addr};

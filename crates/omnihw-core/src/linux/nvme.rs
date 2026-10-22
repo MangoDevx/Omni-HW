@@ -55,7 +55,6 @@ pub fn controller_of(block: &str) -> Option<&str> {
 }
 
 /// The SMART / health log of controller `ctrl` (e.g. "nvme0").
-#[cfg(target_os = "linux")]
 pub fn smart_log(ctrl: &str) -> Option<NvmeHealth> {
     use std::os::fd::AsRawFd;
     let file = std::fs::File::open(format!("/dev/{ctrl}")).ok()?;
@@ -74,11 +73,6 @@ pub fn smart_log(ctrl: &str) -> Option<NvmeHealth> {
         return None;
     }
     crate::storage::parse_nvme_health(&buf)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn smart_log(_ctrl: &str) -> Option<NvmeHealth> {
-    None
 }
 
 #[cfg(test)]

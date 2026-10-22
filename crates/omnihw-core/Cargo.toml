@@ -6,49 +6,8 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
-[target.'cfg(windows)'.dependencies]
-windows = { workspace = true, features = [
-    "Wdk_Graphics_Direct3D",
-    "Wdk_System_SystemInformation",
-    "Wdk_System_SystemServices",
-    "Win32_Devices_DeviceAndDriverInstallation",
-    "Win32_Devices_Display",
-    "Win32_Devices_Properties",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Graphics_Gdi",
-    "Win32_NetworkManagement_Dns",
-    "Win32_NetworkManagement_IpHelper",
-    "Win32_NetworkManagement_Ndis",
-    "Win32_NetworkManagement_WiFi",
-    "Win32_Networking_WinHttp",
-    "Win32_Networking_WinSock",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_Security_Authentication_Identity",
-    "Win32_Storage_FileSystem",
-    "Win32_Storage_Nvme",
-    "Win32_System_Com",
-    "Win32_System_EventLog",
-    "Win32_System_IO",
-    "Win32_System_Ioctl",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Ole",
-    "Win32_System_Performance",
-    "Win32_System_Pipes",
-    "Win32_System_Power",
-    "Win32_System_Registry",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-    "Win32_System_Time",
-    "Win32_System_TpmBaseServices",
-    "Win32_System_Variant",
-    "Win32_System_WindowsProgramming",
-    "Win32_System_Wmi",
-] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# ioctl for the NVMe SMART log.
+[dependencies]
+# ioctls (NVMe SMART log), CPU affinity for the memory test.
 libc = "0.2"
 # dlopen for NVIDIA's libnvidia-ml.so.1.
 libloading = "0.8"

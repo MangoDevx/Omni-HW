@@ -1,6 +1,6 @@
 //! Quick disk speed self-test: sequential and 4K random read/write through a temporary file,
-//! compared with what the drive and its link should deliver. The I/O itself is in
-//! `win::disktest`; this module picks the target, sizes the test and judges the result.
+//! compared with what the drive and its link should deliver. This module picks the target,
+//! sizes the test and judges the result; the I/O itself isn't implemented on Linux yet.
 
 use crate::checkup::PcieLink;
 use crate::storage::{BusType, Drive, Volume, sata_gen_speed};
@@ -311,19 +311,6 @@ pub(crate) struct Speeds {
     pub rnd_write: f64,
 }
 
-#[cfg(windows)]
-fn measure(
-    path: &std::path::Path,
-    mount: &str,
-    bytes: u64,
-    need_free: u64,
-    cap: Duration,
-    progress: &Progress,
-) -> Result<Speeds, String> {
-    crate::win::disktest::measure(path, mount, bytes, need_free, cap, progress)
-}
-
-#[cfg(not(windows))]
 fn measure(
     _: &std::path::Path,
     _: &str,
@@ -332,7 +319,7 @@ fn measure(
     _: Duration,
     _: &Progress,
 ) -> Result<Speeds, String> {
-    Err("The disk speed test is only available on Windows".into())
+    Err("The disk speed test isn't available on Linux yet".into())
 }
 
 #[cfg(test)]

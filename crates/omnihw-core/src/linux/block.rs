@@ -113,18 +113,12 @@ pub fn bus_type(name: &str, props: &[(String, String)]) -> BusType {
 }
 
 /// Free and total bytes of the file system mounted at `path`.
-#[cfg(target_os = "linux")]
 fn space(path: &str) -> Option<(u64, u64)> {
     let s = rustix::fs::statvfs(path).ok()?;
     Some((
         s.f_bavail.saturating_mul(s.f_frsize),
         s.f_blocks.saturating_mul(s.f_frsize),
     ))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn space(_: &str) -> Option<(u64, u64)> {
-    None
 }
 
 /// Device nodes that can carry `part`'s file system: the partition itself plus any

@@ -198,8 +198,8 @@ pub fn run(ctx: &Context) -> Vec<CheckResult> {
         .iter()
         .chain(power::CHECKS)
         .map(|&(name, category, check)| {
-            // Unit tests run every check on every platform.
-            if cfg!(not(any(windows, test))) && !LINUX_CHECKS.contains(&name) {
+            // Unit tests run every check, including the ones not used on Linux yet.
+            if cfg!(not(test)) && !LINUX_CHECKS.contains(&name) {
                 return CheckResult {
                     name,
                     category,

@@ -147,48 +147,24 @@ fn main() {
         println!("warning: {w}");
     }
 
-    #[cfg(windows)]
     {
+        use omnihw_core::linux::Root;
+        use omnihw_core::linux::sensors::{
+            CpuBackend, DrmGpuBackend, HwmonBackend, MemoryBackend, StorageBackend,
+        };
         use omnihw_core::sensors::{SensorBackend, SensorTable};
         use omnihw_core::win::nvml::NvmlBackend;
-        use omnihw_core::win::perf::{CpuPerfBackend, GpuPerfBackend, MemoryBackend};
-        let mut backends: Vec<Box<dyn SensorBackend>> = vec![Box::new(MemoryBackend)];
-        match GpuPerfBackend::new(&info.gpus) {
-            Ok(b) => backends.push(Box::new(b)),
-            Err(e) => println!("warning: {e}"),
-        }
+        let mut backends: Vec<Box<dyn SensorBackend>> = vec![
+            Box::new(CpuBackend::new(Root::system(), info.topology.as_ref())),
+            Box::new(HwmonBackend::new(Root::system(), info.topology.as_ref())),
+            Box::new(MemoryBackend {
+                root: Root::system(),
+            }),
+            Box::new(StorageBackend::new(Root::system(), &info.drives)),
+            Box::new(DrmGpuBackend::new(Root::system(), &info.gpus)),
+        ];
         if let Some(b) = NvmlBackend::new(&info.gpus) {
             backends.push(Box::new(b));
-        }
-        backends.push(Box::new(omnihw_core::win::storage::StorageBackend::new(
-            &info.drives,
-        )));
-        match CpuPerfBackend::new(info.base_mhz.unwrap_or(0), info.topology.as_ref()) {
-            Ok(b) => backends.push(Box::new(b)),
-            Err(e) => println!("warning: {e}"),
-        }
-        let pawnio = omnihw_core::win::pawnio::status();
-        println!("PawnIO: {pawnio:?}");
-        let service = omnihw_core::win::pawnio::service_status();
-        println!("Sensor service: {:?}", service.state);
-        if matches!(
-            service.state,
-            omnihw_core::sensor_service::ServiceState::Ready { .. }
-        ) {
-            backends.push(Box::new(omnihw_core::win::pawnio::ServiceBackend));
-        } else if pawnio.state == omnihw_core::lowlevel::PawnioState::Ready {
-            use omnihw_core::win::pawnio::{CpuMsrBackend, SuperIoBackend};
-            match CpuMsrBackend::new(&info.cpu, info.topology.as_ref()) {
-                Ok(b) => backends.push(Box::new(b)),
-                Err(e) => println!("warning: PawnIO CPU: {e}"),
-            }
-            match SuperIoBackend::new() {
-                Ok(b) => {
-                    println!("Super I/O: {}", b.chips().join(", "));
-                    backends.push(Box::new(b));
-                }
-                Err(e) => println!("warning: PawnIO Super I/O: {e}"),
-            }
         }
         let mut table = SensorTable::default();
         for _ in 0..3 {
