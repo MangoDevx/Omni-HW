@@ -11,8 +11,8 @@ rust-version.workspace = true
 hex = "0.4"
 # ioctls (NVMe SMART log), CPU affinity for the memory test.
 libc = "0.2"
-# dlopen for NVIDIA's libnvidia-ml.so.1.
-libloading = "0.8"
+# NVIDIA NVML (GPU details and sensors), loaded at runtime from the driver's libnvidia-ml.so.1.
+nvml-wrapper = "0.13"
 # statvfs for volume free space.
 rustix = { version = "1", features = ["fs"] }
 # The systemd journal entries `journalctl --output=json` prints (Event Log page).
