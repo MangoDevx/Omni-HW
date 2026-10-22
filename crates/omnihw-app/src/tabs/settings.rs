@@ -20,6 +20,13 @@ fn temp_id(key: &str) -> egui::Id {
     egui::Id::new(("settings", key))
 }
 
+/// The theme option that follows the OS's light/dark setting.
+const SYSTEM_THEME: &str = if cfg!(windows) {
+    "Match Windows"
+} else {
+    "Match system"
+};
+
 /// Transient per-page text kept in egui memory (editing buffer, last error).
 fn temp_string(ui: &Ui, key: &str) -> String {
     temp::get(ui.ctx(), temp_id(key)).unwrap_or_default()
@@ -74,13 +81,13 @@ pub fn show(
                 ui.label("Theme");
                 egui::ComboBox::from_id_salt("theme")
                     .selected_text(match s.theme {
-                        Theme::System => "Match Windows",
+                        Theme::System => SYSTEM_THEME,
                         Theme::Dark => "Dark",
                         Theme::Light => "Light",
                         Theme::Retro => "Retro (2000s)",
                     })
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut s.theme, Theme::System, "Match Windows");
+                        ui.selectable_value(&mut s.theme, Theme::System, SYSTEM_THEME);
                         ui.selectable_value(&mut s.theme, Theme::Dark, "Dark");
                         ui.selectable_value(&mut s.theme, Theme::Light, "Light");
                         ui.selectable_value(&mut s.theme, Theme::Retro, "Retro (2000s)");
@@ -137,11 +144,18 @@ pub fn show(
                     });
                 ui.end_row();
 
-                ui.label("Windows startup");
+                ui.label(if cfg!(windows) { "Windows startup" } else { "Startup" });
                 ui.vertical(|ui| {
                     let mut launch = s.launch_at_startup;
                     let mut minimized = s.start_minimized;
-                    let a = ui.checkbox(&mut launch, "Launch Omni-HW when I sign in to Windows");
+                    let a = ui.checkbox(
+                        &mut launch,
+                        if cfg!(windows) {
+                            "Launch Omni-HW when I sign in to Windows"
+                        } else {
+                            "Launch Omni-HW when I sign in"
+                        },
+                    );
                     let b = ui
                         .add_enabled(launch, egui::Checkbox::new(&mut minimized, "Start minimized"));
                     if a.changed() || b.changed() {
@@ -158,28 +172,33 @@ pub fn show(
                     if !err.is_empty() {
                         ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), err);
                     }
-                    ui.weak("Launches at sign-in never show the administrator prompt.");
+                    if cfg!(windows) {
+                        ui.weak("Launches at sign-in never show the administrator prompt.");
+                    }
                 });
                 ui.end_row();
 
-                ui.label("System tray");
-                ui.vertical(|ui| {
-                    ui.checkbox(&mut s.minimize_to_tray, "Minimize to the system tray");
-                    ui.weak("Minimizing hides Omni-HW next to the clock; click its icon to bring it back. Monitoring and alerts keep running.");
-                });
-                ui.end_row();
+                // The tray icon and the administrator prompt exist only on Windows so far.
+                if cfg!(windows) {
+                    ui.label("System tray");
+                    ui.vertical(|ui| {
+                        ui.checkbox(&mut s.minimize_to_tray, "Minimize to the system tray");
+                        ui.weak("Minimizing hides Omni-HW next to the clock; click its icon to bring it back. Monitoring and alerts keep running.");
+                    });
+                    ui.end_row();
 
-                ui.label("Administrator");
-                ui.vertical(|ui| {
-                    ui.checkbox(
-                        &mut s.ask_admin_at_start,
-                        "Ask for administrator rights at start when SATA drives are present",
-                    );
-                    ui.weak(
-                        "Reading SATA drive health (SMART) needs administrator rights. NVMe drives don't.",
-                    );
-                });
-                ui.end_row();
+                    ui.label("Administrator");
+                    ui.vertical(|ui| {
+                        ui.checkbox(
+                            &mut s.ask_admin_at_start,
+                            "Ask for administrator rights at start when SATA drives are present",
+                        );
+                        ui.weak(
+                            "Reading SATA drive health (SMART) needs administrator rights. NVMe drives don't.",
+                        );
+                    });
+                    ui.end_row();
+                }
             });
     });
 
@@ -205,15 +224,18 @@ pub fn show(
                 });
                 ui.end_row();
 
-                ui.label("Alert notifications");
-                ui.vertical(|ui| {
-                    ui.checkbox(
-                        &mut s.alert_notifications,
-                        "Show Windows notifications for alerts",
-                    );
-                    ui.weak("Fired alerts always appear in the app; this controls the Windows notification and taskbar flash.");
-                });
-                ui.end_row();
+                // Notifications and the taskbar flash are Windows-only so far.
+                if cfg!(windows) {
+                    ui.label("Alert notifications");
+                    ui.vertical(|ui| {
+                        ui.checkbox(
+                            &mut s.alert_notifications,
+                            "Show Windows notifications for alerts",
+                        );
+                        ui.weak("Fired alerts always appear in the app; this controls the Windows notification and taskbar flash.");
+                    });
+                    ui.end_row();
+                }
             });
     });
 
@@ -304,17 +326,22 @@ pub fn show(
         }
     });
 
-    group(ui, "Extra sensors (PawnIO)", |ui| {
-        pawnio_group(ui, s, sampler, pawnio)
-    });
+    // PawnIO is a Windows driver.
+    if cfg!(windows) {
+        group(ui, "Extra sensors (PawnIO)", |ui| {
+            pawnio_group(ui, s, sampler, pawnio)
+        });
+    }
 
     group(ui, "Updates", |ui| {
         ui.horizontal_wrapped(|ui| {
             let status = updates.status();
             let checking = status == Status::Checking;
-            if ui
-                .add_enabled(!checking, egui::Button::new("Check for updates"))
-                .clicked()
+            // The check uses WinHTTP; Linux only gets the release notes link so far.
+            if cfg!(windows)
+                && ui
+                    .add_enabled(!checking, egui::Button::new("Check for updates"))
+                    .clicked()
             {
                 updates.start(ui.ctx());
             }
@@ -357,6 +384,9 @@ pub fn show(
                 }
             }
         });
+        if !cfg!(windows) {
+            return;
+        }
         ui.checkbox(
             &mut s.check_updates_at_start,
             "Check for updates when Omni-HW starts",
