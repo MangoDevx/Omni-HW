@@ -2,7 +2,6 @@
 //! (after the editor and confirmation dialogs) run on worker threads by [`dispatch`], outside
 //! the snapshot lock.
 
-use crate::elevate::elevated;
 use crate::sampler::Sampler;
 use crate::tabs::temp;
 use egui::{Id, RichText, Ui};
@@ -20,29 +19,19 @@ const AUTO_RAN: &str = "net_auto_ran";
 /// A change that needs input first, edited in a dialog.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Editor {
-    Rename {
-        guid: String,
-        name: String,
-        text: String,
-    },
     Ip {
-        if_index: u32,
         name: String,
         dhcp: bool,
-        /// The adapter is connected: Windows only applies a fixed address then.
-        connected: bool,
         ip: String,
         mask: String,
         gateway: String,
     },
     Dns {
-        if_index: u32,
         name: String,
         auto: bool,
         text: String,
     },
     Mtu {
-        if_index: u32,
         name: String,
         text: String,
     },
@@ -51,7 +40,6 @@ pub enum Editor {
 impl Editor {
     fn title(&self) -> String {
         match self {
-            Editor::Rename { name, .. } => format!("Rename \"{name}\""),
             Editor::Ip { name, .. } => format!("IPv4 address of {name}"),
             Editor::Dns { name, .. } => format!("DNS servers of {name}"),
             Editor::Mtu { name, .. } => format!("MTU of {name}"),
@@ -61,26 +49,16 @@ impl Editor {
     /// The action this editor describes, or why it's not valid yet.
     fn action(&self) -> Result<NetAction, String> {
         let a = match self.clone() {
-            Editor::Rename { guid, name, text } => NetAction::Rename {
-                guid,
-                name,
-                new_name: text.trim().to_string(),
-            },
             Editor::Ip {
-                if_index,
-                name,
-                dhcp: true,
-                ..
-            } => NetAction::Dhcp { if_index, name },
+                name, dhcp: true, ..
+            } => NetAction::Dhcp { name },
             Editor::Ip {
-                if_index,
                 name,
                 ip,
                 mask,
                 gateway,
                 ..
             } => NetAction::StaticIp {
-                if_index,
                 name,
                 ip: ip
                     .trim()
@@ -98,13 +76,7 @@ impl Editor {
                     ),
                 },
             },
-            Editor::Dns {
-                if_index,
-                name,
-                auto,
-                text,
-            } => NetAction::Dns {
-                if_index,
+            Editor::Dns { name, auto, text } => NetAction::Dns {
                 name,
                 servers: if auto {
                     Vec::new()
@@ -116,12 +88,7 @@ impl Editor {
                     list
                 },
             },
-            Editor::Mtu {
-                if_index,
-                name,
-                text,
-            } => NetAction::Mtu {
-                if_index,
+            Editor::Mtu { name, text } => NetAction::Mtu {
                 name,
                 mtu: text.trim().parse().map_err(|_| {
                     format!(
@@ -155,48 +122,14 @@ fn take_flag(ctx: &egui::Context, key: &str) -> bool {
     temp::take::<bool>(ctx, Id::new(key)).unwrap_or(false)
 }
 
-pub(super) fn admin_hint(a: &NetAction) -> &'static str {
-    if a.needs_admin() && !elevated() {
-        "Asks for administrator permission"
-    } else {
-        "Applies the change after you confirm"
-    }
-}
-
 /// A button that requests `action`.
 pub(super) fn action_button(ui: &mut Ui, text: &str, action: NetAction, hover: &str) {
-    let hint = admin_hint(&action);
     if ui
         .button(text)
-        .on_hover_text(format!("{hover}\n{hint}"))
+        .on_hover_text(format!("{hover}\nApplies the change after you confirm"))
         .clicked()
     {
         request(ui.ctx(), action);
-    }
-}
-
-/// Like [`action_button`] for an action that needs administrator rights, but builds the action
-/// only when the button is clicked, so drawing a frame allocates nothing.
-pub(super) fn lazy_action_button(
-    ui: &mut Ui,
-    text: &str,
-    hover: &str,
-    make: impl FnOnce() -> NetAction,
-) {
-    let hint = if elevated() {
-        "Applies the change after you confirm"
-    } else {
-        "Asks for administrator permission"
-    };
-    if ui
-        .button(text)
-        .on_hover_text(format!(
-            "{hover}
-{hint}"
-        ))
-        .clicked()
-    {
-        request(ui.ctx(), make());
     }
 }
 
@@ -210,29 +143,15 @@ fn editor_dialog(ctx: &egui::Context, mut ed: Editor) -> Option<NetAction> {
         ui.label(RichText::new(ed.title()).size(16.0).strong());
         ui.add_space(6.0);
         match &mut ed {
-            Editor::Rename { text, .. } => {
-                ui.label("New name");
-                ui.text_edit_singleline(text);
-            }
             Editor::Ip {
                 dhcp,
-                connected,
                 ip,
                 mask,
                 gateway,
                 ..
             } => {
-                if !*connected {
-                    *dhcp = true;
-                }
                 ui.radio_value(dhcp, true, "Get an IP address automatically (DHCP)");
-                ui.add_enabled_ui(*connected, |ui| {
-                    ui.radio_value(dhcp, false, "Use this IP address:");
-                })
-                .response
-                .on_disabled_hover_text(
-                    "Connect the adapter first: Windows only applies a fixed address to a connected adapter.",
-                );
+                ui.radio_value(dhcp, false, "Use this IP address:");
                 ui.add_enabled_ui(!*dhcp, |ui| {
                     egui::Grid::new("net_ip_grid")
                         .num_columns(2)
@@ -340,18 +259,9 @@ pub fn dispatch(ctx: &egui::Context, sampler: &Sampler, page_open: bool) -> Opti
             ui.label(RichText::new(a.label()).size(16.0).strong());
             ui.add_space(6.0);
             ui.add(egui::Label::new(a.confirm_text()).wrap());
-            if a.needs_restart() {
+            if a.interface().is_some() {
                 ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "Restart required: Windows must restart for this to take effect.",
-                    )
-                    .color(crate::heat::ORANGE),
-                );
-            }
-            if a.needs_admin() && !elevated() {
-                ui.add_space(4.0);
-                ui.weak("Windows will ask for administrator permission.");
+                ui.weak("The change is saved in the interface's NetworkManager connection.");
             }
             ui.add_space(10.0);
             ui.horizontal(|ui| {
@@ -380,17 +290,15 @@ mod tests {
     #[test]
     fn editors_build_valid_actions() {
         let ip = |dhcp: bool, ip: &str, mask: &str, gw: &str| Editor::Ip {
-            if_index: 7,
-            name: "Ethernet".into(),
+            name: "enp5s0".into(),
             dhcp,
-            connected: true,
             ip: ip.into(),
             mask: mask.into(),
             gateway: gw.into(),
         };
         assert!(matches!(
             ip(true, "", "", "").action(),
-            Ok(NetAction::Dhcp { if_index: 7, .. })
+            Ok(NetAction::Dhcp { .. })
         ));
         let Ok(NetAction::StaticIp {
             prefix, gateway, ..
@@ -414,8 +322,7 @@ mod tests {
         );
 
         let dns = |auto: bool, text: &str| Editor::Dns {
-            if_index: 7,
-            name: "Wi-Fi".into(),
+            name: "wlp6s0".into(),
             auto,
             text: text.into(),
         };
@@ -429,21 +336,11 @@ mod tests {
         assert!(dns(false, "1.1.1.1, x").action().is_err());
 
         let mtu = |t: &str| Editor::Mtu {
-            if_index: 7,
-            name: "Ethernet".into(),
+            name: "enp5s0".into(),
             text: t.into(),
         };
         assert!(mtu("1500").action().is_ok());
         assert!(mtu("100").action().is_err());
         assert!(mtu("abc").action().is_err());
-
-        let rename = |t: &str| Editor::Rename {
-            guid: "{4D36E972-E325-11CE-BFC1-08002BE10318}".into(),
-            name: "Ethernet".into(),
-            text: t.into(),
-        };
-        assert!(rename("Desk LAN").action().is_ok());
-        assert!(rename("a:b").action().is_err());
-        assert!(rename("   ").action().is_err());
     }
 }

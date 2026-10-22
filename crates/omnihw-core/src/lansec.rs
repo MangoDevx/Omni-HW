@@ -14,7 +14,7 @@
 //!
 //! The pure logic here (subnet enumeration, port table, banner tidy-up, vendor lookup and
 //! [`analyze`]) is platform-agnostic and unit-tested. The parts that touch the network —
-//! ICMP liveness, the neighbour (ARP) table and reverse DNS — live in [`imp`] (Windows), and
+//! ICMP liveness, the neighbour (ARP) table and reverse DNS — live in [`imp`] (see [`crate::linux::netprobe`]), and
 //! the TCP connect/banner step uses the standard library so it works anywhere.
 
 use crate::network::{Adapter, Status, is_local};
@@ -236,7 +236,7 @@ pub struct Finding {
 /// Read-only facts about this PC's own posture, folded into the findings.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LocalPosture {
-    /// The SMBv1 client/server is installed and enabled (an old, insecure protocol).
+    /// The Samba server accepts the old, insecure SMBv1 protocol.
     pub smb1_enabled: Option<bool>,
 }
 
@@ -563,6 +563,7 @@ fn clean(s: &str) -> String {
 
 /// Help links (open in the user's own browser; the app makes no request).
 const HELP_SMB1: &str = "https://learn.microsoft.com/windows-server/storage/file-server/troubleshoot/detect-enable-and-disable-smbv1-v2-v3";
+const HELP_SAMBA: &str = "https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html";
 const HELP_ROUTER: &str = "https://www.cisa.gov/news-events/news/home-network-security";
 const HELP_TELNET: &str = "https://www.google.com/search?q=disable+telnet+on+my+router";
 const HELP_RDP: &str = "https://learn.microsoft.com/windows-server/remote/remote-desktop-services/clients/remote-desktop-allow-access";
@@ -580,11 +581,12 @@ pub fn analyze(subnets: &[SubnetScan], local: &LocalPosture) -> Vec<Finding> {
             severity: Severity::High,
             host: "This PC".into(),
             title: "SMBv1 is enabled".into(),
-            detail: "This PC still has the old SMBv1 file-sharing protocol turned on. It is \
-                insecure and was used by WannaCry and NotPetya. Turn off the \"SMB 1.0/CIFS \
-                File Sharing Support\" Windows feature unless a very old device needs it."
+            detail: "This PC's Samba server still accepts the old SMBv1 file-sharing protocol. \
+                It is insecure and was used by WannaCry and NotPetya. In /etc/samba/smb.conf, set \
+                \"server min protocol = SMB2\" under [global] (or remove the line) and restart \
+                Samba (sudo systemctl restart smbd), unless a very old device needs it."
                 .into(),
-            help_url: HELP_SMB1,
+            help_url: HELP_SAMBA,
         });
     }
 
@@ -803,23 +805,58 @@ pub fn vendor_from_mac(mac: &str) -> Option<&'static str> {
         .map(|(_, name)| *name)
 }
 
+/// Does this `smb.conf` let the Samba server speak SMBv1? Samba 4.11 and newer default to
+/// SMB2, so only an explicit `server min protocol` (or `min protocol`) below SMB2 enables it.
+pub fn samba_allows_smb1(conf: &str) -> bool {
+    let mut global = true;
+    conf.lines().any(|l| {
+        let l = l.trim();
+        if l.starts_with('[') {
+            global = l.eq_ignore_ascii_case("[global]");
+            return false;
+        }
+        let Some((k, v)) = l.split_once('=') else {
+            return false;
+        };
+        let k = k.trim().to_ascii_lowercase();
+        let v = v.trim().to_ascii_uppercase();
+        global
+            && (k == "server min protocol" || k == "min protocol")
+            && matches!(
+                v.as_str(),
+                "NT1" | "CORE" | "COREPLUS" | "LANMAN1" | "LANMAN2"
+            )
+    })
+}
+
 // ---- Platform backend -----------------------------------------------------------------------
 
 mod imp {
     use super::LocalPosture;
+    use crate::linux::{Root, netprobe};
     use std::net::Ipv4Addr;
 
-    pub fn alive(_ip: Ipv4Addr, _scope: u32) -> bool {
-        false
+    /// Is `ip` alive? One ICMP echo with a short timeout.
+    pub fn alive(ip: Ipv4Addr, scope: u32) -> bool {
+        netprobe::ping_series(std::net::IpAddr::V4(ip), scope, 1, 0).received() > 0
     }
+
+    /// The IPv4 neighbour (ARP) table: (address, 6-byte MAC).
     pub fn neighbours() -> Vec<(Ipv4Addr, [u8; 6])> {
-        Vec::new()
+        netprobe::neighbours(&Root::system())
     }
-    pub fn reverse_dns(_ip: Ipv4Addr) -> String {
-        String::new()
+
+    /// Reverse-DNS name for `ip` (empty if none).
+    pub fn reverse_dns(ip: Ipv4Addr) -> String {
+        netprobe::reverse_dns(ip).unwrap_or_default()
     }
+
+    /// Read-only posture checks on this PC.
     pub fn local_posture() -> LocalPosture {
-        LocalPosture::default()
+        let conf = Root::system().read("/etc/samba/smb.conf");
+        LocalPosture {
+            smb1_enabled: conf.as_deref().map(super::samba_allows_smb1),
+        }
     }
 }
 
@@ -885,6 +922,19 @@ mod tests {
         assert_eq!(vendor_from_mac("b827eb123456"), Some("Raspberry Pi"));
         assert_eq!(vendor_from_mac("00-11-22-33-44-55"), None);
         assert_eq!(vendor_from_mac("short"), None);
+    }
+
+    #[test]
+    fn samba_smb1() {
+        assert!(!samba_allows_smb1("[global]\n   workgroup = WORKGROUP\n"));
+        assert!(samba_allows_smb1("[global]\n  server min protocol = NT1\n"));
+        assert!(samba_allows_smb1("[global]\nmin protocol=lanman2\n"));
+        assert!(!samba_allows_smb1(
+            "[global]\nserver min protocol = SMB2_02\n"
+        ));
+        assert!(!samba_allows_smb1(
+            "[share]\nmin protocol = NT1\n# server min protocol = NT1\n"
+        ));
     }
 
     #[test]

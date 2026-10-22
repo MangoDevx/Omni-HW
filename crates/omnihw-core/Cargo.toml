@@ -17,8 +17,12 @@ hex = "0.4"
 libc = "0.2"
 # NVIDIA NVML (GPU details and sensors), loaded at runtime from the driver's libnvidia-ml.so.1.
 nvml-wrapper = "0.13"
+# ICMP echo for the Network page tests and the LAN scan (unprivileged datagram sockets).
+ping = { version = "0.10", default-features = false }
 # statvfs for volume free space.
 rustix = { version = "1", features = ["fs"] }
+# DNS query packets for the Network page tests and reverse names in the LAN scan.
+simple-dns = "0.12"
 # The systemd journal entries `journalctl --output=json` prints (Event Log page).
 serde_json = "1"
 

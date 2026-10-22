@@ -114,12 +114,6 @@ impl Tab {
         }
     }
 
-    /// Whether the page works yet. The pages still being ported stay in the navigation but
-    /// show a notice instead.
-    pub fn supported(self) -> bool {
-        !matches!(self, Tab::Network | Tab::LanSecurity)
-    }
-
     pub fn from_key(key: &str) -> Option<Tab> {
         Tab::ALL
             .into_iter()
@@ -927,9 +921,6 @@ impl eframe::App for OmniApp {
             egui::ScrollArea::vertical()
                 .auto_shrink(false)
                 .show(ui, |ui| {
-                    if !self.tab.supported() {
-                        return tabs::unsupported(ui, self.tab.name());
-                    }
                     if self.tab == Tab::Alerts {
                         // Takes the snapshot lock itself.
                         return tabs::alerts::show(ui, info, &self.sampler, &mut self.alerts_view);

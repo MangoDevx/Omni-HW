@@ -132,6 +132,10 @@ fn check_description(name: &str) -> &'static str {
         "Ethernet link speed" => {
             "Wired network connected at 100 Mbps or less (a bad cable or port), or below the adapter's maximum (e.g. 1 Gbps on a 2.5 Gbps adapter, a suggestion)."
         }
+        "Network address (DHCP and DNS)" => {
+            "A connected adapter with only a self-assigned 169.254.x.x address (no DHCP), an IP address conflict, or no DNS servers."
+        }
+        "Wi-Fi signal" => "Wi-Fi signal below 40 %, with tips for 2.4 GHz connections.",
         "Secure Boot, TPM and UEFI boot" => {
             "Legacy (CSM) boot, Secure Boot off or no TPM 2.0, as notes: Linux runs fine without them, but they protect the boot chain."
         }

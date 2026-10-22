@@ -11,6 +11,7 @@ mod gpu;
 mod helpers;
 mod linux;
 mod memory;
+mod network;
 mod storage;
 mod system;
 #[cfg(test)]
@@ -139,6 +140,12 @@ const CHECKS: &[(&str, Category, Check)] = &[
         Category::Network,
         system::ethernet_speed,
     ),
+    (
+        "Network address (DHCP and DNS)",
+        Category::Network,
+        network::addresses,
+    ),
+    ("Wi-Fi signal", Category::Network, network::wifi_signal),
     (
         "Secure Boot, TPM and UEFI boot",
         Category::System,

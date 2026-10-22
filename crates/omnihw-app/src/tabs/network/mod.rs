@@ -1,8 +1,7 @@
-//! Network page: every adapter Network Connections shows, with its link, addresses, Wi-Fi and
-//! driver details; changes (enable/disable, rename, IP, DNS, MTU, release/renew, driver
-//! properties, DNS flush and stack resets); and the local and internet tests. The page only
-//! reads the snapshot; changes and tests are requested here and run by `dispatch` on worker
-//! threads.
+//! Network page: every network interface with its link, addresses, Wi-Fi and driver details;
+//! changes through NetworkManager (connect/disconnect, IP, DNS, MTU, reconnect, DNS cache
+//! flush); and the local and internet tests. The page only reads the snapshot; changes and tests
+//! are requested here and run by `dispatch` on worker threads.
 
 mod actions;
 
@@ -10,10 +9,7 @@ use super::{group_box, page_title, pill};
 use crate::heat::{BLUE, GREEN, ORANGE, RED};
 use crate::sampler::{Snapshot, TestRun};
 pub use actions::dispatch;
-use actions::{
-    Editor, INTERNET_TESTS, LOCAL_TESTS, REFRESH, action_button, edit, flag, lazy_action_button,
-};
-use egui::collapsing_header::CollapsingState;
+use actions::{Editor, INTERNET_TESTS, LOCAL_TESTS, REFRESH, action_button, edit, flag};
 use egui::{Color32, RichText, Ui};
 use omnihw_core::checkup::format_link_speed;
 use omnihw_core::network::{
@@ -43,7 +39,7 @@ pub fn show(ui: &mut Ui, snap: &Snapshot) {
         return;
     };
     ui.weak(
-        "Details refresh every few seconds while this page is open. Changes ask for confirmation, and Windows asks for administrator permission.",
+        "Details refresh every few seconds while this page is open. Changes go through NetworkManager after you confirm them; no password is needed for your own session.",
     );
     ui.add_space(8.0);
     if n.adapters.is_empty() {
@@ -116,9 +112,9 @@ fn rows(a: &Adapter) -> Vec<(&'static str, String)> {
     if let Some(w) = &a.wifi {
         r.push((
             "Wi-Fi network",
-            w.ssid.clone().unwrap_or_else(|| {
-                "(hidden: turn on location access for apps in Windows Settings to see it)".into()
-            }),
+            w.ssid
+                .clone()
+                .unwrap_or_else(|| "(install iw to see it)".into()),
         ));
         let mut band = w.band.map(|b| b.name().to_string()).unwrap_or_default();
         if let Some(c) = w.channel {
@@ -177,7 +173,7 @@ fn adapter_card(ui: &mut Ui, a: &Adapter) {
                 pill(ui, "No DHCP address", ORANGE, true);
             }
         });
-        egui::Grid::new(("net_rows", &a.guid))
+        egui::Grid::new(("net_rows", &a.name))
             .num_columns(2)
             .spacing([16.0, 3.0])
             .show(ui, |ui| {
@@ -189,40 +185,27 @@ fn adapter_card(ui: &mut Ui, a: &Adapter) {
             });
         ui.add_space(4.0);
         changes(ui, a);
-        advanced(ui, a);
     });
     ui.add_space(8.0);
 }
 
 fn changes(ui: &mut Ui, a: &Adapter) {
-    let idx = a.if_index;
+    let name = || a.name.clone();
     ui.horizontal_wrapped(|ui| {
-        if a.status == Status::Disabled {
-            lazy_action_button(ui, "Enable", "Turn this adapter back on", || {
-                NetAction::Enable {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                }
-            });
-        } else {
-            lazy_action_button(ui, "Disable", "Turn this adapter off", || {
-                NetAction::Disable {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                }
-            });
-        }
-        if ui.button("Rename...").clicked() {
-            edit(
-                ui.ctx(),
-                Editor::Rename {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                    text: a.name.clone(),
-                },
+        if a.status == Status::Up {
+            action_button(
+                ui,
+                "Disconnect",
+                NetAction::Disconnect { name: name() },
+                "Deactivate this interface's connection",
             );
-        }
-        if a.status == Status::Disabled || idx == 0 {
+        } else {
+            action_button(
+                ui,
+                "Connect",
+                NetAction::Connect { name: name() },
+                "Bring the interface up and connect it",
+            );
             return;
         }
         if ui
@@ -238,10 +221,8 @@ fn changes(ui: &mut Ui, a: &Adapter) {
             edit(
                 ui.ctx(),
                 Editor::Ip {
-                    if_index: idx,
-                    name: a.name.clone(),
+                    name: name(),
                     dhcp: a.dhcp_enabled,
-                    connected: a.status == Status::Up,
                     ip: first.map(|e| e.addr.to_string()).unwrap_or_default(),
                     mask: first
                         .map(|e| omnihw_core::network::prefix_mask(e.prefix).to_string())
@@ -264,8 +245,7 @@ fn changes(ui: &mut Ui, a: &Adapter) {
             edit(
                 ui.ctx(),
                 Editor::Dns {
-                    if_index: idx,
-                    name: a.name.clone(),
+                    name: name(),
                     auto: !a.dns_static,
                     text: v4.join(", "),
                 },
@@ -275,96 +255,20 @@ fn changes(ui: &mut Ui, a: &Adapter) {
             edit(
                 ui.ctx(),
                 Editor::Mtu {
-                    if_index: idx,
-                    name: a.name.clone(),
+                    name: name(),
                     text: a.mtu.unwrap_or(1500).to_string(),
                 },
             );
         }
-        if a.dhcp_enabled && a.status == Status::Up {
-            lazy_action_button(
+        if a.dhcp_enabled {
+            action_button(
                 ui,
-                "Release",
-                "Give up the DHCP address (ipconfig /release)",
-                || NetAction::Release {
-                    if_index: idx,
-                    name: a.name.clone(),
-                },
-            );
-        }
-        if a.dhcp_enabled && a.status == Status::Up {
-            lazy_action_button(
-                ui,
-                "Renew",
-                "Ask the DHCP server for an address again (ipconfig /renew)",
-                || NetAction::Renew {
-                    if_index: idx,
-                    name: a.name.clone(),
-                },
+                "Reconnect",
+                NetAction::Reconnect { name: name() },
+                "Activate the connection again, which renews the DHCP lease",
             );
         }
     });
-}
-
-fn advanced(ui: &mut Ui, a: &Adapter) {
-    if a.advanced.is_empty() {
-        return;
-    }
-    let id = ui.make_persistent_id(("net_advanced", &a.guid));
-    CollapsingState::load_with_default_open(ui.ctx(), id, false)
-        .show_header(ui, |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Advanced driver properties ({})",
-                    a.advanced.len()
-                ))
-                .strong(),
-            );
-        })
-        .body(|ui| {
-            ui.weak("Changing one restarts the adapter, so the connection drops for a few seconds. Values without a list can be changed in Device Manager.");
-            egui::Grid::new(("net_adv_grid", &a.guid))
-                .num_columns(2)
-                .striped(true)
-                .spacing([16.0, 3.0])
-                .show(ui, |ui| {
-                    for p in &a.advanced {
-                        ui.label(&p.display_name).on_hover_text(&p.keyword);
-                        if p.choices.is_empty() {
-                            ui.label(RichText::new(&p.display_value).strong());
-                        } else {
-                            let mut chosen: Option<(String, String)> = None;
-                            egui::ComboBox::from_id_salt(("net_adv", &a.guid, &p.keyword))
-                                .selected_text(&p.display_value)
-                                .show_ui(ui, |ui| {
-                                    for (value, display) in &p.choices {
-                                        if ui
-                                            .selectable_label(*value == p.value, display)
-                                            .clicked()
-                                            && *value != p.value
-                                        {
-                                            chosen = Some((value.clone(), display.clone()));
-                                        }
-                                    }
-                                });
-                            if let Some((value, display)) = chosen {
-                                actions::request(
-                                    ui.ctx(),
-                                    NetAction::Advanced {
-                                        guid: a.guid.clone(),
-                                        name: a.name.clone(),
-                                        keyword: p.keyword.clone(),
-                                        value,
-                                        display_name: p.display_name.clone(),
-                                        display_value: display,
-                                    },
-                                );
-                            }
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
 }
 
 fn verdict_pill(ui: &mut Ui, v: Verdict) {
@@ -472,28 +376,13 @@ fn tools(ui: &mut Ui, busy: bool) {
         8.0,
         |ui| {
             ui.add_enabled_ui(!busy, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    action_button(
-                        ui,
-                        "Flush DNS cache",
-                        NetAction::FlushDns,
-                        "Forget cached name lookups (ipconfig /flushdns)",
-                    );
-                    action_button(
-                        ui,
-                        "Reset Winsock",
-                        NetAction::ResetWinsock,
-                        "netsh winsock reset. Restart required.",
-                    );
-                    action_button(
-                        ui,
-                        "Reset TCP/IP",
-                        NetAction::ResetTcpIp,
-                        "netsh int ip reset. Restart required.",
-                    );
-                });
+                action_button(
+                    ui,
+                    "Flush DNS cache",
+                    NetAction::FlushDns,
+                    "Forget cached name lookups (resolvectl flush-caches)",
+                );
             });
-            ui.weak("The resets fix \"connected but no internet\" problems left by VPN or security software; Windows must restart afterwards.");
         },
     );
 }

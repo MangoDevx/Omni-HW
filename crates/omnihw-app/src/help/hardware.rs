@@ -80,28 +80,28 @@ pub(super) fn hardware(ui: &mut Ui) {
 pub(super) fn network(ui: &mut Ui) {
     p(
         ui,
-        "The Network page lists every adapter Windows shows in Network Connections. It works fully offline: \
-         details are read from Windows, and nothing is sent anywhere unless you click Run internet tests.",
+        "The Network page lists every network interface except loopback (and the per-container veth \
+         interfaces Docker creates). It works fully offline: details are read from the kernel and \
+         NetworkManager, and nothing is sent anywhere unless you click Run internet tests.",
     );
     h(ui, "What it shows");
     bullets(
         ui,
         &[
-            "Status (connected, disconnected, disabled), adapter model, type (Ethernet, Wi-Fi, virtual), MAC address and driver version and date.",
+            "Status (connected, disconnected, down), adapter model, type (Ethernet, Wi-Fi, tunnel/VPN, virtual), MAC address and kernel driver.",
             "Link speed and duplex, plus the fastest speed the adapter supports when it's linked slower.",
-            "IPv4 and IPv6 addresses (with DHCP lease time and address conflicts), gateway, DNS servers, DHCP on/off and server, MTU and DNS suffix.",
+            "IPv4 and IPv6 addresses (with DHCP lease time and duplicate addresses), gateway, DNS servers, DHCP on/off and server, MTU and DNS search domain.",
             "Wi-Fi: network name (SSID), band (2.4 / 5 / 6 GHz), channel, signal quality and strength, Wi-Fi standard and link rates.",
-            "Advanced driver properties (Speed & Duplex, Energy-Efficient Ethernet, power saving, jumbo frames, interrupt moderation and so on), as in Device Manager.",
         ],
     );
     h(ui, "Changing settings");
     bullets(
         ui,
         &[
-            "Per adapter: Enable / Disable, Rename, IP address (automatic DHCP or a fixed IPv4 address, mask and gateway), DNS servers (automatic or your own IPv4 servers), MTU, Release and Renew.",
-            "Advanced driver properties with a list of values can be changed from their drop-down; the adapter restarts, so the connection drops for a few seconds. Free-form values are shown read-only (change them in Device Manager).",
-            "Repair tools: Flush DNS cache, Reset Winsock and Reset TCP/IP. The two resets need a restart of Windows.",
-            "Every change asks for confirmation first. Except flushing the DNS cache, they need administrator rights: Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
+            "Per interface: Connect / Disconnect, IP address (automatic DHCP or a fixed IPv4 address, mask and gateway), DNS servers (automatic or your own IPv4 servers), MTU and Reconnect (renews the DHCP lease).",
+            "Changes are saved in the interface's active NetworkManager connection, the same place the system's network settings use, so they last across restarts.",
+            "Flush DNS cache clears systemd-resolved's cache.",
+            "Every change asks for confirmation first. NetworkManager lets the signed-in user make them without a password; on some setups it asks for one.",
         ],
     );
     h(ui, "Tests");
@@ -120,9 +120,9 @@ pub(super) fn network(ui: &mut Ui) {
         ui,
         "network",
         &[
-            "Addresses and link state come from IP Helper (GetAdaptersAddresses, GetIfEntry2); Wi-Fi from the WLAN API; driver details and advanced properties from WMI (MSFT_NetAdapter). They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
-            "On Windows 11 24H2 and later the Wi-Fi network name is hidden unless location access for apps is on (Settings > Privacy & security > Location).",
-            "Changes use WMI (MSFT_NetAdapter, Win32_NetworkAdapterConfiguration, MSFT_NetIPInterface); the resets run netsh and the DNS flush runs ipconfig, without a console window.",
+            "Addresses and routes come from iproute2 (ip -j addr, ip -j route), link details from /sys/class/net, the fastest supported speed from the ethtool interface, DNS from resolvectl (or /etc/resolv.conf), Wi-Fi from iw and the DHCP server from nmcli. They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
+            "Without iw installed, Wi-Fi shows the signal level only (sudo apt install iw).",
+            "Pings use unprivileged ICMP sockets, so no root is needed. Changes run nmcli; a page change to an interface NetworkManager doesn't manage shows NetworkManager's error.",
         ],
     );
 }
@@ -142,7 +142,7 @@ pub(super) fn lan_security(ui: &mut Ui) {
             "Works out the private subnet of each connected adapter (for example 192.168.1.0/24) and refuses a range wider than a /22, so a scan stays bounded.",
             "Finds which addresses answer (a quick ping and the neighbour/ARP table), and labels each device with its MAC address, a best-effort maker, and its reverse-DNS name when it has one.",
             "Checks a short list of well-known TCP ports on each device and reads the greeting (banner) a service shows on connect. It never sends a password or anything beyond a bare request used to read the banner.",
-            "Adds a couple of read-only checks of this PC itself, such as whether the old, insecure SMBv1 protocol is still enabled.",
+            "Adds a read-only check of this PC itself: whether its Samba server still accepts the old, insecure SMBv1 protocol.",
         ],
     );
     h(ui, "Reading the report");
@@ -159,7 +159,7 @@ pub(super) fn lan_security(ui: &mut Ui) {
         ui,
         "lan_security",
         &[
-            "Discovery uses one ICMP echo per address plus the IPv4 neighbour table (GetIpNetTable2); reverse names use a PTR DNS query. Port probes are plain TCP connects from the standard library with short timeouts; banners are at most a couple of hundred printable characters.",
+            "Discovery uses one ICMP echo per address plus the IPv4 neighbour table (/proc/net/arp); reverse names use a PTR DNS query. Port probes are plain TCP connects from the standard library with short timeouts; banners are at most a couple of hundred printable characters.",
             "Nothing contacts the internet: every address is on your own private subnet. The scan runs on a background worker thread, so the app stays responsive, and a typical home network finishes in well under a minute.",
         ],
     );

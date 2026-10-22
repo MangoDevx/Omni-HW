@@ -262,6 +262,68 @@ fn power_page() {
 }
 
 #[test]
+fn network_page() {
+    use omnihw_core::network::{Adapter, IpEntry, Media, NetworkInfo, Status, Wifi};
+    let info = desktop();
+    let eth = Adapter {
+        if_index: 2,
+        name: "enp5s0".into(),
+        description: "Realtek RTL8125 2.5GbE Controller".into(),
+        media: Media::Ethernet,
+        physical: true,
+        status: Status::Up,
+        mac: "D8-BB-C1-12-34-56".into(),
+        speed_bps: Some(1_000_000_000),
+        max_speed_bps: Some(2_500_000_000),
+        ipv4: vec![IpEntry {
+            addr: "192.168.1.20".parse().unwrap(),
+            prefix: 24,
+            duplicate: false,
+            dhcp: true,
+            lease_secs: Some(3600),
+        }],
+        gateways: vec!["192.168.1.1".parse().unwrap()],
+        dns: vec!["192.168.1.1".parse().unwrap()],
+        dhcp_enabled: true,
+        dhcp_server: Some("192.168.1.1".parse().unwrap()),
+        ..Default::default()
+    };
+    let wifi = Adapter {
+        if_index: 3,
+        name: "wlp6s0".into(),
+        media: Media::WiFi,
+        physical: true,
+        status: Status::Disconnected,
+        wifi: Some(Wifi {
+            ssid: Some("HomeNet".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let snap = Snapshot {
+        network: Some(NetworkInfo {
+            adapters: vec![eth, wifi],
+            detailed: true,
+        }),
+        ..snapshot(&info)
+    };
+    let h = draw(|ui| super::network::show(ui, &snap));
+    assert_shows(
+        &h,
+        &[
+            "enp5s0",
+            "adapter supports 2.5 Gbps",
+            "On (server 192.168.1.1)",
+            "Reconnect",
+            "wlp6s0",
+            "Connect",
+            "Flush DNS cache",
+            "Run internet tests",
+        ],
+    );
+}
+
+#[test]
 fn event_log_page() {
     let info = desktop();
     let log = EventLog {

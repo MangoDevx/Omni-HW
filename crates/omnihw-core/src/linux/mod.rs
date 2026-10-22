@@ -9,6 +9,8 @@ pub mod dmi;
 pub mod drm;
 pub mod firmware;
 pub mod net;
+pub mod netinfo;
+pub mod netprobe;
 pub mod nvme;
 pub mod os;
 pub mod pciids;

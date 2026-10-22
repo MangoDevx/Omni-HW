@@ -108,12 +108,6 @@ pub fn dispatch_root_read(ctx: &egui::Context, sampler: &crate::sampler::Sampler
 }
 
 /// Placeholder for a page that isn't available on Linux yet.
-pub fn unsupported(ui: &mut Ui, page: &str) {
-    page_title(ui, page);
-    ui.add_space(8.0);
-    ui.label(format!("The {page} page isn't available on Linux yet."));
-}
-
 /// `s`, or "-" when it's empty.
 pub fn or_dash(s: &str) -> &str {
     if s.is_empty() { "-" } else { s }

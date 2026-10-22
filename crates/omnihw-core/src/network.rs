@@ -1,6 +1,7 @@
 //! Network adapters: the data model behind the Network page, the changes it can make (encoded
 //! for the elevated helper and validated again there), and the logic of the local and internet
-//! tests. The adapter reads and changes aren't implemented on Linux yet (empty data).
+//! tests. Adapters are read in [`crate::linux::netinfo`] and the tests send their packets from
+//! [`crate::linux::netprobe`]; changes aren't implemented on Linux yet.
 //!
 //! Nothing in this module talks to the network by itself. The local tests only contact the
 //! adapter's own gateway and DNS servers on the local network; the internet tests (see
@@ -9,31 +10,24 @@
 use crate::checkup::format_link_speed;
 use std::net::{IpAddr, Ipv4Addr};
 
-/// Every adapter Windows shows in Network Connections, plus how much detail was read.
+/// Every network interface except loopback, plus how much detail was read.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NetworkInfo {
     pub adapters: Vec<Adapter>,
-    /// Driver details, duplex, disabled adapters and advanced properties were read (WMI).
+    /// The slower details (the DHCP server) were read.
     pub detailed: bool,
 }
 
 impl NetworkInfo {
-    /// Read the adapters. `detailed` adds the slower WMI details (driver, duplex, disabled
-    /// adapters, advanced properties); otherwise those are carried over from `previous`.
+    /// Read the adapters. `detailed` adds the slower details (the DHCP server); otherwise
+    /// those are carried over from `previous`.
     pub fn gather(detailed: bool, previous: Option<&NetworkInfo>) -> NetworkInfo {
-        imp::gather(detailed, previous)
+        crate::linux::netinfo::gather(detailed, previous)
     }
 
     /// Adapters that are up with an address, i.e. carrying traffic.
     pub fn connected(&self) -> impl Iterator<Item = &Adapter> {
         self.adapters.iter().filter(|a| a.status == Status::Up)
-    }
-}
-
-mod imp {
-    use super::NetworkInfo;
-    pub fn gather(_detailed: bool, _previous: Option<&NetworkInfo>) -> NetworkInfo {
-        NetworkInfo::default()
     }
 }
 
@@ -61,31 +55,9 @@ impl Media {
             Media::Other => "Other",
         }
     }
-
-    /// From the IANA interface type (`IfType`).
-    pub fn from_if_type(t: u32) -> Media {
-        match t {
-            6 => Media::Ethernet,
-            71 => Media::WiFi,
-            243 | 244 => Media::Cellular,
-            131 | 53 => Media::Tunnel,
-            _ => Media::Other,
-        }
-    }
-
-    /// From the NDIS physical medium (`NdisPhysicalMedium`), when it says more than the type.
-    pub fn from_physical_medium(m: u32) -> Option<Media> {
-        match m {
-            14 => Some(Media::Ethernet),
-            1 | 9 => Some(Media::WiFi),
-            8 => Some(Media::Cellular),
-            10 => Some(Media::Bluetooth),
-            _ => None,
-        }
-    }
 }
 
-/// Connection state, as Network Connections shows it.
+/// Interface state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Status {
     /// Connected and passing traffic.
@@ -146,7 +118,7 @@ impl IpEntry {
 /// Wi-Fi association details.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Wifi {
-    /// Network name; `None` when Windows hides it (location permission off).
+    /// Network name.
     pub ssid: Option<String>,
     /// Signal quality 0-100 %.
     pub signal_pct: Option<u32>,
@@ -224,23 +196,7 @@ pub fn phy_name(t: i32) -> Option<&'static str> {
     })
 }
 
-/// An advanced driver property (Device Manager > adapter > Properties > Advanced).
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct AdvancedProperty {
-    /// Registry keyword, e.g. "*SpeedDuplex".
-    pub keyword: String,
-    /// e.g. "Speed & Duplex".
-    pub display_name: String,
-    /// Current value as shown in Device Manager.
-    pub display_value: String,
-    /// Current registry value.
-    pub value: String,
-    /// Allowed (registry value, display value) pairs; empty for free-form numbers and text,
-    /// which are shown read-only.
-    pub choices: Vec<(String, String)>,
-}
-
-/// Driver details from Windows.
+/// The adapter's kernel driver.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Driver {
     pub version: String,
@@ -252,11 +208,9 @@ pub struct Driver {
 /// One network adapter.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Adapter {
-    /// Interface GUID, "{xxxxxxxx-...}" upper-case.
-    pub guid: String,
-    /// Interface index (0 when the adapter is disabled).
+    /// Interface index.
     pub if_index: u32,
-    /// Connection name, e.g. "Ethernet 2".
+    /// Interface name, e.g. "enp5s0".
     pub name: String,
     /// Adapter model, e.g. "Intel(R) Ethernet Controller I225-V".
     pub description: String,
@@ -268,7 +222,7 @@ pub struct Adapter {
     pub mac: String,
     /// Current link speed in bits per second.
     pub speed_bps: Option<u64>,
-    /// Fastest speed the adapter offers in its Speed & Duplex setting.
+    /// Fastest speed the adapter supports (ethtool link modes).
     pub max_speed_bps: Option<u64>,
     pub duplex: Option<Duplex>,
     pub mtu: Option<u32>,
@@ -284,7 +238,6 @@ pub struct Adapter {
     pub dns_static: bool,
     pub driver: Option<Driver>,
     pub wifi: Option<Wifi>,
-    pub advanced: Vec<AdvancedProperty>,
 }
 
 impl Adapter {
@@ -311,14 +264,7 @@ impl Adapter {
         }
     }
 
-    /// The advanced property with this keyword.
-    pub fn property(&self, keyword: &str) -> Option<&AdvancedProperty> {
-        self.advanced
-            .iter()
-            .find(|p| p.keyword.eq_ignore_ascii_case(keyword))
-    }
-
-    /// An Ethernet adapter linked slower than its Speed & Duplex setting allows.
+    /// An Ethernet adapter linked slower than it supports.
     pub fn below_max_speed(&self) -> Option<(u64, u64)> {
         let (cur, max) = (self.speed_bps?, self.max_speed_bps?);
         (self.media == Media::Ethernet && self.status == Status::Up && cur < max)
@@ -326,7 +272,7 @@ impl Adapter {
     }
 }
 
-/// 169.254.0.0/16, the address Windows picks itself when no DHCP server answers.
+/// 169.254.0.0/16, the self-assigned address used when no DHCP server answers.
 pub fn is_apipa(a: IpAddr) -> bool {
     matches!(a, IpAddr::V4(v) if v.is_link_local())
 }
@@ -371,37 +317,6 @@ pub fn format_lease(secs: u32) -> String {
     format!("expires in {}", crate::format_uptime(u64::from(secs)))
 }
 
-/// Speed in bits per second from an advanced-property display value such as
-/// "2.5 Gbps Full Duplex", "1.0 Gbps Full Duplex" or "100 Mbps Half Duplex".
-pub fn speed_from_display(s: &str) -> Option<u64> {
-    let lower = s.to_ascii_lowercase();
-    let (unit_at, mult) = ["gbps", "gb", "g ", "mbps", "mb", "m "]
-        .iter()
-        .find_map(|u| {
-            let i = lower.find(u)?;
-            Some((i, if u.starts_with('g') { 1e9 } else { 1e6 }))
-        })?;
-    let num: String = lower[..unit_at]
-        .trim_end()
-        .chars()
-        .rev()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    let v: f64 = num.parse().ok()?;
-    (v > 0.0).then_some((v * mult) as u64)
-}
-
-/// Fastest speed listed in a Speed & Duplex property's choices.
-pub fn max_speed(p: &AdvancedProperty) -> Option<u64> {
-    p.choices
-        .iter()
-        .filter_map(|(_, d)| speed_from_display(d))
-        .max()
-}
-
 /// Subnet prefix length from "24" or "255.255.255.0".
 pub fn parse_prefix(s: &str) -> Option<u8> {
     let s = s.trim().trim_start_matches('/');
@@ -440,32 +355,20 @@ fn usable_host(ip: Ipv4Addr) -> bool {
         || ip.is_link_local())
 }
 
-fn valid_guid(g: &str) -> bool {
-    let inner = g.strip_prefix('{').and_then(|s| s.strip_suffix('}'));
-    inner.is_some_and(|s| {
-        let parts: Vec<&str> = s.split('-').collect();
-        parts.iter().map(|p| p.len()).eq([8, 4, 4, 4, 12])
-            && parts
-                .iter()
-                .all(|p| p.chars().all(|c| c.is_ascii_hexdigit()))
-    })
-}
-
-/// Connection names Windows accepts: 1-64 characters, none of `\ / : * ? " < > |` or control
-/// characters, no leading/trailing spaces.
-pub fn valid_adapter_name(n: &str) -> Result<(), String> {
-    if n.is_empty() || n.chars().count() > 64 {
-        return Err("The name must be 1 to 64 characters long".into());
+/// An interface name the kernel accepts (at most 15 bytes, no `/` or whitespace) that can't be
+/// mistaken for a command-line option.
+pub fn valid_interface(n: &str) -> Result<(), String> {
+    let ok = !n.is_empty()
+        && n.len() <= 15
+        && !n.starts_with('-')
+        && n != "."
+        && n != ".."
+        && n.chars().all(|c| c.is_ascii_graphic() && c != '/');
+    if ok {
+        Ok(())
+    } else {
+        Err("Unknown network interface".into())
     }
-    if n.trim() != n {
-        return Err("The name can't start or end with a space".into());
-    }
-    if n.chars()
-        .any(|c| c.is_control() || r#"\/:*?"<>|"#.contains(c))
-    {
-        return Err(r#"The name can't contain \ / : * ? " < > |"#.into());
-    }
-    Ok(())
 }
 
 /// Lowest and highest MTU that may be set.
@@ -473,31 +376,24 @@ pub const MTU_RANGE: std::ops::RangeInclusive<u32> = 576..=9216;
 /// Most DNS servers that may be set at once.
 pub const MAX_DNS: usize = 4;
 
-/// A change to a network adapter or the network stack. Runs elevated (see `needs_admin`)
-/// after the user confirms it.
+/// A change to a network interface, made through NetworkManager after the user confirms it.
+/// `name` is the interface name ("enp5s0").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetAction {
-    Enable {
-        guid: String,
+    /// Bring the interface up and activate its connection.
+    Connect {
         name: String,
     },
-    Disable {
-        guid: String,
+    /// Deactivate the interface's connection.
+    Disconnect {
         name: String,
-    },
-    Rename {
-        guid: String,
-        name: String,
-        new_name: String,
     },
     /// Get the IPv4 address and DNS servers automatically (DHCP).
     Dhcp {
-        if_index: u32,
         name: String,
     },
     /// A fixed IPv4 address.
     StaticIp {
-        if_index: u32,
         name: String,
         ip: Ipv4Addr,
         prefix: u8,
@@ -505,54 +401,33 @@ pub enum NetAction {
     },
     /// IPv4 DNS servers; empty means "automatic" (from DHCP).
     Dns {
-        if_index: u32,
         name: String,
         servers: Vec<Ipv4Addr>,
     },
     Mtu {
-        if_index: u32,
         name: String,
         mtu: u32,
     },
-    Release {
-        if_index: u32,
+    /// Activate the connection again, which asks the DHCP server for a new lease.
+    Reconnect {
         name: String,
     },
-    Renew {
-        if_index: u32,
-        name: String,
-    },
-    /// Set an advanced driver property to one of its allowed values.
-    Advanced {
-        guid: String,
-        name: String,
-        keyword: String,
-        value: String,
-        /// The property's name and the chosen option as shown to the user (display only).
-        display_name: String,
-        display_value: String,
-    },
+    /// Clear systemd-resolved's cache.
     FlushDns,
-    ResetWinsock,
-    ResetTcpIp,
 }
 
 impl NetAction {
     /// Short description for buttons and the status bar.
     pub fn label(&self) -> String {
         match self {
-            NetAction::Enable { name, .. } => format!("Enable {name}"),
-            NetAction::Disable { name, .. } => format!("Disable {name}"),
-            NetAction::Rename { name, new_name, .. } => {
-                format!("Rename \"{name}\" to \"{new_name}\"")
-            }
-            NetAction::Dhcp { name, .. } => format!("Get an IP address automatically on {name}"),
+            NetAction::Connect { name } => format!("Connect {name}"),
+            NetAction::Disconnect { name } => format!("Disconnect {name}"),
+            NetAction::Dhcp { name } => format!("Get an IP address automatically on {name}"),
             NetAction::StaticIp {
                 name,
                 ip,
                 prefix,
                 gateway,
-                ..
             } => format!(
                 "Set {name} to {ip}/{prefix} (mask {}, {})",
                 prefix_mask(*prefix),
@@ -561,10 +436,10 @@ impl NetAction {
                     None => "no gateway".into(),
                 }
             ),
-            NetAction::Dns { name, servers, .. } if servers.is_empty() => {
+            NetAction::Dns { name, servers } if servers.is_empty() => {
                 format!("Get DNS servers automatically on {name}")
             }
-            NetAction::Dns { name, servers, .. } => format!(
+            NetAction::Dns { name, servers } => format!(
                 "Set DNS on {name} to {}",
                 servers
                     .iter()
@@ -572,107 +447,66 @@ impl NetAction {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
-            NetAction::Mtu { name, mtu, .. } => format!("Set MTU of {name} to {mtu}"),
-            NetAction::Release { name, .. } => format!("Release the IP address of {name}"),
-            NetAction::Renew { name, .. } => format!("Renew the IP address of {name}"),
-            NetAction::Advanced {
-                name,
-                display_name,
-                display_value,
-                ..
-            } => format!("Set {display_name} on {name} to {display_value}"),
+            NetAction::Mtu { name, mtu } => format!("Set MTU of {name} to {mtu}"),
+            NetAction::Reconnect { name } => format!("Reconnect {name}"),
             NetAction::FlushDns => "Flush the DNS cache".into(),
-            NetAction::ResetWinsock => "Reset Winsock".into(),
-            NetAction::ResetTcpIp => "Reset TCP/IP".into(),
         }
-    }
-
-    /// Needs administrator rights (everything but flushing the DNS cache).
-    pub fn needs_admin(&self) -> bool {
-        !matches!(self, NetAction::FlushDns)
-    }
-
-    /// Takes effect only after a restart.
-    pub fn needs_restart(&self) -> bool {
-        matches!(self, NetAction::ResetWinsock | NetAction::ResetTcpIp)
     }
 
     /// What the confirmation dialog says before applying.
     pub fn confirm_text(&self) -> &'static str {
         match self {
-            NetAction::Enable { .. } => "The adapter is turned back on and reconnects.",
-            NetAction::Disable { .. } => {
-                "The adapter is turned off and its connection drops until you enable it again (here or in Network Connections)."
+            NetAction::Connect { .. } => "NetworkManager brings the interface up and connects it.",
+            NetAction::Disconnect { .. } => {
+                "The connection drops, and NetworkManager doesn't reconnect it by itself until you click Connect (here or in the system menu)."
             }
-            NetAction::Rename { .. } => "Only the connection's name changes.",
             NetAction::Dhcp { .. } => {
-                "The adapter asks the router for its IPv4 address and DNS servers. The connection may drop for a few seconds."
+                "The connection asks the router for its IPv4 address and DNS servers. It may drop for a few seconds."
             }
             NetAction::StaticIp { .. } => {
-                "The adapter stops using DHCP and keeps this IPv4 address. A wrong address, mask or gateway cuts the connection until you switch back to automatic."
+                "The connection stops using DHCP and keeps this IPv4 address. A wrong address, mask or gateway cuts it off until you switch back to automatic."
             }
             NetAction::Dns { .. } => {
-                "Name lookups on this adapter go to these DNS servers. Wrong servers make websites fail to load."
+                "Name lookups on this connection go to these DNS servers. Wrong servers make websites fail to load."
             }
             NetAction::Mtu { .. } => {
                 "A wrong MTU can make some websites or games hang. The default for Ethernet and Wi-Fi is 1500."
             }
-            NetAction::Release { .. } => {
-                "The adapter gives up its IP address and goes offline until you click Renew (or restart)."
-            }
-            NetAction::Renew { .. } => {
-                "The adapter asks the DHCP server for an address again. The connection may drop for a few seconds."
-            }
-            NetAction::Advanced { .. } => {
-                "The network adapter will restart: the connection drops for a few seconds. Unsaved downloads or calls may be interrupted."
+            NetAction::Reconnect { .. } => {
+                "The connection is activated again and asks the DHCP server for an address. It drops for a few seconds."
             }
             NetAction::FlushDns => {
-                "Windows forgets the names it has looked up and looks them up again."
+                "systemd-resolved forgets the names it has looked up and looks them up again."
             }
-            NetAction::ResetWinsock => {
-                "Resets the Windows network catalog to its defaults, which fixes many \"connected but no internet\" problems caused by broken VPN or security software. Some VPN or firewall apps may need reinstalling. Restart required."
-            }
-            NetAction::ResetTcpIp => {
-                "Resets the TCP/IP settings stored in the registry to their defaults. Fixed IP addresses and DNS servers you set by hand may be lost. Restart required."
-            }
+        }
+    }
+
+    /// The interface the action changes.
+    pub fn interface(&self) -> Option<&str> {
+        match self {
+            NetAction::Connect { name }
+            | NetAction::Disconnect { name }
+            | NetAction::Dhcp { name }
+            | NetAction::StaticIp { name, .. }
+            | NetAction::Dns { name, .. }
+            | NetAction::Mtu { name, .. }
+            | NetAction::Reconnect { name } => Some(name),
+            NetAction::FlushDns => None,
         }
     }
 
     /// Check the action's values; `Err` explains what's wrong.
     pub fn validate(&self) -> Result<(), String> {
-        let index = |i: &u32| {
-            if *i == 0 {
-                Err("Unknown network interface".to_string())
-            } else {
-                Ok(())
-            }
-        };
-        let guid = |g: &str| {
-            if valid_guid(g) {
-                Ok(())
-            } else {
-                Err("Unknown network adapter".to_string())
-            }
-        };
+        if let Some(n) = self.interface() {
+            valid_interface(n)?;
+        }
         match self {
-            NetAction::Enable { guid: g, .. } | NetAction::Disable { guid: g, .. } => guid(g),
-            NetAction::Rename {
-                guid: g, new_name, ..
-            } => {
-                guid(g)?;
-                valid_adapter_name(new_name)
-            }
-            NetAction::Dhcp { if_index, .. }
-            | NetAction::Release { if_index, .. }
-            | NetAction::Renew { if_index, .. } => index(if_index),
             NetAction::StaticIp {
-                if_index,
                 ip,
                 prefix,
                 gateway,
                 ..
             } => {
-                index(if_index)?;
                 if !usable_host(*ip) {
                     return Err(format!("{ip} can't be used as an adapter address"));
                 }
@@ -698,10 +532,7 @@ impl NetAction {
                 }
                 Ok(())
             }
-            NetAction::Dns {
-                if_index, servers, ..
-            } => {
-                index(if_index)?;
+            NetAction::Dns { servers, .. } => {
                 if servers.len() > MAX_DNS {
                     return Err(format!("At most {MAX_DNS} DNS servers"));
                 }
@@ -710,8 +541,7 @@ impl NetAction {
                     None => Ok(()),
                 }
             }
-            NetAction::Mtu { if_index, mtu, .. } => {
-                index(if_index)?;
+            NetAction::Mtu { mtu, .. } => {
                 if MTU_RANGE.contains(mtu) {
                     Ok(())
                 } else {
@@ -722,212 +552,124 @@ impl NetAction {
                     ))
                 }
             }
-            NetAction::Advanced {
-                guid: g,
-                keyword,
-                value,
-                display_name,
-                display_value,
-                ..
-            } => {
-                guid(g)?;
-                // Display text is never used to change anything, but it is shown in the prompt.
-                let text_ok =
-                    |t: &str| t.chars().count() <= 128 && !t.chars().any(char::is_control);
-                if !text_ok(display_name) || !text_ok(display_value) {
-                    return Err("Unknown adapter property".into());
-                }
-                let kw_ok = !keyword.is_empty()
-                    && keyword.len() <= 64
-                    && keyword
-                        .chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '*' || c == '_');
-                let value_ok = !value.is_empty()
-                    && value.len() <= 64
-                    && value.chars().all(|c| c.is_ascii_graphic() || c == ' ');
-                if kw_ok && value_ok {
-                    Ok(())
-                } else {
-                    Err("Unknown adapter property".into())
-                }
-            }
-            NetAction::FlushDns | NetAction::ResetWinsock | NetAction::ResetTcpIp => Ok(()),
+            _ => Ok(()),
         }
     }
 
-    /// Encode for the elevated helper's command line (hex, so no quoting issues).
-    pub fn to_arg(&self) -> String {
-        let opt = |g: &Option<Ipv4Addr>| g.map(|g| g.to_string()).unwrap_or_default();
-        let fields: Vec<String> = match self {
-            NetAction::Enable { guid, name } => vec!["enable".into(), guid.clone(), name.clone()],
-            NetAction::Disable { guid, name } => {
-                vec!["disable".into(), guid.clone(), name.clone()]
-            }
-            NetAction::Rename {
-                guid,
-                name,
-                new_name,
-            } => vec![
-                "rename".into(),
-                guid.clone(),
-                name.clone(),
-                new_name.clone(),
-            ],
-            NetAction::Dhcp { if_index, name } => {
-                vec!["dhcp".into(), if_index.to_string(), name.clone()]
-            }
+    /// The `nmcli connection modify` settings this action changes on connection type
+    /// `conn_type` ("802-3-ethernet"), or `None` for actions that don't modify a connection.
+    pub fn nm_settings(&self, conn_type: &str) -> Option<Result<Vec<String>, String>> {
+        let s = |v: &[&str]| Some(Ok(v.iter().map(|x| x.to_string()).collect()));
+        match self {
+            NetAction::Dhcp { .. } => s(&[
+                "ipv4.method",
+                "auto",
+                "ipv4.addresses",
+                "",
+                "ipv4.gateway",
+                "",
+            ]),
             NetAction::StaticIp {
-                if_index,
-                name,
                 ip,
                 prefix,
                 gateway,
-            } => vec![
-                "static".into(),
-                if_index.to_string(),
-                name.clone(),
-                ip.to_string(),
-                prefix.to_string(),
-                opt(gateway),
-            ],
-            NetAction::Dns {
-                if_index,
-                name,
-                servers,
-            } => vec![
-                "dns".into(),
-                if_index.to_string(),
-                name.clone(),
-                servers
+                ..
+            } => s(&[
+                "ipv4.method",
+                "manual",
+                "ipv4.addresses",
+                &format!("{ip}/{prefix}"),
+                "ipv4.gateway",
+                &gateway.map(|g| g.to_string()).unwrap_or_default(),
+            ]),
+            NetAction::Dns { servers, .. } if servers.is_empty() => {
+                s(&["ipv4.dns", "", "ipv4.ignore-auto-dns", "no"])
+            }
+            NetAction::Dns { servers, .. } => s(&[
+                "ipv4.dns",
+                &servers
                     .iter()
-                    .map(|s| s.to_string())
+                    .map(|a| a.to_string())
                     .collect::<Vec<_>>()
                     .join(","),
-            ],
-            NetAction::Mtu {
-                if_index,
-                name,
-                mtu,
-            } => vec![
-                "mtu".into(),
-                if_index.to_string(),
-                name.clone(),
-                mtu.to_string(),
-            ],
-            NetAction::Release { if_index, name } => {
-                vec!["release".into(), if_index.to_string(), name.clone()]
-            }
-            NetAction::Renew { if_index, name } => {
-                vec!["renew".into(), if_index.to_string(), name.clone()]
-            }
-            NetAction::Advanced {
-                guid,
-                name,
-                keyword,
-                value,
-                display_name,
-                display_value,
-            } => vec![
-                "advanced".into(),
-                guid.clone(),
-                name.clone(),
-                keyword.clone(),
-                value.clone(),
-                display_name.clone(),
-                display_value.clone(),
-            ],
-            NetAction::FlushDns => vec!["flushdns".into()],
-            NetAction::ResetWinsock => vec!["winsock".into()],
-            NetAction::ResetTcpIp => vec!["tcpip".into()],
-        };
-        fields
-            .join("\t")
-            .bytes()
-            .map(|b| format!("{b:02x}"))
-            .collect()
-    }
-
-    /// Decode [`NetAction::to_arg`]; `None` for anything malformed or invalid.
-    pub fn from_arg(arg: &str) -> Option<NetAction> {
-        if arg.is_empty() || !arg.len().is_multiple_of(2) || arg.len() > 4096 {
-            return None;
+                "ipv4.ignore-auto-dns",
+                "yes",
+            ]),
+            NetAction::Mtu { mtu, .. } => match conn_type {
+                "802-3-ethernet" | "802-11-wireless" => {
+                    s(&[&format!("{conn_type}.mtu"), &mtu.to_string()])
+                }
+                t => Some(Err(format!(
+                    "The MTU of a {} connection can't be set here",
+                    if t.is_empty() { "unknown" } else { t }
+                ))),
+            },
+            _ => None,
         }
-        let bytes: Option<Vec<u8>> = (0..arg.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(arg.get(i..i + 2)?, 16).ok())
-            .collect();
-        let s = String::from_utf8(bytes?).ok()?;
-        let f: Vec<&str> = s.split('\t').collect();
-        let idx = |v: &str| v.parse::<u32>().ok();
-        let a = match f.as_slice() {
-            ["enable", g, n] => NetAction::Enable {
-                guid: g.to_string(),
-                name: n.to_string(),
-            },
-            ["disable", g, n] => NetAction::Disable {
-                guid: g.to_string(),
-                name: n.to_string(),
-            },
-            ["rename", g, n, new] => NetAction::Rename {
-                guid: g.to_string(),
-                name: n.to_string(),
-                new_name: new.to_string(),
-            },
-            ["dhcp", i, n] => NetAction::Dhcp {
-                if_index: idx(i)?,
-                name: n.to_string(),
-            },
-            ["static", i, n, ip, p, gw] => NetAction::StaticIp {
-                if_index: idx(i)?,
-                name: n.to_string(),
-                ip: ip.parse().ok()?,
-                prefix: p.parse().ok()?,
-                gateway: if gw.is_empty() {
-                    None
-                } else {
-                    Some(gw.parse().ok()?)
-                },
-            },
-            ["dns", i, n, list] => NetAction::Dns {
-                if_index: idx(i)?,
-                name: n.to_string(),
-                servers: parse_ipv4_list(list).ok()?,
-            },
-            ["mtu", i, n, m] => NetAction::Mtu {
-                if_index: idx(i)?,
-                name: n.to_string(),
-                mtu: m.parse().ok()?,
-            },
-            ["release", i, n] => NetAction::Release {
-                if_index: idx(i)?,
-                name: n.to_string(),
-            },
-            ["renew", i, n] => NetAction::Renew {
-                if_index: idx(i)?,
-                name: n.to_string(),
-            },
-            ["advanced", g, n, k, v, dn, dv] => NetAction::Advanced {
-                guid: g.to_string(),
-                name: n.to_string(),
-                keyword: k.to_string(),
-                value: v.to_string(),
-                display_name: dn.to_string(),
-                display_value: dv.to_string(),
-            },
-            ["flushdns"] => NetAction::FlushDns,
-            ["winsock"] => NetAction::ResetWinsock,
-            ["tcpip"] => NetAction::ResetTcpIp,
-            _ => return None,
-        };
-        a.validate().ok()?;
-        Some(a)
     }
 }
 
-/// Apply a change. Blocks.
+/// Run a command; `Err` carries what it printed on failure.
+fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new(cmd)
+        .args(args)
+        .env("LC_ALL", "C")
+        .output()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => format!("{cmd} isn't installed"),
+            _ => e.to_string(),
+        })?;
+    if out.status.success() {
+        return Ok(String::from_utf8_lossy(&out.stdout).trim().to_string());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let err = err.trim().trim_start_matches("Error: ");
+    Err(if err.is_empty() {
+        format!("{cmd} failed")
+    } else {
+        err.to_string()
+    })
+}
+
+/// Apply a change through NetworkManager (`nmcli`), which lets the signed-in desktop user
+/// change network settings without root. Blocks.
 pub fn apply(action: &NetAction) -> Result<(), String> {
     action.validate()?;
-    Err("Not supported on Linux yet".into())
+    let iface = match action {
+        NetAction::FlushDns => return run("resolvectl", &["flush-caches"]).map(drop),
+        NetAction::Connect { name } => return run("nmcli", &["device", "connect", name]).map(drop),
+        NetAction::Disconnect { name } => {
+            return run("nmcli", &["device", "disconnect", name]).map(drop);
+        }
+        a => a.interface().unwrap_or_default(),
+    };
+    let conn = run(
+        "nmcli",
+        &["-g", "GENERAL.CONNECTION", "device", "show", iface],
+    )?;
+    if conn.is_empty() {
+        return Err(format!(
+            "{iface} has no active NetworkManager connection to change"
+        ));
+    }
+    if let NetAction::Reconnect { .. } = action {
+        return run("nmcli", &["connection", "up", "id", &conn]).map(drop);
+    }
+    let conn_type = run(
+        "nmcli",
+        &["-g", "connection.type", "connection", "show", "id", &conn],
+    )?;
+    let Some(settings) = action.nm_settings(&conn_type) else {
+        return Ok(());
+    };
+    let settings = settings?;
+    let mut args = vec!["connection", "modify", "id", conn.as_str()];
+    args.extend(settings.iter().map(String::as_str));
+    run("nmcli", &args)?;
+    // Apply to the running connection without a full reconnect where NetworkManager can.
+    run("nmcli", &["device", "reapply", iface])
+        .or_else(|_| run("nmcli", &["connection", "up", "id", &conn]))
+        .map(drop)
 }
 
 // ---- Tests (ping, DNS, HTTP) -------------------------------------------------------------
@@ -1291,25 +1033,7 @@ pub fn internet_results(p: &InternetProbes) -> Vec<TestLine> {
     out
 }
 
-mod imp_probe {
-    use super::PingStats;
-    use std::net::{IpAddr, Ipv4Addr};
-    pub fn ping_series(_ip: IpAddr, _scope: u32, count: u32, _gap_ms: u64) -> PingStats {
-        PingStats {
-            sent: count,
-            rtts: Vec::new(),
-        }
-    }
-    pub fn dns_server_answers(_server: IpAddr, _scope: u32) -> bool {
-        false
-    }
-    pub fn resolve_a(_name: &str) -> Result<Vec<Ipv4Addr>, String> {
-        Err("Only supported on Windows".into())
-    }
-    pub fn http_get(_host: &str, _path: &str) -> Result<(u16, String), String> {
-        Err("Only supported on Windows".into())
-    }
-}
+use crate::linux::netprobe as imp_probe;
 
 #[cfg(test)]
 mod tests {
@@ -1329,11 +1053,8 @@ mod tests {
         }
     }
 
-    const GUID: &str = "{4D36E972-E325-11CE-BFC1-08002BE10318}";
-
     fn ethernet() -> Adapter {
         Adapter {
-            guid: GUID.into(),
             if_index: 7,
             name: "Ethernet".into(),
             media: Media::Ethernet,
@@ -1392,37 +1113,10 @@ mod tests {
         assert_eq!(Band::from_channel(149), Some(Band::G5));
         assert_eq!(phy_name(10), Some("Wi-Fi 6 (802.11ax)"));
         assert_eq!(phy_name(99), None);
-        assert_eq!(Media::from_if_type(71), Media::WiFi);
-        assert_eq!(Media::from_physical_medium(14), Some(Media::Ethernet));
     }
 
     #[test]
-    fn speeds_from_driver_text() {
-        assert_eq!(
-            speed_from_display("2.5 Gbps Full Duplex"),
-            Some(2_500_000_000)
-        );
-        assert_eq!(
-            speed_from_display("1.0 Gbps Full Duplex"),
-            Some(1_000_000_000)
-        );
-        assert_eq!(
-            speed_from_display("100 Mbps Half Duplex"),
-            Some(100_000_000)
-        );
-        assert_eq!(speed_from_display("10Mb Full"), Some(10_000_000));
-        assert_eq!(speed_from_display("Auto Negotiation"), None);
-        let p = AdvancedProperty {
-            keyword: "*SpeedDuplex".into(),
-            choices: vec![
-                ("0".into(), "Auto Negotiation".into()),
-                ("4".into(), "100 Mbps Full Duplex".into()),
-                ("6".into(), "1.0 Gbps Full Duplex".into()),
-                ("9".into(), "2.5 Gbps Full Duplex".into()),
-            ],
-            ..Default::default()
-        };
-        assert_eq!(max_speed(&p), Some(2_500_000_000));
+    fn link_speeds() {
         let mut a = ethernet();
         a.max_speed_bps = Some(2_500_000_000);
         assert_eq!(a.below_max_speed(), Some((1_000_000_000, 2_500_000_000)));
@@ -1453,141 +1147,110 @@ mod tests {
     }
 
     #[test]
-    fn adapter_names() {
-        assert!(valid_adapter_name("Ethernet 2").is_ok());
-        assert!(valid_adapter_name("").is_err());
-        assert!(valid_adapter_name(" LAN").is_err());
-        assert!(valid_adapter_name("a/b").is_err());
-        assert!(valid_adapter_name("a\"b").is_err());
-        assert!(valid_adapter_name("x\ny").is_err());
-        assert!(valid_adapter_name(&"x".repeat(65)).is_err());
+    fn interface_names() {
+        assert!(valid_interface("enp5s0").is_ok());
+        assert!(valid_interface("wlp0s20f3").is_ok());
+        for bad in ["", "-x", "a/b", "a b", "x\ny", "..", "abcdefghijklmnop"] {
+            assert!(valid_interface(bad).is_err(), "{bad:?}");
+        }
     }
 
-    fn all_actions() -> Vec<NetAction> {
-        let n = || "Ethernet".to_string();
-        vec![
-            NetAction::Enable {
-                guid: GUID.into(),
-                name: n(),
-            },
-            NetAction::Disable {
-                guid: GUID.into(),
-                name: n(),
-            },
-            NetAction::Rename {
-                guid: GUID.into(),
-                name: n(),
-                new_name: "LAN – desk".into(),
-            },
-            NetAction::Dhcp {
-                if_index: 7,
-                name: n(),
-            },
+    #[test]
+    fn actions() {
+        let n = || "enp5s0".to_string();
+        let actions = [
+            NetAction::Connect { name: n() },
+            NetAction::Disconnect { name: n() },
+            NetAction::Dhcp { name: n() },
             NetAction::StaticIp {
-                if_index: 7,
                 name: n(),
                 ip: v4("192.168.1.50"),
                 prefix: 24,
                 gateway: Some(v4("192.168.1.1")),
             },
-            NetAction::StaticIp {
-                if_index: 7,
-                name: n(),
-                ip: v4("10.0.0.5"),
-                prefix: 8,
-                gateway: None,
-            },
             NetAction::Dns {
-                if_index: 7,
                 name: n(),
                 servers: vec![v4("1.1.1.1"), v4("9.9.9.9")],
             },
             NetAction::Dns {
-                if_index: 7,
                 name: n(),
                 servers: vec![],
             },
             NetAction::Mtu {
-                if_index: 7,
                 name: n(),
                 mtu: 1500,
             },
-            NetAction::Release {
-                if_index: 7,
-                name: n(),
-            },
-            NetAction::Renew {
-                if_index: 7,
-                name: n(),
-            },
-            NetAction::Advanced {
-                guid: GUID.into(),
-                name: n(),
-                keyword: "*SpeedDuplex".into(),
-                value: "0".into(),
-                display_name: "Speed & Duplex".into(),
-                display_value: "Auto Negotiation".into(),
-            },
+            NetAction::Reconnect { name: n() },
             NetAction::FlushDns,
-            NetAction::ResetWinsock,
-            NetAction::ResetTcpIp,
-        ]
-    }
-
-    #[test]
-    fn actions_round_trip() {
-        for a in all_actions() {
+        ];
+        for a in &actions {
             assert_eq!(a.validate(), Ok(()), "{a:?}");
-            let arg = a.to_arg();
-            assert!(arg.chars().all(|c| c.is_ascii_hexdigit()));
-            assert_eq!(NetAction::from_arg(&arg), Some(a.clone()), "{a:?}");
             assert!(!a.label().is_empty() && !a.confirm_text().is_empty());
         }
-        assert!(!NetAction::FlushDns.needs_admin());
-        assert!(NetAction::ResetWinsock.needs_admin() && NetAction::ResetWinsock.needs_restart());
-        assert!(
-            !NetAction::Dhcp {
-                if_index: 1,
-                name: String::new()
-            }
-            .needs_restart()
-        );
-    }
-
-    fn hex(s: &str) -> String {
-        s.bytes().map(|b| format!("{b:02x}")).collect()
-    }
-
-    #[test]
-    fn helper_rejects_bad_input() {
-        for bad in [
-            "",
-            "zz",
-            "abc",
-            &hex("format\tC:"),
-            &hex("enable\tnot-a-guid\tx"),
-            &hex("enable\t{4D36E972-E325-11CE-BFC1-08002BE1031}\tx"),
-            &hex(&format!("rename\t{GUID}\tx\tbad/name")),
-            &hex("dhcp\t0\tx"),
-            &hex("dhcp\t-1\tx"),
-            &hex("static\t7\tx\t127.0.0.1\t8\t"),
-            &hex("static\t7\tx\t192.168.1.0\t24\t"),
-            &hex("static\t7\tx\t192.168.1.255\t24\t"),
-            &hex("static\t7\tx\t192.168.1.5\t24\t10.0.0.1"),
-            &hex("static\t7\tx\t192.168.1.5\t24\t192.168.1.5"),
-            &hex("static\t7\tx\t192.168.1.5\t31\t"),
-            &hex("dns\t7\tx\t1.1.1.1,0.0.0.0"),
-            &hex("dns\t7\tx\t1.1.1.1,1.0.0.1,8.8.8.8,8.8.4.4,9.9.9.9"),
-            &hex("dns\t7\tx\t1.1.1.1;rm -rf"),
-            &hex("mtu\t7\tx\t100"),
-            &hex("mtu\t7\tx\t65000"),
-            &hex(&format!("advanced\t{GUID}\tx\t*Speed Duplex\t0")),
-            &hex(&format!("advanced\t{GUID}\tx\t*SpeedDuplex\t")),
-            &hex(&format!("advanced\t{GUID}\tx\t*SpeedDuplex\ta\"b\nc")),
-            &hex("flushdns\textra"),
-        ] {
-            assert_eq!(NetAction::from_arg(bad), None, "accepted {bad}");
+        let bad = [
+            NetAction::Connect {
+                name: "--help".into(),
+            },
+            NetAction::StaticIp {
+                name: n(),
+                ip: v4("127.0.0.1"),
+                prefix: 8,
+                gateway: None,
+            },
+            NetAction::StaticIp {
+                name: n(),
+                ip: v4("192.168.1.0"),
+                prefix: 24,
+                gateway: None,
+            },
+            NetAction::StaticIp {
+                name: n(),
+                ip: v4("192.168.1.5"),
+                prefix: 24,
+                gateway: Some(v4("10.0.0.1")),
+            },
+            NetAction::StaticIp {
+                name: n(),
+                ip: v4("192.168.1.5"),
+                prefix: 31,
+                gateway: None,
+            },
+            NetAction::Dns {
+                name: n(),
+                servers: vec![v4("1.1.1.1"), v4("0.0.0.0")],
+            },
+            NetAction::Dns {
+                name: n(),
+                servers: vec![v4("1.1.1.1"); 5],
+            },
+            NetAction::Mtu {
+                name: n(),
+                mtu: 100,
+            },
+        ];
+        for a in &bad {
+            assert!(a.validate().is_err(), "accepted {a:?}");
         }
+
+        let settings = |a: &NetAction, t: &str| a.nm_settings(t).map(|r| r.map(|v| v.join(" ")));
+        assert_eq!(
+            settings(&actions[3], "802-3-ethernet"),
+            Some(Ok(
+                "ipv4.method manual ipv4.addresses 192.168.1.50/24 ipv4.gateway 192.168.1.1".into()
+            ))
+        );
+        assert_eq!(
+            settings(&actions[4], "802-3-ethernet"),
+            Some(Ok(
+                "ipv4.dns 1.1.1.1,9.9.9.9 ipv4.ignore-auto-dns yes".into()
+            ))
+        );
+        assert_eq!(
+            settings(&actions[6], "802-11-wireless"),
+            Some(Ok("802-11-wireless.mtu 1500".into()))
+        );
+        assert!(matches!(settings(&actions[6], "vpn"), Some(Err(_))));
+        assert_eq!(settings(&actions[0], "802-3-ethernet"), None);
     }
 
     fn stats(sent: u32, rtts: &[u32]) -> PingStats {

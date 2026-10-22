@@ -273,7 +273,7 @@ impl Sampler {
             .is_ok()
     }
 
-    /// Apply a network change (asks for administrator rights when needed), then re-read.
+    /// Apply a network change through NetworkManager, then re-read.
     pub fn net_action(&self, action: NetAction) {
         {
             let mut snap = self.snapshot();
@@ -314,9 +314,6 @@ impl Sampler {
                 snap.network = Some(fresh);
                 snap.net_busy = false;
                 snap.net_msg = Some(match r {
-                    Ok(()) if action.needs_restart() => {
-                        format!("Done: {}. Restart Windows to finish.", action.label())
-                    }
                     Ok(()) => format!("Done: {}", action.label()),
                     Err(e) => format!("{} failed: {e}", action.label()),
                 });
