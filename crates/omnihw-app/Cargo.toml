@@ -16,3 +16,5 @@ eframe = "0.36"
 egui = "0.36"
 # Alert notifications through the desktop's notification service (D-Bus, pure Rust).
 notify-rust = "4"
+# The "Browse…" folder chooser, through the XDG desktop portal.
+rfd = "0.15"

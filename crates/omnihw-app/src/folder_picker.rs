@@ -1,4 +1,4 @@
-//! Windows "Select folder" dialog, run on its own thread so the UI keeps painting while it's open.
+//! "Select folder" dialog, run on its own thread so the UI keeps painting while it's open.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -47,64 +47,10 @@ impl FolderPicker {
     }
 }
 
-#[cfg(windows)]
+/// The desktop's folder chooser (through the XDG desktop portal).
 fn pick(start: &std::path::Path) -> Option<PathBuf> {
-    use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance,
-        CoInitializeEx, CoTaskMemFree, CoUninitialize,
-    };
-    use windows::Win32::UI::Shell::{
-        FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, IShellItem,
-        SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
-    };
-    use windows::core::{HSTRING, PWSTR, w};
-
-    /// COM initialised for this (new, short-lived) thread; uninitialised on drop.
-    struct Com;
-    impl Drop for Com {
-        fn drop(&mut self) {
-            // SAFETY: pairs the successful CoInitializeEx below, on the same thread.
-            unsafe { CoUninitialize() };
-        }
-    }
-    /// A string allocated by COM; freed on drop.
-    struct CoString(PWSTR);
-    impl Drop for CoString {
-        fn drop(&mut self) {
-            // SAFETY: allocated by the shell with CoTaskMemAlloc, freed exactly once.
-            unsafe { CoTaskMemFree(Some(self.0.0 as *const _)) };
-        }
-    }
-
-    // SAFETY: plain COM initialisation for this thread; undone by `Com`'s drop.
-    if unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) }.is_err() {
-        return None;
-    }
-    let _com = Com;
-    // SAFETY: standard IFileOpenDialog use on the COM thread set up above. Every interface is
-    // dropped at the end of this block, before `_com` uninitialises COM.
-    unsafe {
-        let dialog: IFileOpenDialog =
-            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
-        let opts = dialog.GetOptions().ok()?;
-        dialog
-            .SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM)
-            .ok()?;
-        let _ = dialog.SetTitle(w!("Choose where to save recordings and reports"));
-        if let Ok(item) =
-            SHCreateItemFromParsingName::<_, _, IShellItem>(&HSTRING::from(start.as_os_str()), None)
-        {
-            let _ = dialog.SetFolder(&item);
-        }
-        // Errors when cancelled.
-        dialog.Show(None).ok()?;
-        let item = dialog.GetResult().ok()?;
-        let name = CoString(item.GetDisplayName(SIGDN_FILESYSPATH).ok()?);
-        name.0.to_string().ok().map(PathBuf::from)
-    }
-}
-
-#[cfg(not(windows))]
-fn pick(_start: &std::path::Path) -> Option<PathBuf> {
-    None
+    rfd::FileDialog::new()
+        .set_title("Choose where to save recordings and reports")
+        .set_directory(start)
+        .pick_folder()
 }

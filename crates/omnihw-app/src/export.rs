@@ -70,8 +70,7 @@ pub fn report_dir() -> PathBuf {
     {
         return d;
     }
-    let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-    let docs = std::env::var_os(home).map(|p| PathBuf::from(p).join("Documents"));
+    let docs = std::env::var_os("HOME").map(|p| PathBuf::from(p).join("Documents"));
     match docs {
         Some(d) if d.is_dir() => d,
         _ => std::env::temp_dir(),
@@ -87,28 +86,15 @@ pub fn save_html(info: &SystemInfo, snap: &Snapshot) -> Result<PathBuf, String> 
     Ok(path)
 }
 
-/// Open `path` with Explorer (a folder, or a file in its default app), or with `select` show
-/// it selected in its folder. Doesn't wait for Explorer.
+/// Open `path` with `xdg-open` (a folder in the file manager, or a file in its default app).
+/// With `select`, open the containing folder instead (xdg-open can't select a file). Doesn't
+/// wait for it.
 pub fn open_in_explorer(path: &std::path::Path, select: bool) {
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("explorer.exe");
-        if select {
-            cmd.arg(format!("/select,{}", path.display()));
-        } else {
-            cmd.arg(path);
-        }
-        let _ = cmd.spawn();
-    }
-    // xdg-open has no "select in folder"; open the containing folder instead.
-    #[cfg(not(windows))]
-    {
-        let target = match (select, path.parent()) {
-            (true, Some(dir)) => dir,
-            _ => path,
-        };
-        let _ = std::process::Command::new("xdg-open").arg(target).spawn();
-    }
+    let target = match (select, path.parent()) {
+        (true, Some(dir)) => dir,
+        _ => path,
+    };
+    let _ = std::process::Command::new("xdg-open").arg(target).spawn();
 }
 
 #[cfg(test)]
