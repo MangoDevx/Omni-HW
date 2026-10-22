@@ -1,6 +1,6 @@
 //! Memory checks: XMP/EXPO, channel layout, pressure, capacity and memory test results.
 
-use super::helpers::{finding, format_date, guided, memtest86_step};
+use super::helpers::{finding, guided};
 use super::{Category, Context, Level, Outcome, RECENT, Step};
 use crate::bios_help::{self, BiosSetting};
 use crate::cpuid::Vendor;

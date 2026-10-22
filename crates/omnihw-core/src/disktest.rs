@@ -114,6 +114,7 @@ impl Progress {
     }
 
     /// Fraction of the current phase done, 0..=1.
+    #[allow(dead_code)] // Used by the disk test, which isn't ported to Linux yet.
     pub(crate) fn set(&self, frac: f64) {
         self.done
             .store((frac.clamp(0.0, 1.0) * 1000.0) as u32, Ordering::Relaxed);

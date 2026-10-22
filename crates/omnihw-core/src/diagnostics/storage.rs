@@ -2,7 +2,6 @@
 
 use super::helpers::{board_query, finding, guided, plural, summarize};
 use super::{Category, Context, Level, Outcome, RECENT, Step};
-use crate::bios_help::{self, BiosSetting};
 use crate::format_bytes;
 use crate::storage::{BusType, PartitionStyle, sata_gen_speed};
 

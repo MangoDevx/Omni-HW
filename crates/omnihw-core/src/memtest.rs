@@ -551,13 +551,13 @@ fn split(buf: &mut [u64], n: usize) -> Vec<&mut [u64]> {
 #[cfg_attr(target_arch = "x86_64", allow(dead_code))]
 fn read_sum(s: &[u64]) -> u64 {
     let mut acc = [0u64; 8];
-    let mut it = s.chunks_exact(8);
-    for c in &mut it {
+    let (chunks, rest) = s.as_chunks::<8>();
+    for c in chunks {
         for (a, &x) in acc.iter_mut().zip(c) {
             *a = a.wrapping_add(x);
         }
     }
-    let rest = it.remainder().iter().fold(0u64, |a, &x| a.wrapping_add(x));
+    let rest = rest.iter().fold(0u64, |a, &x| a.wrapping_add(x));
     acc.iter().fold(rest, |a, &x| a.wrapping_add(x))
 }
 

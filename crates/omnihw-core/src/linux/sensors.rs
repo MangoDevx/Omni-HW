@@ -387,7 +387,7 @@ fn hwmon_group(chip: &str, kind: &str) -> String {
 
 /// One hwmon input: (file stem like "temp1", unit, raw value scale to the unit).
 fn hwmon_inputs(root: &Root, dir: &str) -> Vec<(String, Unit, f64)> {
-    let mut out = Vec::new();
+    let mut out: Vec<(String, Unit, f64)> = Vec::new();
     for f in root.list(dir) {
         let (stem, unit, scale) = if let Some(s) = f.strip_suffix("_input") {
             match s.trim_end_matches(|c: char| c.is_ascii_digit()) {
@@ -701,11 +701,14 @@ struct DriveSensor {
     hwmon: Option<String>,
 }
 
+/// Per block device: (sectors read, sectors written, ms spent doing I/O) from `stat`.
+type IoCounters = HashMap<String, (u64, u64, u64)>;
+
 /// Drive temperatures (nvme / drivetemp hwmon) and read/write rates and activity.
 pub struct StorageBackend {
     root: Root,
     drives: Vec<DriveSensor>,
-    last: Option<(HashMap<String, (u64, u64, u64)>, Instant)>,
+    last: Option<(IoCounters, Instant)>,
 }
 
 impl StorageBackend {

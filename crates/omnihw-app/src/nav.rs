@@ -149,7 +149,7 @@ mod tests {
         }
         assert_eq!(
             classic_order().count(),
-            CATEGORIES.iter().map(|c| c.len()).sum()
+            CATEGORIES.iter().map(|c| c.len()).sum::<usize>()
         );
     }
 

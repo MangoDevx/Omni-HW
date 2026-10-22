@@ -4,8 +4,6 @@
 use super::{Category, Context, Finding, Level, Outcome, Step};
 use crate::bios_help::Board;
 
-const MEMTEST_URL: &str = "https://www.memtest86.com/";
-
 /// A finding whose steps are plain text.
 pub(super) fn finding(
     level: Level,
@@ -59,11 +57,6 @@ pub(super) fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
-/// "2026-10-01".
-pub(super) fn format_date((y, m, d): (i64, u32, u32)) -> String {
-    format!("{y}-{m:02}-{d:02}")
-}
-
 /// Whole calendar months from (`year`, `month`) to today.
 pub(super) fn months_since(ctx: &Context, year: i64, month: u32) -> i64 {
     let (ty, tm, _) = ctx.today;
@@ -86,13 +79,5 @@ pub(super) fn bios_update_step(ctx: &Context, text: &str) -> Step {
     Step::search(
         text,
         board_query(ctx, "BIOS download", "motherboard BIOS update download"),
-    )
-}
-
-/// Run MemTest86 for a thorough memory test.
-pub(super) fn memtest86_step() -> Step {
-    Step::url(
-        "For a more thorough test, run MemTest86 from a USB stick for a few passes.",
-        MEMTEST_URL,
     )
 }

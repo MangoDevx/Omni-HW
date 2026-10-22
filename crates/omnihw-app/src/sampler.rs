@@ -759,7 +759,7 @@ fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>, root_a
     let mut backends = backends(&info);
     let mut readings = Vec::new();
     let started = Instant::now();
-    let mut notifier = Notifier::default();
+    let mut notifier = Notifier;
     let mut hw_watch = HwWatch::default();
     let mut network_read = NetworkReads::default();
     loop {

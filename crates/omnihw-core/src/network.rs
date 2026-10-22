@@ -849,7 +849,7 @@ impl NetAction {
 
     /// Decode [`NetAction::to_arg`]; `None` for anything malformed or invalid.
     pub fn from_arg(arg: &str) -> Option<NetAction> {
-        if arg.is_empty() || arg.len() % 2 != 0 || arg.len() > 4096 {
+        if arg.is_empty() || !arg.len().is_multiple_of(2) || arg.len() > 4096 {
             return None;
         }
         let bytes: Option<Vec<u8>> = (0..arg.len())
