@@ -29,6 +29,8 @@ pub struct GpuAdapter {
     pub displays: Vec<Display>,
     /// Driver date from the display adapter's registry key, as (year, month, day).
     pub driver_date: Option<(i64, u32, u32)>,
+    /// Size of the VRAM aperture (largest prefetchable PCI BAR), on discrete cards.
+    pub vram_bar_bytes: Option<u64>,
 }
 
 /// Resizable BAR state: whether the CPU can address all of VRAM at once.
@@ -40,7 +42,7 @@ pub enum ReBar {
     Disabled {
         bar_bytes: u64,
     },
-    /// No source for this GPU (only NVIDIA via NVML is supported so far).
+    /// Not readable for this GPU (integrated GPUs don't have it).
     Unknown,
 }
 
@@ -109,9 +111,15 @@ impl GpuAdapter {
         sensor_prefix(self.luid)
     }
 
-    /// Resizable BAR state, from NVML's BAR1 size on NVIDIA GPUs.
+    /// Resizable BAR state, from NVML's BAR1 size on NVIDIA GPUs, else the VRAM aperture's
+    /// PCI BAR size.
     pub fn rebar(&self) -> ReBar {
-        match self.nvml.as_ref().and_then(|n| n.bar1_total) {
+        match self
+            .nvml
+            .as_ref()
+            .and_then(|n| n.bar1_total)
+            .or(self.vram_bar_bytes)
+        {
             Some(b) if b > 0 => ReBar::from_bar_size(b),
             _ => ReBar::Unknown,
         }

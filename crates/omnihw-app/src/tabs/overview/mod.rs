@@ -512,7 +512,10 @@ fn rebar_line(ui: &mut Ui, g: &GpuAdapter) {
                 format_bytes(bar_bytes)
             ),
         ),
-        ReBar::Unknown => (None, "Only available for NVIDIA GPUs so far.".to_string()),
+        ReBar::Unknown => (
+            None,
+            "Not readable for this GPU (integrated GPUs don't use it).".to_string(),
+        ),
     };
     ui.add_space(2.0);
     ui.horizontal(|ui| {

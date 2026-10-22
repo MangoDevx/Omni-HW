@@ -70,6 +70,7 @@ pub fn adapter(root: &Root, card: &str) -> Option<GpuAdapter> {
         .unwrap_or(0);
     let slot = key_value(&uevent, "PCI_SLOT_NAME").unwrap_or_default();
     let driver = key_value(&uevent, "DRIVER").unwrap_or_default();
+    let driver_name = driver.clone();
     let vendor = pci_vendor_name(vendor_id).unwrap_or("Unknown");
     let name = root
         .read_nonempty(&format!("{dev}/product_name"))
@@ -83,7 +84,7 @@ pub fn adapter(root: &Root, card: &str) -> Option<GpuAdapter> {
         .flatten()
         .map(|v| format!("{driver} {v}"))
         .unwrap_or(driver);
-    Some(GpuAdapter {
+    let mut g = GpuAdapter {
         name,
         vendor_id,
         device_id,
@@ -104,7 +105,40 @@ pub fn adapter(root: &Root, card: &str) -> Option<GpuAdapter> {
         nvml: None,
         displays: displays(root, card),
         driver_date: None,
-    })
+        vram_bar_bytes: None,
+    };
+    if is_discrete(&g, &driver_name) {
+        g.vram_bar_bytes = root
+            .read(&format!("{dev}/resource"))
+            .and_then(|r| largest_prefetchable_bar(&r));
+    }
+    Some(g)
+}
+
+/// Discrete cards, whose VRAM aperture is what Resizable BAR resizes: amdgpu with dedicated
+/// VRAM (APUs only have a small carve-out), and Intel Arc. NVIDIA comes from NVML.
+fn is_discrete(g: &GpuAdapter, driver: &str) -> bool {
+    match driver {
+        "amdgpu" => g.dedicated_vram >= 2 << 30,
+        "i915" | "xe" => g.supports_rebar() == Some(true),
+        _ => false,
+    }
+}
+
+/// Largest prefetchable memory BAR in a sysfs PCI `resource` file (one "start end flags" line
+/// per region; the first six are the BARs).
+pub fn largest_prefetchable_bar(resource: &str) -> Option<u64> {
+    const MEM: u64 = 0x200;
+    const PREFETCH: u64 = 0x2000;
+    resource
+        .lines()
+        .take(6)
+        .filter_map(|l| {
+            let mut it = l.split_whitespace().map(parse_int);
+            let (start, end, flags) = (it.next()??, it.next()??, it.next()??);
+            (flags & MEM != 0 && flags & PREFETCH != 0 && end > start).then(|| end - start + 1)
+        })
+        .max()
 }
 
 pub fn gpu_adapters(root: &Root) -> Vec<GpuAdapter> {
@@ -146,6 +180,10 @@ mod tests {
         )
         .file("sys/class/drm/card1/device/revision", "0xc1\n")
         .file(
+            "sys/class/drm/card1/device/resource",
+            "0x0000007800000000 0x0000007bffffffff 0x000000000014220c\n",
+        )
+        .file(
             "sys/class/drm/card1/device/mem_info_vram_total",
             "17163091968\n",
         )
@@ -169,6 +207,24 @@ mod tests {
         assert_eq!(g.luid, 0x0300);
         assert_eq!(g.displays.len(), 1);
         assert_eq!(g.displays[0].summary(), "DP-1 (2560x1440)");
+        assert_eq!(g.vram_bar_bytes, Some(16 << 30));
+        assert_eq!(g.rebar().label(), "On");
+    }
+
+    #[test]
+    fn bars() {
+        // BAR0 16 GiB prefetchable (VRAM), BAR2 256 MiB prefetchable, BAR4 I/O, BAR5 registers.
+        let r = "0x0000007800000000 0x0000007bffffffff 0x000000000014220c\n\
+                 0x0000000000000000 0x0000000000000000 0x0000000000000000\n\
+                 0x0000007c00000000 0x0000007c0fffffff 0x000000000014220c\n\
+                 0x0000000000000000 0x0000000000000000 0x0000000000000000\n\
+                 0x000000000000e000 0x000000000000e0ff 0x0000000000040101\n\
+                 0x00000000fcc00000 0x00000000fcc7ffff 0x0000000000040200\n\
+                 0x00000000fcc80000 0x00000000fcc9ffff 0x000000000004e200\n";
+        assert_eq!(largest_prefetchable_bar(r), Some(16 << 30));
+        let legacy = "0x00000000e0000000 0x00000000efffffff 0x000000000014220c\n";
+        assert_eq!(largest_prefetchable_bar(legacy), Some(256 << 20));
+        assert_eq!(largest_prefetchable_bar(""), None);
     }
 
     #[test]

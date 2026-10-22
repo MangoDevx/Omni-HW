@@ -67,7 +67,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
         omnihw_core::gpu::ReBar::Disabled { bar_bytes } => {
             format!("Off ({} BAR)", format_bytes(bar_bytes))
         }
-        omnihw_core::gpu::ReBar::Unknown => "Unknown (NVIDIA only so far)".into(),
+        omnihw_core::gpu::ReBar::Unknown => "Unknown".into(),
     };
     card.push(("Resizable BAR", rebar));
     let displays = if g.displays.is_empty() {
