@@ -8,8 +8,8 @@ use super::{Category, Context, Level, Outcome, Step};
 use crate::bios_help::{self, BiosSetting};
 use crate::checkup::{Activation, Tpm, format_link_speed, problem_is_missing_driver, problem_text};
 use crate::network::Media;
+use crate::platform::PlanKind;
 use crate::power::{Action, BALANCED};
-use crate::win::PlanKind;
 
 /// Device Manager problems listed by name before "and N more".
 const DEVICES_LISTED: usize = 8;
@@ -451,9 +451,9 @@ mod tests {
     use crate::SystemInfo;
     use crate::checkup::{Device, NicLink, PcieLink};
     use crate::gpu::VENDOR_NVIDIA;
+    use crate::platform::PowerPlan;
     use crate::sensors::SensorTable;
     use crate::storage::{Drive, SataLink};
-    use crate::win::PowerPlan;
 
     #[test]
     fn system_checks() {

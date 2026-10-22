@@ -149,15 +149,15 @@ pub fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     ha.cmp(hb).then(na.cmp(&nb)).then(a.cmp(b))
 }
 
-/// The Linux implementations behind `crate::win`'s cross-platform API.
+/// The implementations behind `crate::platform`'s API.
 pub mod imp {
     use super::Root;
-    use crate::win::{Battery, MemoryStatus, OsInfo, PowerPlan};
+    use crate::platform::{Battery, MemoryStatus, OsInfo, PowerPlan};
 
     /// DRM adapters, with NVML details (and NVML's names and VRAM) on NVIDIA cards.
     pub fn gpu_adapters() -> Vec<crate::gpu::GpuAdapter> {
         let mut gpus = super::drm::gpu_adapters(&Root::system());
-        crate::win::nvml::attach_details(&mut gpus);
+        crate::platform::nvml::attach_details(&mut gpus);
         for g in &mut gpus {
             if let Some(n) = &g.nvml {
                 if !n.name.is_empty() {

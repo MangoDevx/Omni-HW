@@ -11,7 +11,7 @@ const NO_ELEVATE: &str = "--no-elevate";
 /// Whether this process runs as administrator (asked once; it can't change while running).
 pub fn elevated() -> bool {
     static ELEVATED: OnceLock<bool> = OnceLock::new();
-    *ELEVATED.get_or_init(omnihw_core::win::is_elevated)
+    *ELEVATED.get_or_init(omnihw_core::platform::is_elevated)
 }
 
 /// Returns true if an elevated copy was launched and this process should exit.
@@ -22,7 +22,7 @@ pub fn relaunch_elevated_if_useful() -> bool {
         .any(|a| a == NO_ELEVATE || a == crate::autostart::AUTOSTART_FLAG)
         || !crate::settings::Settings::load().ask_admin_at_start
         || elevated()
-        || !omnihw_core::win::has_smart_capable_drive()
+        || !omnihw_core::platform::has_smart_capable_drive()
     {
         return false;
     }

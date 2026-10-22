@@ -1,7 +1,7 @@
 //! Event Log page model: the System/Application events that matter for PC health, sorted into
 //! plain-English categories, plus the XPath filters that select them.
 //!
-//! Platform-neutral and unit-tested; the query runs in [`crate::win::events_viewer`] on a
+//! Platform-neutral and unit-tested; the query runs in [`crate::platform::events_viewer`] on a
 //! worker thread.
 //!
 //! Event ids (Microsoft Learn and the event manifests on Windows 11):

@@ -2,17 +2,17 @@
 //! `cargo run --release -p omnihw-core --example memtest`
 
 use omnihw_core::memtest::{self, Progress};
+use omnihw_core::platform;
 use omnihw_core::smbios::Smbios;
-use omnihw_core::win;
 use std::time::Instant;
 
 fn main() {
-    let smbios = win::smbios_buffer().and_then(|b| Smbios::parse_raw(&b).ok());
+    let smbios = platform::smbios_buffer().and_then(|b| Smbios::parse_raw(&b).ok());
     let expected = smbios.as_ref().and_then(|s| {
         let dimms: Vec<_> = s.populated_memory().collect();
         memtest::expectation(&dimms, s.memory_slots)
     });
-    let available = win::memory_status().map_or(0, |m| m.available_bytes);
+    let available = platform::memory_status().map_or(0, |m| m.available_bytes);
     let started = Instant::now();
     match memtest::run(available, expected, &Progress::default()) {
         Ok(r) => {

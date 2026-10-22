@@ -152,8 +152,8 @@ fn main() {
         use omnihw_core::linux::sensors::{
             CpuBackend, DrmGpuBackend, HwmonBackend, MemoryBackend, StorageBackend,
         };
+        use omnihw_core::platform::nvml::NvmlBackend;
         use omnihw_core::sensors::{SensorBackend, SensorTable};
-        use omnihw_core::win::nvml::NvmlBackend;
         let mut backends: Vec<Box<dyn SensorBackend>> = vec![
             Box::new(CpuBackend::new(Root::system(), info.topology.as_ref())),
             Box::new(HwmonBackend::new(Root::system(), info.topology.as_ref())),

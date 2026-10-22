@@ -1,12 +1,12 @@
 //! Power management: power plans and their settings, Fast Startup, wake sources, power
 //! requests and per-device power saving. The data model and parsers are platform-agnostic;
-//! reads and writes live in `win::power`, which returns empty data on Linux so far.
+//! reads and writes live in `platform::power`, which returns empty data on Linux so far.
 //!
 //! Gathering is split in two: [`PowerInfo::gather_settings`] (power plans and Fast Startup,
 //! cheap registry reads) and [`PowerInfo::gather`] (also devices, wake history and power
 //! requests). Both run on the background sampler thread, never in the UI.
 
-use crate::win::PlanKind;
+use crate::platform::PlanKind;
 
 /// A power plan (scheme).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -534,14 +534,14 @@ impl PowerInfo {
     /// Everything, including devices, wake history and (when elevated) power requests.
     pub fn gather() -> PowerInfo {
         let mut p = PowerInfo::gather_settings();
-        crate::win::power::gather_devices(&mut p);
+        crate::platform::power::gather_devices(&mut p);
         p
     }
 
     /// Only power plans, their settings, capabilities and Fast Startup (cheap).
     pub fn gather_settings() -> PowerInfo {
         let mut p = PowerInfo::default();
-        crate::win::power::gather_settings(&mut p);
+        crate::platform::power::gather_settings(&mut p);
         p
     }
 
@@ -779,13 +779,13 @@ impl std::fmt::Display for ApplyError {
 
 /// Apply a change. `SetValue` writes the active plan and re-applies it.
 pub fn apply(action: &Action) -> Result<(), ApplyError> {
-    crate::win::power::apply(action)
+    crate::platform::power::apply(action)
 }
 
 /// Raw `powercfg /requests` and `/waketimers` output; `None` unless running as administrator.
 /// Parse with [`parse_requests`] and [`parse_wake_timers`].
 pub fn query_admin_raw() -> Option<(String, String)> {
-    crate::win::power::query_admin_raw()
+    crate::platform::power::query_admin_raw()
 }
 
 // ---- Parsers --------------------------------------------------------------------------------

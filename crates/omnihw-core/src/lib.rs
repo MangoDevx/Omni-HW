@@ -1,8 +1,7 @@
 //! Omni-HW core: hardware detection and data model.
 //!
-//! Parsers (`cpuid`, `codename`, `topology`, `smbios`) are platform-agnostic;
-//! Windows calls live in [`win`], Linux readers in [`linux`] (exposed through `win`'s API),
-//! with stubs for other platforms.
+//! Parsers (`cpuid`, `codename`, `smbios`) are self-contained; the system reads live in
+//! [`linux`], exposed through [`platform`]'s API.
 
 pub mod alerts;
 pub mod battery;
@@ -21,6 +20,7 @@ pub mod linux;
 pub mod memtest;
 pub mod minidump;
 pub mod network;
+pub mod platform;
 pub mod power;
 pub mod recording;
 pub mod report;
@@ -30,15 +30,14 @@ pub mod smbios;
 pub mod storage;
 pub mod topology;
 pub mod whea;
-pub mod win;
 
 use codename::Codename;
 use cpuid::CpuInfo;
 use gpu::GpuAdapter;
+use platform::{Battery, MemoryStatus, OsInfo, PowerPlan};
 use smbios::Smbios;
 use storage::Drive;
 use topology::Topology;
-use win::{Battery, MemoryStatus, OsInfo, PowerPlan};
 
 /// Static system information, gathered once at startup.
 #[derive(Debug, Clone, Default)]
@@ -60,7 +59,7 @@ pub struct SystemInfo {
     pub microcode: Option<u32>,
     pub power_plan: Option<PowerPlan>,
     /// Windows settings that affect performance and stability.
-    pub windows: win::settings::WindowsSettings,
+    pub windows: platform::settings::WindowsSettings,
     /// Firmware, device, event-log and setup data for the Health Check.
     pub checkup: checkup::Checkup,
     /// Non-fatal problems encountered while gathering.
@@ -72,7 +71,7 @@ impl SystemInfo {
         // The Health Check data (event log, device tree, display modes) is the slowest part;
         // collect it alongside everything else.
         std::thread::scope(|s| {
-            let checkup = s.spawn(win::checkup::gather);
+            let checkup = s.spawn(platform::checkup::gather);
             let mut info = SystemInfo::gather_hardware();
             info.checkup = checkup.join().unwrap_or_default();
             info
@@ -89,7 +88,7 @@ impl SystemInfo {
             None
         });
 
-        let smbios = match win::smbios_buffer().map(|b| Smbios::parse_raw(&b)) {
+        let smbios = match platform::smbios_buffer().map(|b| Smbios::parse_raw(&b)) {
             Some(Ok(s)) => Some(s),
             Some(Err(e)) => {
                 warnings.push(format!("SMBIOS: {e}"));
@@ -104,16 +103,16 @@ impl SystemInfo {
             codename,
             topology,
             smbios,
-            base_mhz: win::nominal_mhz(),
-            memory: win::memory_status(),
-            gpus: win::gpu_adapters(),
-            drives: win::drives(),
-            os: win::os_info(),
-            battery: win::battery(),
-            battery_health: win::battery_health(),
-            microcode: win::microcode_revision(),
-            power_plan: win::power_plan(),
-            windows: win::settings::windows_settings(),
+            base_mhz: platform::nominal_mhz(),
+            memory: platform::memory_status(),
+            gpus: platform::gpu_adapters(),
+            drives: platform::drives(),
+            os: platform::os_info(),
+            battery: platform::battery(),
+            battery_health: platform::battery_health(),
+            microcode: platform::microcode_revision(),
+            power_plan: platform::power_plan(),
+            windows: platform::settings::windows_settings(),
             checkup: checkup::Checkup::default(),
             warnings,
         }

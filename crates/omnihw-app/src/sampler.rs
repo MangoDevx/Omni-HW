@@ -556,7 +556,7 @@ impl Sampler {
             memtest::expectation(&dimms, s.memory_slots)
         });
         // Size the buffer for what's free now, not at startup.
-        let available = omnihw_core::win::memory_status()
+        let available = omnihw_core::platform::memory_status()
             .or(info.memory)
             .map_or(0, |m| m.available_bytes);
         let ok = self.worker(
@@ -584,7 +584,7 @@ impl Sampler {
         }
         let ok = self.worker(
             "omnihw-event-log",
-            omnihw_core::win::events_viewer::read,
+            omnihw_core::platform::events_viewer::read,
             |log, snap| {
                 snap.event_log_busy = false;
                 snap.event_log = Some((Arc::new(log), SystemTime::now()));
@@ -711,7 +711,7 @@ fn backends(info: &SystemInfo) -> Vec<Box<dyn SensorBackend>> {
         list.push(Box::new(StorageBackend::new(Root::system(), &info.drives)));
     }
     // Vendor sensors first so they lead each GPU's group in the sensor list.
-    if let Some(b) = omnihw_core::win::nvml::NvmlBackend::new(&info.gpus) {
+    if let Some(b) = omnihw_core::platform::nvml::NvmlBackend::new(&info.gpus) {
         list.push(Box::new(b));
     }
     let drm = DrmGpuBackend::new(Root::system(), &info.gpus);

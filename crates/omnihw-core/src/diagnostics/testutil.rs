@@ -2,9 +2,9 @@
 
 use super::{Context, Level, Outcome};
 use crate::SystemInfo;
+use crate::platform::MemoryStatus;
 use crate::sensors::{Reading, SensorTable, Unit};
 use crate::smbios::{Bios, MemoryDevice, Smbios};
-use crate::win::MemoryStatus;
 
 pub(super) fn dimm(
     locator: &str,

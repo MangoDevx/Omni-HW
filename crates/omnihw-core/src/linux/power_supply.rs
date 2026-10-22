@@ -2,7 +2,7 @@
 
 use super::Root;
 use crate::battery::BatteryHealth;
-use crate::win::Battery;
+use crate::platform::Battery;
 
 const PS: &str = "/sys/class/power_supply";
 

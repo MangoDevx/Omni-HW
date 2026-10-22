@@ -377,7 +377,7 @@ fn system_card(ui: &mut Ui, info: &SystemInfo, snap: &Snapshot) {
             rows.push((os, o.summary()));
             rows.push(("Computer", o.computer_name.clone()));
         }
-        if let Some(u) = omnihw_core::win::uptime_secs() {
+        if let Some(u) = omnihw_core::platform::uptime_secs() {
             rows.push(("Uptime", format_uptime(u)));
         }
         if let Some(c) = val(snap, "battery/charge") {

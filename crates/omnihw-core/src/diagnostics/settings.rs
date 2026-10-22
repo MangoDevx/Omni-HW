@@ -114,7 +114,7 @@ mod tests {
 
     #[test]
     fn windows_setting_checks() {
-        use crate::win::settings::WindowsSettings;
+        use crate::platform::settings::WindowsSettings;
         let s = SensorTable::default();
         let run = |i: &SystemInfo| {
             let c = ctx(i, &s);

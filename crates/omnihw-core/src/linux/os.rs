@@ -1,7 +1,7 @@
 //! Distribution, kernel, uptime, memory and CPU details from procfs and sysfs.
 
 use super::{Root, key_value, parse_int};
-use crate::win::{MemoryStatus, OsInfo};
+use crate::platform::{MemoryStatus, OsInfo};
 
 /// Distribution name from os-release, kernel release and host name.
 pub fn os_info(root: &Root) -> Option<OsInfo> {

@@ -2,7 +2,7 @@
 //! rates, Device Manager problems, crash and hardware-error events, network link speeds, NVMe
 //! PCIe links, Windows activation, leftover GPU driver packages and startup apps.
 //!
-//! Gathered once at startup on the background thread (see [`crate::win::checkup`]); the checks
+//! Gathered once at startup on the background thread (see [`crate::platform::checkup`]); the checks
 //! in [`crate::diagnostics`] only read it. Parsers here are platform-agnostic and unit-tested.
 
 /// Everything the setup checks look at. Empty/`None` means "couldn't tell".

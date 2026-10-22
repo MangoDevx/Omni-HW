@@ -20,7 +20,7 @@ fn sections(info: &SystemInfo, snap: &Snapshot) -> Vec<report::Section> {
         title: "Health Check".into(),
         rows,
     }];
-    out.extend(report::sections(info, omnihw_core::win::uptime_secs()));
+    out.extend(report::sections(info, omnihw_core::platform::uptime_secs()));
     if let Some(p) = &snap.power {
         out.push(omnihw_core::power::report_section(p));
     }

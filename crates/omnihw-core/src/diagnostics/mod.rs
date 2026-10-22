@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn gaming_checks_are_grouped() {
         let info = SystemInfo {
-            windows: crate::win::settings::WindowsSettings {
+            windows: crate::platform::settings::WindowsSettings {
                 game_mode: Some(false),
                 ..Default::default()
             },
