@@ -4,6 +4,7 @@
 
 use crate::SystemInfo;
 use crate::diagnostics::Step;
+use crate::smbios::is_placeholder;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BoardVendor {
@@ -167,16 +168,6 @@ pub struct Board {
     pub vendor: BoardVendor,
     /// e.g. "ROG STRIX B650E-F GAMING WIFI"; empty if unknown.
     pub model: String,
-}
-
-/// Placeholder strings OEMs leave in SMBIOS.
-fn is_placeholder(s: &str) -> bool {
-    let l = s.trim().to_ascii_lowercase();
-    l.is_empty()
-        || l.contains("to be filled")
-        || l.contains("default string")
-        || l == "system product name"
-        || l == "not applicable"
 }
 
 impl Board {

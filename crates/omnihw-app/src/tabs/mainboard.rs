@@ -1,5 +1,18 @@
 use super::section;
 use omnihw_core::SystemInfo;
+use omnihw_core::smbios::is_placeholder;
+
+/// A section with only the rows that have a real value, left out when none has.
+fn known(ui: &mut egui::Ui, title: &str, rows: &[(&str, &str)]) {
+    let rows: Vec<(&str, String)> = rows
+        .iter()
+        .filter(|(_, v)| !is_placeholder(v))
+        .map(|(k, v)| (*k, v.trim().to_string()))
+        .collect();
+    if !rows.is_empty() {
+        section(ui, title, &rows);
+    }
+}
 
 pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
     let Some(s) = &info.smbios else {
@@ -7,36 +20,36 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
         return;
     };
     if let Some(b) = &s.board {
-        section(
+        known(
             ui,
             "Motherboard",
             &[
-                ("Manufacturer", b.manufacturer.clone()),
-                ("Model", b.product.clone()),
-                ("Version", b.version.clone()),
+                ("Manufacturer", &b.manufacturer),
+                ("Model", &b.product),
+                ("Version", &b.version),
             ],
         );
     }
     if let Some(sys) = &s.system {
-        section(
+        known(
             ui,
             "System",
             &[
-                ("Manufacturer", sys.manufacturer.clone()),
-                ("Product", sys.product.clone()),
-                ("Version", sys.version.clone()),
-                ("Family", sys.family.clone()),
+                ("Manufacturer", &sys.manufacturer),
+                ("Product", &sys.product),
+                ("Version", &sys.version),
+                ("Family", &sys.family),
             ],
         );
     }
     if let Some(b) = &s.bios {
-        section(
+        known(
             ui,
             "BIOS",
             &[
-                ("Brand", b.vendor.clone()),
-                ("Version", b.version.clone()),
-                ("Date", b.release_date.clone()),
+                ("Brand", &b.vendor),
+                ("Version", &b.version),
+                ("Date", &b.release_date),
             ],
         );
     }
@@ -45,9 +58,14 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
         (0, 0) => String::new(),
         (major, minor) => format!("{major}.{minor}"),
     };
-    let mut misc = vec![("SMBIOS Version", version)];
-    if let Some(p) = s.processors.first() {
-        misc.push(("CPU Socket", p.socket.clone()));
-    }
-    section(ui, "Firmware", &misc);
+    let socket = s
+        .processors
+        .first()
+        .map(|p| p.socket.as_str())
+        .unwrap_or("");
+    known(
+        ui,
+        "Firmware",
+        &[("SMBIOS Version", &version), ("CPU Socket", socket)],
+    );
 }

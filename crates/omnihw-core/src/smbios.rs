@@ -3,6 +3,19 @@
 //! Decodes types 0 (BIOS), 1 (System), 2 (Baseboard), 4 (Processor),
 //! 16 (Physical Memory Array) and 17 (Memory Device).
 
+/// Placeholder strings OEMs leave in SMBIOS ("Default string", "To be filled by O.E.M."),
+/// or nothing at all.
+pub fn is_placeholder(s: &str) -> bool {
+    let l = s.trim().to_ascii_lowercase();
+    l.is_empty()
+        || l.contains("to be filled")
+        || l.contains("default string")
+        || l == "system product name"
+        || l == "system version"
+        || l == "not applicable"
+        || l == "not specified"
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Bios {
     pub vendor: String,
