@@ -25,7 +25,7 @@
 See your CPU, GPU, memory, storage and system at a glance, with live numbers, history graphs and a tile for every CPU core. Colors warm up as things get busy: **blue** is fine, **orange** is worth a look, **red** needs attention.
 
 ### 🩺 Health Check
-25 automatic checks that spot common problems and explain them in plain English, with step-by-step fixes. A few favorites:
+Automatic checks that spot common problems and explain them in plain English, with step-by-step fixes. A few favorites:
 
 - 🖥️ Monitor plugged into the **motherboard** instead of the graphics card (it happens to everyone!)
 - 🐏 RAM running slower than it's rated for (XMP/EXPO off), or stuck in single channel
