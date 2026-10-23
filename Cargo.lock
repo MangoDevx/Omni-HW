@@ -2466,7 +2466,7 @@ dependencies = [
 
 [[package]]
 name = "omnihw-app"
-version = "0.5.0"
+version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
@@ -2478,7 +2478,7 @@ dependencies = [
 
 [[package]]
 name = "omnihw-core"
-version = "0.5.0"
+version = "0.1.0"
 dependencies = [
  "hex",
  "libc",
