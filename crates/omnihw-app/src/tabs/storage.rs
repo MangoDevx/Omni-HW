@@ -153,12 +153,12 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, links: &[PcieLink]) {
             );
         }
         None if d.bus == omnihw_core::storage::BusType::Nvme => {
-            if crate::elevate::elevated() {
-                ui.weak("This drive didn't return its NVMe health log.");
-            } else {
-                ui.weak("The NVMe health log can only be read by root.");
-                super::root_read_button(ui, snap, "Drive health");
-            }
+            health_unread(
+                ui,
+                snap,
+                "This drive didn't return its NVMe health log.",
+                "The NVMe health log can only be read by root.",
+            );
         }
         None => {}
     }
@@ -175,12 +175,12 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, links: &[PcieLink]) {
                 | BusType::Spaces
         ) =>
         {
-            if crate::elevate::elevated() {
-                ui.weak("This drive didn't return SMART data.");
-            } else {
-                ui.weak("SMART data can only be read by root.");
-                super::root_read_button(ui, snap, "Drive health");
-            }
+            health_unread(
+                ui,
+                snap,
+                "This drive didn't return SMART data.",
+                "SMART data can only be read by root.",
+            );
         }
         None => {}
     }
@@ -192,10 +192,33 @@ fn drive(ui: &mut egui::Ui, d: &Drive, snap: &Snapshot, links: &[PcieLink]) {
         .iter()
         .filter(|t| t.reading.id.starts_with(&prefix))
         .collect();
+    // SATA drives report their temperature through the drivetemp module, which most distros
+    // don't load by default.
+    let no_temp =
+        d.bus == BusType::Sata && !rows.iter().any(|t| t.reading.id == format!("{prefix}temp"));
     if !rows.is_empty() {
+        ui.add_space(4.0);
         ui.label(RichText::new("Sensors").strong());
         super::sensors::sensor_grid(ui, &prefix, rows.into_iter());
     }
+    if no_temp {
+        ui.weak(
+            "No temperature: load the drivetemp kernel module (sudo modprobe drivetemp, and              add drivetemp to /etc/modules-load.d/drivetemp.conf to keep it after a restart).",
+        );
+    }
+}
+
+/// The "Health" group for a drive whose health data wasn't read: why, and "Read as root..."
+/// when root could read it.
+fn health_unread(ui: &mut egui::Ui, snap: &Snapshot, as_root: &str, needs_root: &str) {
+    group_box(ui, RichText::new("Health").strong(), 0.0, 6.0, |ui| {
+        if crate::elevate::elevated() {
+            ui.weak(as_root);
+        } else {
+            ui.weak(needs_root);
+            super::root_read_button(ui, snap, "Drive health");
+        }
+    });
 }
 
 /// The "Speed test" group: run button (confirmed in [`dispatch`]), live progress and the last

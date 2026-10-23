@@ -23,27 +23,27 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         _ => dimms.len().to_string(),
     };
 
-    let mut rows = vec![
-        (
-            "Type",
-            first.map(|d| d.memory_type.to_string()).unwrap_or_default(),
-        ),
-        (
-            "Installed",
-            if installed_mb > 0 {
-                format!("{} GB", installed_mb / 1024)
-            } else {
-                String::new()
-            },
-        ),
-        (
-            "Usable",
-            usable_mb
-                .map(|m| format!("{:.1} GB", m as f64 / 1024.0))
-                .unwrap_or_default(),
-        ),
-        ("Modules", modules),
-    ];
+    let usable = (
+        "Usable",
+        usable_mb
+            .map(|m| format!("{:.1} GB", m as f64 / 1024.0))
+            .unwrap_or_default(),
+    );
+    // Without the SMBIOS tables there's nothing to say about type, size or modules: leave the
+    // rows out rather than show "0 modules".
+    let mut rows = if dimms.is_empty() {
+        vec![usable]
+    } else {
+        vec![
+            (
+                "Type",
+                first.map(|d| d.memory_type.to_string()).unwrap_or_default(),
+            ),
+            ("Installed", format!("{} GB", installed_mb / 1024)),
+            usable,
+            ("Modules", modules),
+        ]
+    };
     if let Some(d) = first {
         rows.push((
             "Speed (configured)",
@@ -54,13 +54,22 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         rows.push(("Load", format!("{:.0} %", t.reading.value)));
     }
     section(ui, "General", &rows);
+    if dimms.is_empty() {
+        group_box(ui, RichText::new("Modules").strong(), 0.0, 6.0, |ui| {
+            if crate::elevate::elevated() {
+                ui.weak("The SMBIOS tables list no memory modules.");
+            } else {
+                ui.weak(
+                    "Type, installed size and module details come from the SMBIOS tables, \
+                     which only root can read.",
+                );
+                super::root_read_button(ui, snap, "Memory module details");
+            }
+        });
+    }
     quick_test(ui, snap);
 
     if dimms.is_empty() {
-        if !crate::elevate::elevated() {
-            ui.weak("Module details come from the SMBIOS tables, which only root can read.");
-            super::root_read_button(ui, snap, "Memory module details");
-        }
         return;
     }
     ui.label(egui::RichText::new("Modules (SMBIOS)").strong());
