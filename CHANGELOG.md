@@ -2,7 +2,7 @@
 
 User-visible changes in each Omni-HW for Linux release. The release workflow publishes the section for the tagged version (`linux-v<version>`) as the GitHub release notes, which the in-app **What's new** button opens.
 
-## Unreleased
+## 0.1.0
 
 ### New
 - **Omni-HW for Linux**: the first Linux version, shipped as a `.tar.gz` for x86-64 (built on Ubuntu 22.04).
