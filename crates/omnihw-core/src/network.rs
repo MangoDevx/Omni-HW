@@ -687,8 +687,8 @@ pub fn apply(action: &NetAction) -> Result<(), String> {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PingStats {
     pub sent: u32,
-    /// Round-trip time in ms of each reply, in order.
-    pub rtts: Vec<u32>,
+    /// Round-trip time in ms of each reply, in order (fractional: LAN replies take under 1 ms).
+    pub rtts: Vec<f64>,
 }
 
 impl PingStats {
@@ -705,16 +705,15 @@ impl PingStats {
     }
 
     pub fn avg_ms(&self) -> Option<f64> {
-        (!self.rtts.is_empty())
-            .then(|| self.rtts.iter().map(|&r| f64::from(r)).sum::<f64>() / self.rtts.len() as f64)
+        (!self.rtts.is_empty()).then(|| self.rtts.iter().sum::<f64>() / self.rtts.len() as f64)
     }
 
-    pub fn min_ms(&self) -> Option<u32> {
-        self.rtts.iter().copied().min()
+    pub fn min_ms(&self) -> Option<f64> {
+        self.rtts.iter().copied().reduce(f64::min)
     }
 
-    pub fn max_ms(&self) -> Option<u32> {
-        self.rtts.iter().copied().max()
+    pub fn max_ms(&self) -> Option<f64> {
+        self.rtts.iter().copied().reduce(f64::max)
     }
 
     /// Jitter: mean difference between consecutive round-trip times (RFC 3550 style, unsmoothed).
@@ -722,24 +721,23 @@ impl PingStats {
         if self.rtts.len() < 2 {
             return None;
         }
-        let sum: f64 = self
-            .rtts
-            .windows(2)
-            .map(|w| (f64::from(w[0]) - f64::from(w[1])).abs())
-            .sum();
+        let sum: f64 = self.rtts.windows(2).map(|w| (w[0] - w[1]).abs()).sum();
         Some(sum / (self.rtts.len() - 1) as f64)
     }
 
-    /// "12.3 ms avg (10-18), jitter 2.1 ms, 0 % loss" or "no replies".
+    /// "12.3 ms avg (10.0-18.0), jitter 2.1 ms, 0 % loss" or "no replies".
     pub fn summary(&self) -> String {
         match (self.avg_ms(), self.min_ms(), self.max_ms()) {
             (Some(avg), Some(lo), Some(hi)) => {
                 let jitter = self
                     .jitter_ms()
-                    .map(|j| format!(", jitter {j:.1} ms"))
+                    .map(|j| format!(", jitter {} ms", ms(j)))
                     .unwrap_or_default();
                 format!(
-                    "{avg:.1} ms avg ({lo}-{hi}){jitter}, {:.0} % loss ({}/{} replies)",
+                    "{} ms avg ({}-{}){jitter}, {:.0} % loss ({}/{} replies)",
+                    ms(avg),
+                    ms(lo),
+                    ms(hi),
                     self.loss_pct(),
                     self.received(),
                     self.sent
@@ -747,6 +745,15 @@ impl PingStats {
             }
             _ => format!("no replies ({} sent)", self.sent),
         }
+    }
+}
+
+/// A round-trip time: two decimals under 1 ms (LAN), one above.
+fn ms(v: f64) -> String {
+    if v < 1.0 {
+        format!("{v:.2}")
+    } else {
+        format!("{v:.1}")
     }
 }
 
@@ -948,7 +955,7 @@ pub fn local_results(a: &Adapter, p: &LocalProbes) -> Vec<TestLine> {
 }
 
 /// What the internet tests contact. Shown next to their button.
-pub const INTERNET_TARGETS: &str = "DNS lookup of dns.msftncsi.com, an HTTP request to www.msftconnecttest.com/connecttest.txt (Windows' own connectivity probes) and pings to the public DNS resolvers 1.1.1.1 (Cloudflare) and 8.8.8.8 (Google)";
+pub const INTERNET_TARGETS: &str = "DNS lookup of dns.msftncsi.com, an HTTP request to www.msftconnecttest.com/connecttest.txt (Microsoft's connectivity-check hosts) and pings to the public DNS resolvers 1.1.1.1 (Cloudflare) and 8.8.8.8 (Google)";
 const NCSI_DNS_NAME: &str = "dns.msftncsi.com";
 const NCSI_DNS_ADDR: Ipv4Addr = Ipv4Addr::new(131, 107, 255, 255);
 const NCSI_HTTP_HOST: &str = "www.msftconnecttest.com";
@@ -1262,7 +1269,7 @@ mod tests {
         assert_eq!(settings(&actions[0], "802-3-ethernet"), None);
     }
 
-    fn stats(sent: u32, rtts: &[u32]) -> PingStats {
+    fn stats(sent: u32, rtts: &[f64]) -> PingStats {
         PingStats {
             sent,
             rtts: rtts.to_vec(),
@@ -1271,16 +1278,21 @@ mod tests {
 
     #[test]
     fn ping_statistics() {
-        let s = stats(4, &[10, 20, 10, 20]);
+        let s = stats(4, &[10.0, 20.0, 10.0, 20.0]);
         assert_eq!(s.loss_pct(), 0.0);
         assert_eq!(s.avg_ms(), Some(15.0));
         assert_eq!(s.jitter_ms(), Some(10.0));
-        assert_eq!((s.min_ms(), s.max_ms()), (Some(10), Some(20)));
+        assert_eq!((s.min_ms(), s.max_ms()), (Some(10.0), Some(20.0)));
         assert_eq!(
             s.summary(),
-            "15.0 ms avg (10-20), jitter 10.0 ms, 0 % loss (4/4 replies)"
+            "15.0 ms avg (10.0-20.0), jitter 10.0 ms, 0 % loss (4/4 replies)"
         );
-        let s = stats(4, &[5]);
+        // LAN replies under a millisecond keep two decimals instead of rounding to 0.
+        assert_eq!(
+            stats(2, &[0.21, 0.35]).summary(),
+            "0.28 ms avg (0.21-0.35), jitter 0.14 ms, 0 % loss (2/2 replies)"
+        );
+        let s = stats(4, &[5.0]);
         assert_eq!(s.loss_pct(), 75.0);
         assert_eq!(s.jitter_ms(), None);
         assert_eq!(stats(3, &[]).summary(), "no replies (3 sent)");
@@ -1300,7 +1312,7 @@ mod tests {
         let a = ethernet();
         let gw: IpAddr = "192.168.1.1".parse().unwrap();
         let good = LocalProbes {
-            gateways: vec![(gw, stats(4, &[1, 1, 2, 1]))],
+            gateways: vec![(gw, stats(4, &[1.0, 1.0, 2.0, 1.0]))],
             dns: vec![(gw, DnsProbe::Answered)],
         };
         let r = local_results(&a, &good);
@@ -1355,7 +1367,11 @@ mod tests {
         let good = InternetProbes {
             dns: Ok(vec![NCSI_DNS_ADDR]),
             http: Ok((200, "Microsoft Connect Test".into())),
-            pings: vec![(v4("1.1.1.1"), "Cloudflare", stats(4, &[12, 13, 12, 14]))],
+            pings: vec![(
+                v4("1.1.1.1"),
+                "Cloudflare",
+                stats(4, &[12.0, 13.0, 12.0, 14.0]),
+            )],
         };
         assert!(
             internet_results(&good)
@@ -1365,7 +1381,7 @@ mod tests {
         let portal = InternetProbes {
             dns: Ok(vec![v4("10.0.0.1")]),
             http: Ok((302, String::new())),
-            pings: vec![(v4("8.8.8.8"), "Google", stats(20, &[300; 15]))],
+            pings: vec![(v4("8.8.8.8"), "Google", stats(20, &[300.0; 15]))],
         };
         let r = internet_results(&portal);
         assert!(r.iter().all(|l| l.verdict == Verdict::Warn), "{r:?}");

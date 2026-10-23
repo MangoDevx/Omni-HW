@@ -151,6 +151,9 @@ fn rows(a: &Adapter) -> Vec<(&'static str, String)> {
                     Some(s) => format!("On (server {s})"),
                     None => "On".into(),
                 }
+            } else if a.ipv4.is_empty() {
+                // Linux tells DHCP from the addresses it handed out: with none there's no answer.
+                String::new()
             } else {
                 "Off (address set by hand)".into()
             },

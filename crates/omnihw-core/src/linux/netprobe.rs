@@ -54,9 +54,7 @@ pub fn ping_series(ip: IpAddr, scope: u32, count: u32, gap_ms: u64) -> PingStats
         }
         stats.sent += 1;
         if let Ok(reply) = pinger.ping(ip, PING_TIMEOUT) {
-            stats
-                .rtts
-                .push((reply.rtt.as_secs_f64() * 1000.0).round() as u32);
+            stats.rtts.push(reply.rtt.as_secs_f64() * 1000.0);
         }
     }
     stats
