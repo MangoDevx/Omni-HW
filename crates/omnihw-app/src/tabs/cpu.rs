@@ -24,7 +24,14 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
             ("Technology", process),
             (
                 "Package",
-                socket.map(|p| p.socket.clone()).unwrap_or_default(),
+                socket
+                    .map(|p| p.socket.clone())
+                    .filter(|s| !omnihw_core::smbios::is_placeholder(s))
+                    .or_else(|| {
+                        let n = info.codename?;
+                        omnihw_core::codename::desktop_socket(n.codename).map(String::from)
+                    })
+                    .unwrap_or_default(),
             ),
             ("Vendor", c.vendor_string.clone()),
             (

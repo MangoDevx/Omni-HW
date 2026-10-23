@@ -122,10 +122,18 @@ pub fn brand_ghz_mhz(brand: &str) -> Option<u32> {
     Some((ghz * 1000.0).round() as u32)
 }
 
-/// Base clock: intel_pstate's `base_frequency`, else the brand string's "@ x.xxGHz".
+/// Base clock: intel_pstate's `base_frequency`, else ACPI CPPC's nominal frequency (AMD's
+/// brand string carries no clock), else the brand string's "@ x.xxGHz".
 pub fn nominal_mhz(root: &Root) -> Option<u32> {
     if let Some(khz) = root.read_u64("/sys/devices/system/cpu/cpu0/cpufreq/base_frequency") {
         return u32::try_from(khz / 1000).ok().filter(|&m| m > 0);
+    }
+    if let Some(mhz) = root
+        .read_u64("/sys/devices/system/cpu/cpu0/acpi_cppc/nominal_freq")
+        .and_then(|m| u32::try_from(m).ok())
+        .filter(|&m| m > 0)
+    {
+        return Some(mhz);
     }
     let text = root.read("/proc/cpuinfo")?;
     brand_ghz_mhz(cpuinfo_value(&text, "model name")?)
@@ -311,5 +319,19 @@ mod tests {
         );
         assert_eq!(nominal_mhz(&f.root()), Some(3600));
         assert_eq!(brand_ghz_mhz("AMD Ryzen 7 7800X3D 8-Core Processor"), None);
+
+        let f = Fixture::new();
+        f.file(
+            "proc/cpuinfo",
+            "processor	: 0
+model name	: AMD Ryzen 9 5900X 12-Core Processor
+",
+        )
+        .file(
+            "sys/devices/system/cpu/cpu0/acpi_cppc/nominal_freq",
+            "3700
+",
+        );
+        assert_eq!(nominal_mhz(&f.root()), Some(3700));
     }
 }

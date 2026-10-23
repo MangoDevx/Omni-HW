@@ -120,6 +120,16 @@ pub fn lookup(vendor: Vendor, family: u32, model: u32) -> Option<Codename> {
         .map(|e| e.name)
 }
 
+/// The socket of a desktop-only AMD family (no mobile or workstation parts share its codename),
+/// for when SMBIOS can't be read.
+pub fn desktop_socket(codename: &str) -> Option<&'static str> {
+    match codename {
+        "Matisse" | "Vermeer" => Some("AM4"),
+        "Raphael" | "Granite Ridge" => Some("AM5"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +142,9 @@ mod tests {
         assert_eq!(lookup(A, 0x19, 0x21).unwrap().microarch, "Zen 3");
         assert_eq!(lookup(A, 0x1A, 0x44).unwrap().codename, "Granite Ridge");
         assert_eq!(lookup(A, 0x17, 0x71).unwrap().codename, "Matisse");
+        let vermeer = lookup(A, 0x19, 0x21).unwrap().codename;
+        assert_eq!(desktop_socket(vermeer), Some("AM4"));
+        assert_eq!(desktop_socket("Cezanne / Barcelo"), None);
     }
 
     #[test]
