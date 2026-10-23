@@ -51,7 +51,10 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
         card.push(("BIOS Version", n.vbios.clone()));
     }
     let driver = match nv {
-        Some(n) if !n.driver_version.is_empty() => {
+        // Linux's driver string already carries NVML's version ("nvidia 615.78.08").
+        Some(n)
+            if !n.driver_version.is_empty() && !g.driver_version.contains(&n.driver_version) =>
+        {
             format!("{} ({})", n.driver_version, g.driver_version)
         }
         _ => g.driver_version.clone(),

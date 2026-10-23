@@ -174,8 +174,12 @@ pub mod imp {
                 if g.dedicated_vram == 0 {
                     g.dedicated_vram = n.memory_total;
                 }
-                if !n.driver_version.is_empty() {
-                    g.driver_version = n.driver_version.clone();
+                // Keep the kernel driver's name ("nvidia 615.78.08"): the Health Check tells
+                // NVIDIA's driver from nouveau by it. Add NVML's version when the module has none.
+                if !n.driver_version.is_empty() && !g.driver_version.contains(&n.driver_version) {
+                    g.driver_version = format!("{} {}", g.driver_version, n.driver_version)
+                        .trim()
+                        .to_string();
                 }
             }
         }

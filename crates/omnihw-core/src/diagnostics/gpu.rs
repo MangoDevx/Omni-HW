@@ -96,16 +96,36 @@ pub(super) fn gpu_pcie_link(ctx: &Context) -> Outcome {
         };
         checked.push(format!("{}: x{cur_w} {cur_gen}.0", g.name));
         if cur_w < max_w {
+            // Exactly half is how boards split a slot's lanes; anything else is usually seating.
+            let (detail, steps): (String, &[&str]) = if cur_w * 2 == max_w {
+                (
+                    format!(
+                        "The card supports x{max_w} but the link trained at x{cur_w}, halving its bandwidth. Exactly half usually means the motherboard split the slot's lanes: a card in the second full-length slot, or on some boards an M.2 drive in a slot that borrows the graphics lanes."
+                    ),
+                    &[
+                        "Look up the lane-sharing table in the motherboard manual (often under \"Expansion slots\" or \"M.2\") to see which slot or M.2 socket takes lanes from the graphics slot.",
+                        "Move that card or drive to a slot or M.2 socket that doesn't share lanes with the graphics slot.",
+                        "If nothing shares the lanes, reseat the card in the top full-length slot and check any riser cable.",
+                    ],
+                )
+            } else {
+                (
+                    format!(
+                        "The card supports x{max_w} but the link trained at x{cur_w}, reducing bandwidth."
+                    ),
+                    &[
+                        "Make sure the card is in the top full-length (CPU) slot and fully seated.",
+                        "Check whether an M.2 drive or other card is sharing the slot's lanes (see the motherboard manual).",
+                        "Reseat the card and clean the slot contacts; check riser cables if one is used.",
+                    ],
+                )
+            };
             out.push(finding(
                 Level::Warning,
                 Category::Gpu,
                 format!("{} runs at PCIe x{cur_w} instead of x{max_w}", g.name),
-                format!("The card supports x{max_w} but the link trained at x{cur_w}, reducing bandwidth."),
-                &[
-                    "Make sure the card is in the top full-length (CPU) slot and fully seated.",
-                    "Check whether an M.2 drive or other card is sharing the slot's lanes (see the motherboard manual).",
-                    "Reseat the card and clean the slot contacts; check riser cables if one is used.",
-                ],
+                detail,
+                steps,
             ));
         } else if cur_gen < max_gen {
             // Lower generation at idle is normal power saving; only flag it while the GPU is busy.
