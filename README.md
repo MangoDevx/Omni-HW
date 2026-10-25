@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  🦀 Written in Rust · 🪟 Windows 10/11 · 🔍 Read-only · 📦 Single exe · 🔒 Offline by default
+  🦀 Written in Rust · 🖥️ Windows & Linux · 🔍 Read-only · 📦 Single exe · 🔒 Offline by default
 </p>
 
 <p align="center">
