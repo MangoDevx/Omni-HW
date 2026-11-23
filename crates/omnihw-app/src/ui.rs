@@ -287,8 +287,8 @@ pub fn confirm(
     window.open_alert_dialog(cx, move |alert, _, _| {
         let (app, apply) = (app.clone(), apply.clone());
         alert
-            .title(title.clone())
-            .description(text.clone())
+            .title(label(title.clone()))
+            .description(label(text.clone()))
             .show_cancel(true)
             .ok_text(ok)
             .on_ok(move |_, window, cx| {
