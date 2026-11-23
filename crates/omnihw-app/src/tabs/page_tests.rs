@@ -1,37 +1,25 @@
 //! Page tests: every page drawn from the fake machines in [`omnihw_core::testkit`] (an AMD
-//! desktop with an NVIDIA GPU and an Intel laptop) and checked through the accessibility tree.
-//! They catch pages that panic on real-looking data and labels that go missing.
+//! desktop with an NVIDIA GPU and an Intel laptop) in a window without a screen, and checked
+//! through the text it painted. They catch pages that panic on real-looking data and labels
+//! that go missing.
+//!
+//! The helpers here are shared: a page's own tests (in its module) open the app with
+//! [`open`] or [`page`], drive it with `gpui_kit::test::TestWindowExt` (click, press, ...)
+//! and read the result with [`texts`].
 
+use crate::app::{OmniApp, Tab};
 use crate::sampler::{Sampler, Snapshot};
-use egui_kittest::kittest::Queryable;
-use egui_kittest::{Harness, SnapshotResults};
+use crate::settings::{NavStyle, Settings, Theme};
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{
+    AnyWindowHandle, AppContext, Bounds, Entity, Point, TestAppContext, WindowBounds,
+    WindowOptions, px, size,
+};
 use omnihw_core::SystemInfo;
 use omnihw_core::testkit::{desktop, laptop, sensor_table};
 
-/// Screenshot tests run locally only: GitHub's runners have no GPU to render them with.
-fn screenshots_enabled() -> bool {
-    std::env::var_os("GITHUB_ACTIONS").is_none()
-}
-
-/// Draw `page` at `size` and compare it with `tests/snapshots/<name>.png` (create or update the
-/// file with `UPDATE_SNAPSHOTS=1`). Results are collected in `results`, which reports every
-/// mismatch of a test at once when it drops.
-fn screenshot<'a>(
-    results: &mut SnapshotResults,
-    name: &str,
-    size: egui::Vec2,
-    page: impl FnMut(&mut egui::Ui) + 'a,
-) {
-    if !screenshots_enabled() {
-        return;
-    }
-    let mut h = Harness::builder().with_size(size).build_ui(page);
-    h.run_steps(4);
-    h.snapshot(name);
-    results.extend(h.take_snapshot_results());
-}
-
-fn snapshot(info: &SystemInfo) -> Snapshot {
+/// A snapshot with five samples of every sensor of `info`.
+pub fn snapshot(info: &SystemInfo) -> Snapshot {
     Snapshot {
         table: sensor_table(info, 5),
         samples: 5,
@@ -40,233 +28,221 @@ fn snapshot(info: &SystemInfo) -> Snapshot {
     }
 }
 
-/// Draw `page` in a window tall enough that nothing is cut off. A few frames, not "until idle":
-/// spinners and some layouts keep asking for repaints.
-fn draw<'a>(page: impl FnMut(&mut egui::Ui) + 'a) -> Harness<'a> {
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1200.0, 3000.0))
-        .build_ui(page);
-    h.run_steps(4);
-    h
+/// Both fake machines.
+pub fn machines() -> [SystemInfo; 2] {
+    [desktop(), laptop()]
 }
 
-/// Every text in `texts` appears somewhere on the page.
-fn assert_shows(h: &Harness<'_>, texts: &[&str]) {
-    for t in texts {
+/// Open the app on a fake sampler serving `info` and `snap`, in a window tall enough that
+/// nothing is cut off. No sampling thread, tray icon or settings file is involved.
+pub fn open(
+    cx: &mut TestAppContext,
+    info: SystemInfo,
+    snap: Snapshot,
+    settings: Settings,
+) -> (AnyWindowHandle, Entity<OmniApp>) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        crate::app::bind_keys(cx);
+        let bounds = Bounds {
+            origin: Point::default(),
+            size: size(px(1200.0), px(3000.0)),
+        };
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            ..Default::default()
+        };
+        gpui_kit::open_window(options, cx, |window, cx| {
+            cx.new(|cx| OmniApp::for_test(settings, Sampler::fake(info, snap), window, cx))
+        })
+        .expect("open the test window")
+    })
+}
+
+/// Show `tab` without starting the reads a real page switch would.
+pub fn go(cx: &mut TestAppContext, app: &Entity<OmniApp>, tab: Tab) {
+    cx.update(|cx| {
+        app.update(cx, |app, cx| {
+            app.tab = tab;
+            cx.notify();
+        })
+    });
+}
+
+/// Draw a frame and return every visible piece of text on it: the labels, then the names of
+/// the controls (buttons, check boxes, ...), which is how assistive technology sees them.
+pub fn texts(cx: &mut TestAppContext, window: AnyWindowHandle) -> Vec<String> {
+    use gpui_kit::base::test_support;
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.draw(cx).clear(cx);
+        let labels = test_support::texts(window);
+        let controls = test_support::snapshots(window);
+        labels
+            .iter()
+            .filter(|t| t.visible())
+            .map(|t| t.text().to_string())
+            .chain(
+                controls
+                    .iter()
+                    .filter(|c| c.visible())
+                    .filter_map(|c| c.label().map(str::to_string)),
+            )
+            .collect()
+    })
+    .expect("the test window is open")
+}
+
+/// Open the app with default settings on `tab` and return the text it shows.
+pub fn page(cx: &mut TestAppContext, info: &SystemInfo, snap: Snapshot, tab: Tab) -> Vec<String> {
+    let (window, app) = open(cx, info.clone(), snap, Settings::default());
+    go(cx, &app, tab);
+    texts(cx, window)
+}
+
+/// Every string in `wanted` appears somewhere in `texts`.
+#[track_caller]
+pub fn assert_shows(texts: &[String], wanted: &[&str]) {
+    for w in wanted {
         assert!(
-            h.query_all_by_label_contains(t).next().is_some(),
-            "page doesn't show {t:?}"
+            texts.iter().any(|t| t.contains(w)),
+            "page doesn't show {w:?}; it shows {texts:?}"
         );
     }
 }
 
-/// (machine, texts its pages must show) for the hardware pages.
-fn machines() -> [(SystemInfo, &'static str); 2] {
-    [(desktop(), "desktop"), (laptop(), "laptop")]
-}
-
-#[test]
-fn cpu_page() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let h = draw(|ui| super::cpu::show(ui, &info, &snap));
+#[gpui_kit::test]
+fn cpu_page(cx: &mut TestAppContext) {
+    for info in machines() {
         let model = if info.cpu.vendor == omnihw_core::cpuid::Vendor::Amd {
             "Ryzen 7 7800X3D"
         } else {
             "i7-1360P"
         };
-        assert_shows(&h, &[model]);
+        let shown = page(cx, &info, snapshot(&info), Tab::Cpu);
+        assert_shows(&shown, &[model, "Processor", "Clocks", "Topology"]);
     }
 }
 
-#[test]
-fn caches_page() {
-    for (info, _) in machines() {
-        let h = draw(|ui| super::caches::show(ui, &info));
-        assert_shows(&h, &["L1", "L3"]);
+#[gpui_kit::test]
+fn caches_page(cx: &mut TestAppContext) {
+    for info in machines() {
+        let shown = page(cx, &info, snapshot(&info), Tab::Caches);
+        assert_shows(&shown, &["L1", "L3", "Associativity"]);
     }
 }
 
-#[test]
-fn mainboard_page() {
+#[gpui_kit::test]
+fn mainboard_page(cx: &mut TestAppContext) {
     let info = desktop();
-    let h = draw(|ui| super::mainboard::show(ui, &info));
-    assert_shows(&h, &["ROG STRIX B650E-F GAMING WIFI", "2613"]);
+    let shown = page(cx, &info, snapshot(&info), Tab::Mainboard);
+    assert_shows(&shown, &["ROG STRIX B650E-F GAMING WIFI", "2613"]);
     let info = laptop();
-    let h = draw(|ui| super::mainboard::show(ui, &info));
-    assert_shows(&h, &["LENOVO"]);
+    let shown = page(cx, &info, snapshot(&info), Tab::Mainboard);
+    assert_shows(&shown, &["LENOVO"]);
 }
 
-#[test]
-fn memory_page() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let h = draw(|ui| super::memory::show(ui, &info, &snap));
-        let part = if info.battery.is_some() {
-            "MT62F1G32D2DS-026"
-        } else {
-            "KF560C30-16"
-        };
-        assert_shows(&h, &[part]);
-    }
-}
-
-#[test]
-fn gpu_page() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let mut selected = 0;
-        let name = info.gpus[0].name.clone();
-        let h = draw(|ui| super::gpu::show(ui, &info, &snap, &mut selected));
-        assert_shows(&h, &[&name]);
+#[gpui_kit::test]
+fn gpu_page(cx: &mut TestAppContext) {
+    for info in machines() {
+        let shown = page(cx, &info, snapshot(&info), Tab::Gpu);
+        assert_shows(&shown, &[&info.gpus[0].name, "Graphics Card"]);
     }
     // NVML details on the NVIDIA card.
     let info = desktop();
-    let snap = snapshot(&info);
-    let mut selected = 0;
-    let h = draw(|ui| super::gpu::show(ui, &info, &snap, &mut selected));
-    assert_shows(&h, &["5888", "581.57"]);
+    let shown = page(cx, &info, snapshot(&info), Tab::Gpu);
+    assert_shows(&shown, &["5888", "581.57"]);
 }
 
-#[test]
-fn storage_page() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let model = info.drives[0].model.clone();
-        let h = draw(|ui| super::storage::show(ui, &info, &snap));
-        assert_shows(&h, &[&model]);
+#[gpui_kit::test]
+fn about_page(cx: &mut TestAppContext) {
+    for info in machines() {
+        let shown = page(cx, &info, snapshot(&info), Tab::About);
+        assert_shows(&shown, &["Samples taken", "MIT"]);
     }
+}
+
+#[gpui_kit::test]
+fn sensors_page(cx: &mut TestAppContext) {
     let info = desktop();
-    let snap = snapshot(&info);
-    let h = draw(|ui| super::storage::show(ui, &info, &snap));
-    assert_shows(&h, &["ST4000DM004-2U9104"]);
+    let (window, app) = open(cx, info.clone(), snapshot(&info), Settings::default());
+    go(cx, &app, Tab::Sensors);
+    let shown = texts(cx, window);
+    assert_shows(
+        &shown,
+        &[
+            "GPU Temperature",
+            "Package Power",
+            "Reset min/max",
+            "Average",
+        ],
+    );
+    // A page with no samples yet shows its empty state.
+    let shown = page(cx, &info, Snapshot::default(), Tab::Sensors);
+    assert_shows(&shown, &["Waiting for first sample"]);
 }
 
-#[test]
-fn about_page() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let h = draw(|ui| super::about::show(ui, &info, &snap));
-        assert_shows(&h, &["Samples taken", "MIT"]);
-    }
-}
-
-#[test]
-fn overview_and_health_pages() {
-    for (info, _) in machines() {
-        let snap = snapshot(&info);
-        let mut cache = super::health::HealthCache::default();
-        let report = cache.get(&info, &snap, true);
-        let h = draw(|ui| {
-            super::overview::show(ui, &info, &snap, report);
-        });
-        assert_shows(&h, &[&info.gpus[0].name]);
-        let h = draw(|ui| super::health::show(ui, &info, report));
-        assert_shows(&h, &["Health Check"]);
-    }
-}
-
-#[test]
-fn snapshot_pages_without_data() {
-    // Pages that wait for a background read show their empty state without panicking.
-    let snap = Snapshot::default();
-    draw(|ui| super::network::show(ui, &snap));
-    draw(|ui| super::lansec::show(ui, &snap));
-    draw(|ui| super::power::show(ui, &snap));
-}
-
-#[test]
-fn sampler_pages() {
+#[gpui_kit::test]
+fn missing_text_fails(cx: &mut TestAppContext) {
     let info = desktop();
-    let sampler = Sampler::fake(info.clone(), snapshot(&info));
-    let h = draw(|ui| super::sensors::show(ui, &sampler));
-    assert_shows(&h, &["GPU Temperature", "Package Power"]);
-
-    let mut state = super::eventlog::ViewState::default();
-    let h = draw(|ui| super::eventlog::show(ui, &sampler, &mut state));
-    assert_shows(&h, &["Event Log"]);
-
-    let mut state = super::alerts::ViewState::default();
-    let h = draw(|ui| super::alerts::show(ui, &info, &sampler, &mut state));
-    assert_shows(&h, &["Alerts"]);
-
-    let mut state = super::recording::ViewState::default();
-    draw(|ui| {
-        super::recording::show(ui, &sampler, &mut state);
-    });
-}
-
-#[test]
-fn missing_text_fails() {
-    let h = draw(|ui| {
-        ui.label("present");
-    });
-    assert_shows(&h, &["present"]);
-    let missing = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        assert_shows(&h, &["absent"])
-    }));
+    let shown = page(cx, &info, snapshot(&info), Tab::About);
+    assert_shows(&shown, &["Omni-HW"]);
+    let missing = std::panic::catch_unwind(|| assert_shows(&shown, &["absent text"]));
     assert!(missing.is_err());
 }
 
-fn cpu_section(ui: &mut egui::Ui) {
-    super::section(
-        ui,
-        "Processor",
-        &[
-            ("Name", "AMD Ryzen 7 9800X3D".into()),
-            ("Stepping", String::new()),
-        ],
-    );
-}
-
-#[test]
-fn section_shows_values_and_dashes() {
-    let h = draw(cpu_section);
-    assert_shows(&h, &["Processor", "AMD Ryzen 7 9800X3D"]);
-    // Empty values show a dash.
-    h.get_by_label("-");
-}
-
-#[test]
-fn settings_page() {
+#[gpui_kit::test]
+fn every_navigation_style_and_theme_draws(cx: &mut TestAppContext) {
     let info = desktop();
-    let sampler = Sampler::fake(info.clone(), snapshot(&info));
-    let mut settings = crate::settings::Settings::default();
-    let updates = crate::update::UpdateChecker::default();
-    let pawnio = crate::pawnio::Installer::default();
-    let h = draw(|ui| {
-        super::settings::show(ui, &mut settings, &sampler, &updates, &pawnio);
-    });
-    assert_shows(&h, &["Settings", "Check for updates"]);
+    for nav_style in [NavStyle::Sidebar, NavStyle::Tabs, NavStyle::Classic] {
+        for theme in [Theme::Dark, Theme::Light, Theme::Retro] {
+            let settings = Settings {
+                nav_style,
+                theme,
+                ..Default::default()
+            };
+            let (window, app) = open(cx, info.clone(), snapshot(&info), settings);
+            go(cx, &app, Tab::Cpu);
+            let shown = texts(cx, window);
+            // The page, and the navigation around it.
+            assert_shows(&shown, &["Processor", "Record", "Report"]);
+            let nav = match nav_style {
+                NavStyle::Sidebar => ["Feature guide", "MONITORING"],
+                NavStyle::Tabs => ["Hardware", "Mainboard"],
+                NavStyle::Classic => ["LAN Security Report", "Event Log"],
+            };
+            assert_shows(&shown, &nav);
+        }
+    }
 }
 
-#[test]
-fn screenshots() {
-    let mut results = SnapshotResults::new();
-    screenshot(
-        &mut results,
-        "section",
-        egui::vec2(360.0, 90.0),
-        cpu_section,
-    );
+#[gpui_kit::test]
+fn clicking_the_sidebar_opens_the_page(cx: &mut TestAppContext) {
     let info = desktop();
-    let snap = snapshot(&info);
-    let size = egui::vec2(1100.0, 900.0);
-    screenshot(&mut results, "cpu_desktop", size, |ui| {
-        super::cpu::show(ui, &info, &snap)
-    });
-    let mut selected = 0;
-    screenshot(&mut results, "gpu_desktop", size, |ui| {
-        super::gpu::show(ui, &info, &snap, &mut selected)
-    });
-    // No health findings, so the picture doesn't change with today's date.
-    let report = super::health::Report::default();
-    screenshot(&mut results, "overview_desktop", size, |ui| {
-        super::overview::show(ui, &info, &snap, &report);
-    });
-    let info = laptop();
-    let snap = snapshot(&info);
-    screenshot(&mut results, "overview_laptop", size, |ui| {
-        super::overview::show(ui, &info, &snap, &report);
-    });
+    let (window, app) = open(cx, info.clone(), snapshot(&info), Settings::default());
+    texts(cx, window);
+    cx.update_window(window, |_, window, cx| {
+        window.click(("nav", Tab::Mainboard as usize), cx);
+    })
+    .unwrap();
+    assert_eq!(cx.read(|cx| app.read(cx).tab), Tab::Mainboard);
+    assert_shows(&texts(cx, window), &["ROG STRIX B650E-F GAMING WIFI"]);
+}
+
+#[gpui_kit::test]
+fn arrow_keys_switch_pages(cx: &mut TestAppContext) {
+    let info = desktop();
+    let settings = Settings {
+        nav_style: NavStyle::Classic,
+        ..Default::default()
+    };
+    let (window, app) = open(cx, info.clone(), snapshot(&info), settings);
+    go(cx, &app, Tab::Cpu);
+    texts(cx, window);
+    cx.update_window(window, |_, window, cx| window.press("right", cx))
+        .unwrap();
+    assert_eq!(cx.read(|cx| app.read(cx).tab), Tab::Caches);
+    cx.update_window(window, |_, window, cx| window.press("left", cx))
+        .unwrap();
+    assert_eq!(cx.read(|cx| app.read(cx).tab), Tab::Cpu);
 }

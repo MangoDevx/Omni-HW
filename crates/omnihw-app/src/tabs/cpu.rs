@@ -1,9 +1,17 @@
-use super::section;
-use crate::sampler::Snapshot;
-use omnihw_core::sensors::{CPU_PACKAGE_POWER, CPU_TEMP};
-use omnihw_core::{SystemInfo, format_bytes};
+//! CPU page: processor identity, clocks, caches and topology.
 
-pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
+use crate::app::OmniApp;
+use crate::ui::{self, section};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Window};
+use omnihw_core::format_bytes;
+use omnihw_core::sensors::{CPU_PACKAGE_POWER, CPU_TEMP};
+
+pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let Some(info) = app.sampler.info() else {
+        return ui::column().into_any_element();
+    };
+    let snap = app.sampler.snapshot();
+    let mut page = ui::column();
     let c = &info.cpu;
     let socket = info.smbios.as_ref().and_then(|s| s.processors.first());
     let (codename, microarch, process) = match info.codename {
@@ -14,8 +22,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         ),
         None => ("Unknown".into(), String::new(), String::new()),
     };
-    section(
-        ui,
+    page = page.child(section(
         "Processor",
         &[
             ("Name", c.brand.clone()),
@@ -37,7 +44,8 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
             ),
             ("Instructions", c.instructions_line()),
         ],
-    );
+        cx,
+    ));
 
     let avg = snap.table.get("cpu/clock/avg").map(|t| t.reading.value);
     let bus = socket.map(|p| p.external_clock_mhz).filter(|&b| b > 0);
@@ -69,7 +77,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
     if let Some(v) = snap.table.get("cpu/volt/vid") {
         clocks.push(("Core Voltage (VID)", format!("{:.3} V", v.reading.value)));
     }
-    section(ui, "Clocks", &clocks);
+    page = page.child(section("Clocks", &clocks, cx));
 
     // One line per cache name; hybrid parts list both core types: "6 x 48 KB (12-way) + 8 x 32 KB (8-way)".
     let mut lines: Vec<(String, Vec<String>)> = Vec::new();
@@ -104,7 +112,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         .into_iter()
         .map(|(n, p)| (cache_label(&n), p.join(" + ")))
         .collect();
-    section(ui, "Cache", &cache_rows);
+    page = page.child(section("Cache", &cache_rows, cx));
 
     if let Some(t) = &info.topology {
         let (p, e) = t.p_e_counts();
@@ -113,8 +121,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
         } else {
             t.cores.len().to_string()
         };
-        section(
-            ui,
+        page = page.child(section(
             "Topology",
             &[
                 ("Sockets", t.packages.to_string()),
@@ -123,8 +130,10 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
                 ("NUMA Nodes", t.numa_nodes.to_string()),
                 ("Processor Groups", t.groups.to_string()),
             ],
-        );
+            cx,
+        ));
     }
+    page.into_any_element()
 }
 
 fn cache_label(name: &str) -> &'static str {

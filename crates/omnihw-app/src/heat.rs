@@ -3,15 +3,27 @@
 //! Colors always agree with [`Severity`]: anything at or above `crit` is fully red, values in
 //! the warning band blend from orange toward red, and normal values use the caller's base color.
 
-use egui::Color32;
+use gpui_kit::Rgba;
 
-pub const ORANGE: Color32 = Color32::from_rgb(255, 152, 0);
-pub const RED: Color32 = Color32::from_rgb(229, 57, 53);
+/// An opaque colour from 8-bit channels.
+pub const fn rgb8(r: u8, g: u8, b: u8) -> Rgba {
+    Rgba {
+        r: r as f32 / 255.0,
+        g: g as f32 / 255.0,
+        b: b as f32 / 255.0,
+        a: 1.0,
+    }
+}
+
+pub const BLACK: Rgba = rgb8(0, 0, 0);
+pub const WHITE: Rgba = rgb8(255, 255, 255);
+pub const ORANGE: Rgba = rgb8(255, 152, 0);
+pub const RED: Rgba = rgb8(229, 57, 53);
 /// Mild warnings (e.g. Warning-level events, below orange errors; the administrator label).
-pub const YELLOW: Color32 = Color32::from_rgb(253, 216, 53);
-pub const GREEN: Color32 = Color32::from_rgb(76, 175, 80);
+pub const YELLOW: Rgba = rgb8(253, 216, 53);
+pub const GREEN: Rgba = rgb8(76, 175, 80);
 /// Informational blue (suggestions, CPU accents).
-pub const BLUE: Color32 = Color32::from_rgb(66, 133, 244);
+pub const BLUE: Rgba = rgb8(66, 133, 244);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Severity {
@@ -21,7 +33,7 @@ pub enum Severity {
 }
 
 impl Severity {
-    pub fn color(self) -> Option<Color32> {
+    pub fn color(self) -> Option<Rgba> {
         match self {
             Severity::Normal => None,
             Severity::Warning => Some(ORANGE),
@@ -75,7 +87,7 @@ impl Scale {
     }
 
     /// `base` when normal, orange at `warn` blending toward red, and red from `crit` up.
-    pub fn color(&self, base: Color32, v: f64) -> Color32 {
+    pub fn color(&self, base: Rgba, v: f64) -> Rgba {
         match self.severity(v) {
             Severity::Normal => base,
             Severity::Warning => lerp(
@@ -90,45 +102,51 @@ impl Scale {
 
 /// A status color used as text on the normal background: unchanged in dark mode, darkened in
 /// light mode so orange/green/blue stay readable on white.
-pub fn ink(v: &egui::Visuals, c: Color32) -> Color32 {
-    if v.dark_mode {
-        c
-    } else {
-        lerp(c, Color32::BLACK, 0.35)
-    }
+pub fn ink(dark: bool, c: Rgba) -> Rgba {
+    if dark { c } else { lerp(c, BLACK, 0.35) }
 }
 
 /// A bar fill that keeps the theme's normal text readable on top of it: slightly dimmed in dark
 /// mode, a pastel tint in light mode.
-pub fn soft_fill(v: &egui::Visuals, c: Color32) -> Color32 {
-    if v.dark_mode {
-        c.gamma_multiply(0.85)
+pub fn soft_fill(dark: bool, c: Rgba) -> Rgba {
+    if dark {
+        fade(c, 0.85)
     } else {
-        lerp(c, Color32::WHITE, 0.55)
+        lerp(c, WHITE, 0.55)
+    }
+}
+
+/// `c` with its opacity multiplied by `alpha` (tinted fills, dimmed glyphs).
+pub fn fade(c: Rgba, alpha: f32) -> Rgba {
+    Rgba {
+        a: c.a * alpha.clamp(0.0, 1.0),
+        ..c
     }
 }
 
 /// Black or white, whichever reads better on `fill`.
-pub fn text_on(fill: Color32) -> Color32 {
-    let lum = 0.2126 * fill.r() as f32 + 0.7152 * fill.g() as f32 + 0.0722 * fill.b() as f32;
-    if lum > 150.0 {
-        Color32::BLACK
-    } else {
-        Color32::WHITE
-    }
+pub fn text_on(fill: Rgba) -> Rgba {
+    let lum = 0.2126 * fill.r + 0.7152 * fill.g + 0.0722 * fill.b;
+    if lum > 150.0 / 255.0 { BLACK } else { WHITE }
 }
 
-pub fn lerp(a: Color32, b: Color32, t: f32) -> Color32 {
+/// Blend opaque colours: `a` at `t` = 0, `b` at `t` = 1.
+pub fn lerp(a: Rgba, b: Rgba, t: f32) -> Rgba {
     let t = t.clamp(0.0, 1.0);
-    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
+    let m = |x: f32, y: f32| x + (y - x) * t;
+    Rgba {
+        r: m(a.r, b.r),
+        g: m(a.g, b.g),
+        b: m(a.b, b.b),
+        a: 1.0,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    const BASE: Color32 = Color32::from_rgb(0, 0, 255);
+    const BASE: Rgba = rgb8(0, 0, 255);
 
     #[test]
     fn severity_levels() {
@@ -142,15 +160,14 @@ mod tests {
 
     #[test]
     fn readable_text_helpers() {
-        assert_eq!(text_on(Color32::from_rgb(250, 250, 250)), Color32::BLACK);
-        assert_eq!(text_on(Color32::from_rgb(30, 40, 60)), Color32::WHITE);
-        assert_eq!(text_on(RED), Color32::WHITE);
-        assert_eq!(text_on(ORANGE), Color32::BLACK);
-        let dark = egui::Visuals::dark();
-        let light = egui::Visuals::light();
-        assert_eq!(ink(&dark, ORANGE), ORANGE);
-        assert_ne!(ink(&light, ORANGE), ORANGE);
-        assert_ne!(soft_fill(&light, GREEN), soft_fill(&dark, GREEN));
+        assert_eq!(text_on(rgb8(250, 250, 250)), BLACK);
+        assert_eq!(text_on(rgb8(30, 40, 60)), WHITE);
+        assert_eq!(text_on(RED), WHITE);
+        assert_eq!(text_on(ORANGE), BLACK);
+        assert_eq!(ink(true, ORANGE), ORANGE);
+        assert_ne!(ink(false, ORANGE), ORANGE);
+        assert_ne!(soft_fill(false, GREEN), soft_fill(true, GREEN));
+        assert_eq!(fade(RED, 0.5).a, 0.5);
     }
 
     #[test]

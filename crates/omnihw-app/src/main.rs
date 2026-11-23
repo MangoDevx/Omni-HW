@@ -10,21 +10,25 @@ mod export;
 mod folder_picker;
 mod heat;
 mod help;
-mod icon;
 mod nav;
 mod net_ops;
 mod notify;
 mod pawnio;
 mod power_ops;
+mod repaint;
 mod retro;
 mod sampler;
 mod sensor_service;
 mod settings;
 mod tabs;
+mod theme;
 mod tray;
+mod ui;
 mod update;
 
-fn main() -> eframe::Result {
+use gpui_kit::{AppContext, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
+
+fn main() {
     // Elevated helper for a power change: do it and exit without a window.
     if let Some(code) = power_ops::run_helper() {
         std::process::exit(code);
@@ -45,24 +49,43 @@ fn main() -> eframe::Result {
         std::process::exit(code);
     }
     if elevate::relaunch_elevated_if_useful() {
-        return Ok(());
+        return;
     }
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_title("Omni-HW")
-        .with_inner_size(initial_size())
-        .with_min_inner_size([440.0, 400.0]);
-    if let Some(icon) = icon::window_icon() {
-        viewport = viewport.with_icon(icon);
-    }
-    let options = eframe::NativeOptions {
-        viewport,
-        ..Default::default()
-    };
-    eframe::run_native(
-        "Omni-HW",
-        options,
-        Box::new(|cc| Ok(Box::new(app::OmniApp::new(cc)))),
-    )
+    gpui_kit::application()
+        .with_assets(gpui_kit::assets::Assets)
+        .run(|cx| {
+            gpui_kit::init(cx);
+            app::bind_keys(cx);
+            let [width, height] = initial_size();
+            let bounds = Bounds::centered(None, size(px(width), px(height)), cx);
+            let options = WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Omni-HW".into()),
+                    ..Default::default()
+                }),
+                window_min_size: Some(size(px(440.0), px(400.0))),
+                ..Default::default()
+            };
+            let (window, app) = gpui_kit::open_window(options, cx, |window, cx| {
+                cx.new(|cx| app::OmniApp::new(window, cx))
+            })
+            .expect("open the main window");
+            // Closing the window ends the app: remove the tray icon and save settings first.
+            let _ = window.update(cx, |_, window, cx| {
+                window.on_window_should_close(cx, move |_, cx| {
+                    app.update(cx, |app, _| app.shutdown());
+                    true
+                });
+            });
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            cx.activate(true);
+        });
 }
 
 /// Preferred window size (logical points), shrunk to fit the screen's work area so the

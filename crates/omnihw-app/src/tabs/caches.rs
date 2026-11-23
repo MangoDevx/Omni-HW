@@ -1,45 +1,48 @@
-use omnihw_core::{SystemInfo, format_bytes};
+//! Caches page: cache instances from the Windows topology and the CPUID descriptors.
 
-pub fn show(ui: &mut egui::Ui, info: &SystemInfo) {
+use crate::app::OmniApp;
+use crate::ui::{self, Table};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Window};
+use omnihw_core::format_bytes;
+
+pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let Some(info) = app.sampler.info() else {
+        return ui::column().into_any_element();
+    };
+    let mut page = ui::column();
     if let Some(t) = &info.topology {
-        ui.label(egui::RichText::new("Cache instances (Windows topology)").strong());
-        egui::Grid::new("cache_topo")
-            .striped(true)
-            .num_columns(5)
-            .spacing([16.0, 4.0])
-            .show(ui, |ui| {
-                super::header_row(ui, &["Cache", "Count", "Size", "Associativity", "Line"]);
-                for s in t.cache_summary() {
-                    ui.label(s.name());
-                    ui.label(s.count.to_string());
-                    ui.label(format_bytes(s.size_bytes));
-                    ui.label(s.ways_text());
-                    ui.label(format!("{} B", s.line_size));
-                    ui.end_row();
-                }
-            });
-        ui.add_space(12.0);
+        let mut table = Table::new(&["Cache", "Count", "Size", "Associativity", "Line"]).striped();
+        for s in t.cache_summary() {
+            table = table.text_row([
+                s.name(),
+                s.count.to_string(),
+                format_bytes(s.size_bytes),
+                s.ways_text(),
+                format!("{} B", s.line_size),
+            ]);
+        }
+        page = page
+            .child(ui::strong("Cache instances (Windows topology)"))
+            .child(table.build(cx))
+            .child(ui::space(12.0));
     }
 
-    ui.label(egui::RichText::new("CPUID cache descriptors (current core)").strong());
+    page = page.child(ui::strong("CPUID cache descriptors (current core)"));
     if info.cpu.caches.is_empty() {
-        ui.label("Not reported by CPUID.");
-        return;
+        return page
+            .child(ui::label("Not reported by CPUID."))
+            .into_any_element();
     }
-    egui::Grid::new("cache_cpuid")
-        .striped(true)
-        .num_columns(6)
-        .spacing([16.0, 4.0])
-        .show(ui, |ui| {
-            super::header_row(ui, &["Cache", "Size", "Ways", "Sets", "Line", "Shared by"]);
-            for d in &info.cpu.caches {
-                ui.label(d.name());
-                ui.label(format_bytes(d.size_bytes));
-                ui.label(d.ways.to_string());
-                ui.label(d.sets.to_string());
-                ui.label(format!("{} B", d.line_size));
-                ui.label(format!("up to {} threads", d.shared_by));
-                ui.end_row();
-            }
-        });
+    let mut table = Table::new(&["Cache", "Size", "Ways", "Sets", "Line", "Shared by"]).striped();
+    for d in &info.cpu.caches {
+        table = table.text_row([
+            d.name(),
+            format_bytes(d.size_bytes),
+            d.ways.to_string(),
+            d.sets.to_string(),
+            format!("{} B", d.line_size),
+            format!("up to {} threads", d.shared_by),
+        ]);
+    }
+    page.child(table.build(cx)).into_any_element()
 }

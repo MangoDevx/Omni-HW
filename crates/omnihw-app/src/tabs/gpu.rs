@@ -1,24 +1,45 @@
-use super::section;
-use crate::sampler::Snapshot;
-use omnihw_core::{SystemInfo, format_bytes};
+//! GPU page: the selected adapter's identity, memory and limits, and its sensors.
 
-pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mut usize) {
+use crate::app::OmniApp;
+use crate::ui::{self, section};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, SharedString, Styled, Window};
+use omnihw_core::format_bytes;
+
+#[derive(Default)]
+pub struct ViewState {
+    /// Index of the adapter shown.
+    selected: usize,
+}
+
+pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let Some(info) = app.sampler.info() else {
+        return ui::column().into_any_element();
+    };
     if info.gpus.is_empty() {
-        ui.label("No hardware display adapter found.");
-        return;
+        return ui::label("No hardware display adapter found.").into_any_element();
     }
-    *selected = (*selected).min(info.gpus.len() - 1);
+    let selected = app.views.gpu.selected.min(info.gpus.len() - 1);
+    let mut page = ui::column();
     if info.gpus.len() > 1 {
-        egui::ComboBox::from_label("Adapter")
-            .selected_text(&info.gpus[*selected].name)
-            .show_ui(ui, |ui| {
-                for (i, g) in info.gpus.iter().enumerate() {
-                    ui.selectable_value(selected, i, &g.name);
-                }
-            });
-        ui.add_space(6.0);
+        page = page.child(
+            ui::row()
+                .pb_1p5()
+                .child(ui::dropdown(
+                    "adapter",
+                    info.gpus[selected].name.clone(),
+                    info.gpus
+                        .iter()
+                        .map(|g| SharedString::from(g.name.clone()))
+                        .collect(),
+                    Some(selected),
+                    cx,
+                    |this, i, _, _| this.views.gpu.selected = i,
+                ))
+                .child(ui::label("Adapter")),
+        );
     }
-    let g = &info.gpus[*selected];
+    let snap = app.sampler.snapshot();
+    let g = &info.gpus[selected];
     let chip = g.chip();
     let nv = g.nvml.as_ref();
 
@@ -80,7 +101,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
             .join(", ")
     };
     card.push(("Displays", displays));
-    section(ui, "Graphics Card", &card);
+    page = page.child(section("Graphics Card", &card, cx));
 
     let mut mem = vec![
         ("Dedicated Memory", format_bytes(g.dedicated_vram)),
@@ -103,7 +124,7 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
             mem.push(("Power Limit", format!("{p:.0} W")));
         }
     }
-    section(ui, "Memory & Limits", &mem);
+    page = page.child(section("Memory & Limits", &mem, cx));
 
     let prefix = g.sensor_prefix();
     let rows: Vec<_> = snap
@@ -113,13 +134,17 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot, selected: &mu
         .filter(|t| t.reading.id.starts_with(&prefix))
         .collect();
     if rows.is_empty() {
-        ui.label("Waiting for first sample...");
+        page = page.child(ui::label("Waiting for first sample..."));
     } else {
-        ui.label(egui::RichText::new("Sensors").strong());
-        super::sensors::sensor_grid(ui, "gpu_sensors", rows.into_iter());
+        page = page
+            .child(ui::strong("Sensors"))
+            .child(super::sensors::sensor_grid(rows.into_iter(), cx));
     }
     if nv.is_none() && g.vendor_id != omnihw_core::gpu::VENDOR_NVIDIA {
-        ui.add_space(6.0);
-        ui.weak("Temperatures, clocks and power for AMD (ADLX) and Intel (IGCL) GPUs are planned.");
+        page = page.child(ui::space(6.0)).child(ui::weak(
+            "Temperatures, clocks and power for AMD (ADLX) and Intel (IGCL) GPUs are planned.",
+            cx,
+        ));
     }
+    page.into_any_element()
 }

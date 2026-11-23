@@ -57,15 +57,6 @@ pub enum Arrow {
     Down,
 }
 
-impl Arrow {
-    pub const ALL: [(egui::Key, Arrow); 4] = [
-        (egui::Key::ArrowLeft, Arrow::Left),
-        (egui::Key::ArrowRight, Arrow::Right),
-        (egui::Key::ArrowUp, Arrow::Up),
-        (egui::Key::ArrowDown, Arrow::Down),
-    ];
-}
-
 /// Number of [`CATEGORIES`] drawn as tabs in the Tabs bar (About and Settings live with the
 /// actions).
 pub const TAB_CATEGORIES: usize = 5;

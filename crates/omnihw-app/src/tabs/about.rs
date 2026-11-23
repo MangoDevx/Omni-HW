@@ -1,15 +1,21 @@
-use super::section;
-use crate::sampler::Snapshot;
-use omnihw_core::SystemInfo;
+//! About page: version, licence and anything that went wrong while reading hardware.
 
-pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
-    section(
-        ui,
+use crate::app::OmniApp;
+use crate::sampler::Snapshot;
+use crate::ui::{self, section};
+use gpui_kit::{AnyElement, Context, IntoElement, ParentElement, Window};
+
+pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let Some(info) = app.sampler.info() else {
+        return ui::column().into_any_element();
+    };
+    let snap = app.sampler.snapshot();
+    let mut page = ui::column().child(section(
         "Omni-HW",
         &[
             ("Version", env!("CARGO_PKG_VERSION").into()),
             ("License", "MIT".into()),
-            ("Driver", driver_line(snap)),
+            ("Driver", driver_line(&snap)),
             ("Samples taken", snap.samples.to_string()),
             (
                 "Administrator",
@@ -20,14 +26,15 @@ pub fn show(ui: &mut egui::Ui, info: &SystemInfo, snap: &Snapshot) {
                 },
             ),
         ],
-    );
+        cx,
+    ));
     let problems: Vec<&String> = info.warnings.iter().chain(&snap.errors).collect();
     if !problems.is_empty() {
-        ui.label(egui::RichText::new("Warnings").strong());
-        for p in problems {
-            ui.label(p);
-        }
+        page = page
+            .child(ui::strong("Warnings"))
+            .children(problems.into_iter().map(|p| ui::label(p.clone())));
     }
+    page.into_any_element()
 }
 
 /// Omni-HW uses no driver itself; with extra sensors set up, the sensor service uses PawnIO.

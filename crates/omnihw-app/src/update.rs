@@ -5,6 +5,7 @@
 //! reads the release tag from the `Location` header, so nothing but the URL is sent and no
 //! response body is downloaded. Runs on its own short-lived thread, never the UI thread.
 
+use crate::repaint::Repaint;
 use std::sync::{Arc, Mutex};
 
 const REPO: &str = "MangoDevx/Omni-HW";
@@ -39,7 +40,7 @@ impl UpdateChecker {
     }
 
     /// Start a check in the background unless one is already running.
-    pub fn start(&self, ctx: &egui::Context) {
+    pub fn start(&self, ctx: &Repaint) {
         {
             let mut s = self.lock();
             if *s == Status::Checking {

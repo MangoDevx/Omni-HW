@@ -8,6 +8,7 @@
 //! reads the service's read-only pipe. Nothing here runs unless the user clicks.
 
 use crate::power_ops::{helper_result_path, quote};
+use crate::repaint::Repaint;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -61,7 +62,7 @@ impl Installer {
     }
 
     /// Run setup (or removal) in the background unless a job is already running.
-    pub fn start(&self, ctx: &egui::Context, setup: bool) {
+    pub fn start(&self, ctx: &Repaint, setup: bool) {
         {
             let mut s = self.lock();
             if matches!(s.job, Job::Running(_)) {
