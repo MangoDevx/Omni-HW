@@ -350,7 +350,8 @@ impl OmniApp {
 
     /// Write the settings file once no further change arrives for [`SAVE_DELAY`].
     pub fn save_settings_soon(&mut self, cx: &mut Context<Self>) {
-        self.settings_unsaved = true;
+        // Page tests change settings in memory only: they must never write the user's file.
+        self.settings_unsaved = !cfg!(test);
         self.settings_rev += 1;
         let rev = self.settings_rev;
         cx.spawn(async move |this, cx| {
