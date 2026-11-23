@@ -209,10 +209,6 @@ impl Table {
         self.rows += 1;
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.rows == 0
-    }
-
     pub fn build(self, cx: &App) -> Div {
         let stripe = cx.theme().muted;
         let cols = self.cols as usize;

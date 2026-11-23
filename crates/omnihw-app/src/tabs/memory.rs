@@ -14,11 +14,6 @@ use gpui_kit::{
 use omnihw_core::memtest::{MemTestResult, Verdict};
 use std::time::Duration;
 
-/// Selections, filters and edit buffers of this page. The memory test needs none: its button
-/// starts the test directly and the sampler keeps the result.
-#[derive(Default)]
-pub struct ViewState {}
-
 pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
     let Some(info) = app.sampler.info() else {
         return ui::column().into_any_element();

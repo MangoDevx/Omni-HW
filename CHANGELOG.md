@@ -4,6 +4,10 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 
 ## Unreleased
 
+### Improved
+- The interface is rebuilt on a new toolkit (gpui): sharper text, icons in the sidebar, native-style buttons, menus and dialogs, and the window only redraws when something changes.
+- The Feature guide opens in its own window, so it can sit beside the page it explains.
+
 ### Fixed
 - Overview: the Storage card said "1 drives" on PCs with one drive.
 - LAN Security Report: most devices showed no MAC address or maker, because the address table was read before the scan found them.

@@ -1,5 +1,5 @@
 //! Pages. Each is a module with a `show` function that builds the page's elements from the
-//! latest snapshot, and (where needed) a `ViewState` for what the page remembers between
+//! latest snapshot, and (where the page has any) a `ViewState` for what it remembers between
 //! redraws. Shared building blocks live in [`crate::ui`].
 
 pub mod about;
@@ -25,8 +25,7 @@ pub mod settings;
 pub mod storage;
 
 use crate::app::{OmniApp, Tab};
-use crate::ui;
-use gpui_kit::{AnyElement, Context, IntoElement, SharedString, Window};
+use gpui_kit::{AnyElement, Context, SharedString, Window};
 use std::collections::HashSet;
 
 /// What the pages remember between redraws (selections, filters, edit buffers).
@@ -34,14 +33,9 @@ use std::collections::HashSet;
 pub struct Views {
     /// Collapsible sections that were toggled away from their default (see [`ui::is_open`]).
     pub toggled: HashSet<SharedString>,
-    pub overview: overview::ViewState,
     pub health: health::ViewState,
-    pub memory: memory::ViewState,
     pub gpu: gpu::ViewState,
-    pub storage: storage::ViewState,
     pub network: network::ViewState,
-    pub lansec: lansec::ViewState,
-    pub power: power::ViewState,
     pub recording: recording::ViewState,
     pub alerts: alerts::ViewState,
     pub eventlog: eventlog::ViewState,
@@ -70,9 +64,4 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
         Tab::About => about::show(app, window, cx),
         Tab::Settings => settings::show(app, window, cx),
     }
-}
-
-/// Placeholder for a page that is still being ported to gpui.
-pub fn pending(tab: Tab, cx: &mut Context<OmniApp>) -> AnyElement {
-    ui::weak(format!("{} is being ported to the new UI.", tab.name()), cx).into_any_element()
 }

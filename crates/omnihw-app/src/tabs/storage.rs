@@ -18,12 +18,6 @@ use omnihw_core::format_bytes;
 use omnihw_core::smart::AtaSmart;
 use omnihw_core::storage::{BusType, Drive, sata_gen_speed};
 
-/// Selections, filters and edit buffers of this page. The speed test needs none: its
-/// confirmation is a dialog that starts the test itself, and the SMART tables' open/closed
-/// state is kept with the other collapsible sections (`ui::is_open`).
-#[derive(Default)]
-pub struct ViewState {}
-
 pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
     let app = &*app;
     let Some(info) = app.sampler.info() else {

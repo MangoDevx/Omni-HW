@@ -168,6 +168,19 @@ const ADMIN_HOVER: &str = "Omni-HW has administrator rights: you approved its UA
                            started it as administrator.";
 /// Width of the navigation sidebar, in rems.
 const SIDEBAR_WIDTH: f32 = 13.5;
+/// Padding around a page, left and right together, in rems (the page frame's `p_3`).
+const PAGE_PADDING: f32 = 1.5;
+
+/// Width a page has to lay itself out in, in rems: the window without the sidebar and the
+/// page padding. Pages that switch between a wide and a narrow layout use it (an element
+/// can't ask for its own width while it is being built).
+pub fn page_width_rems(nav_style: NavStyle, window: &Window) -> f32 {
+    let beside = match nav_style {
+        NavStyle::Sidebar => SIDEBAR_WIDTH + PAGE_PADDING,
+        NavStyle::Tabs | NavStyle::Classic => PAGE_PADDING,
+    };
+    window.viewport_size().width / window.rem_size() - beside
+}
 
 pub struct OmniApp {
     /// The open page. Change it with [`OmniApp::open`], which also runs the page's on-open reads.
@@ -376,6 +389,11 @@ impl OmniApp {
     /// Health Check dismissals changed: keep them in the settings (saved to disk only when
     /// "remember dismissed" is on).
     fn sync_dismissed(&mut self, cx: &mut Context<Self>) {
+        // The dismissed set is process-wide: a page test drawing a frame must not take the
+        // changes another test is checking for.
+        if cfg!(test) {
+            return;
+        }
         if let Some(keys) = crate::dismissed::take_changes() {
             self.settings.dismissed = keys;
             if self.settings.remember_dismissed {

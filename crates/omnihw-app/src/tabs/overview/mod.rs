@@ -5,7 +5,6 @@ mod widgets;
 use crate::app::{OmniApp, Tab};
 use crate::heat::{self, GREEN, ORANGE, RED, Severity, lerp, rgb8};
 use crate::sampler::Snapshot;
-use crate::settings::NavStyle;
 use crate::ui;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tooltip::Tooltip;
@@ -29,19 +28,11 @@ const DISK: Rgba = rgb8(92, 107, 192);
 
 /// Two columns from this page width up (in rems, so it follows the UI scale).
 const TWO_COLUMN_WIDTH: f32 = 760.0 / 16.0;
-/// What the shell takes from the window width beside the page: the sidebar (only in the
-/// sidebar navigation style; `SIDEBAR_WIDTH` in app.rs) and the page's padding, in rems.
-const SIDEBAR_WIDTH: f32 = 13.5;
-const PAGE_PADDING: f32 = 1.5;
-
-/// The Overview keeps nothing between redraws; its cards' collapsed state lives in
-/// `Views::toggled` (see [`ui::is_open`]).
-#[derive(Default)]
-pub struct ViewState {}
 
 /// Clicking the Health Check summary opens the Health tab.
 pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
-    let two_columns = page_width_rems(app, window) >= TWO_COLUMN_WIDTH;
+    let two_columns =
+        crate::app::page_width_rems(app.settings.nav_style, window) >= TWO_COLUMN_WIDTH;
     let Some(info) = app.sampler.info() else {
         return ui::column().into_any_element();
     };
@@ -89,17 +80,6 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
             .child(system_card(info, &snap, &is_open, cx));
     }
     page.into_any_element()
-}
-
-/// Width available to the page, in rems: the window less the navigation sidebar and padding.
-/// The shell redraws the page whenever the window is resized.
-fn page_width_rems(app: &OmniApp, window: &Window) -> f32 {
-    let beside = if app.settings.nav_style == NavStyle::Sidebar {
-        SIDEBAR_WIDTH + PAGE_PADDING
-    } else {
-        PAGE_PADDING
-    };
-    window.viewport_size().width / window.rem_size() - beside
 }
 
 fn val(snap: &Snapshot, id: &str) -> Option<f64> {

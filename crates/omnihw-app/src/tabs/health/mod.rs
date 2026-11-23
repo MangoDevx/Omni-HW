@@ -8,7 +8,6 @@ use crate::app::OmniApp;
 use crate::heat::{BLUE, GREEN, ORANGE, RED, rgb8};
 use crate::nav::Arrow;
 use crate::sampler::Snapshot;
-use crate::settings::NavStyle;
 use crate::ui::{self, plural};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::separator::Separator;
@@ -448,26 +447,13 @@ const NARROW: f32 = 54.0;
 /// The list pane takes 38% of the width, but at least this many rems (280 px at the default
 /// scale).
 const LIST_MIN: f32 = 20.0;
-/// Width of the navigation sidebar, in rems (as in the app shell).
-const SIDEBAR: f32 = 13.5;
-/// Padding the app shell puts around a page, left and right together, in rems.
-const PAGE_PADDING: f32 = 1.5;
-
-/// Width available to the page, in rems.
-fn page_width(nav: NavStyle, window: &Window) -> f32 {
-    let mut w = window.viewport_size().width / window.rem_size();
-    if nav == NavStyle::Sidebar {
-        w -= SIDEBAR;
-    }
-    w - PAGE_PADDING
-}
 
 pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut ViewContext<OmniApp>) -> AnyElement {
     let Some(info) = app.sampler.info() else {
         return ui::column().into_any_element();
     };
     let uefi = info.checkup.firmware.uefi == Some(true);
-    let width = page_width(app.settings.nav_style, window);
+    let width = crate::app::page_width_rems(app.settings.nav_style, window);
     let snap = app.sampler.snapshot();
     let report = app.health.get(info, &snap, app.settings.show_gaming);
     let state = &mut app.views.health;
@@ -752,7 +738,7 @@ mod tests {
         let shown = texts(cx, window);
         let narrow = cx
             .update_window(window, |_, window, cx| {
-                page_width(app.read(cx).settings.nav_style, window) < NARROW
+                crate::app::page_width_rems(app.read(cx).settings.nav_style, window) < NARROW
             })
             .unwrap();
         assert!(
@@ -823,6 +809,7 @@ mod tests {
     fn dismissing_moves_a_finding_to_the_dismissed_list(cx: &mut TestAppContext) {
         // `crate::dismissed` is shared by every test in the process, so this dismisses a
         // laptop finding, which the other tests here don't look at (they use the uptime one).
+        let _alone = crate::dismissed::test_lock();
         let info = laptop();
         let (window, app) = open(cx, info.clone(), snapshot(&info), Settings::default());
         go(cx, &app, Tab::Health);

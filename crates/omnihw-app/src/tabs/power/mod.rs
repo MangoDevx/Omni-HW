@@ -22,12 +22,6 @@ use omnihw_core::power::{
     Action, AdapterKind, Kind, PERCENT_PRESETS, PowerInfo, Setting, Source, TIMEOUT_PRESETS,
 };
 
-/// Selections, filters and edit buffers of this page. It needs none: changes go straight to
-/// [`request`] (whose confirmation is a dialog) and the wake history's open/closed state is
-/// kept with the other collapsible sections (`ui::is_open`).
-#[derive(Default)]
-pub struct ViewState {}
-
 /// Key of the collapsible wake history.
 const WAKE_HISTORY: &str = "power/wake-history";
 

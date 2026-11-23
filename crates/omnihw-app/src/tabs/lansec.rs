@@ -26,11 +26,6 @@ const GRAY: Rgba = rgb8(160, 160, 160);
 /// How often the progress bar is redrawn while a scan runs.
 const PROGRESS_EVERY: Duration = Duration::from_millis(200);
 
-/// What this page remembers between redraws. Nothing yet: which device rows are open is kept
-/// with the other collapsible sections (see [`ui::is_open`]).
-#[derive(Default)]
-pub struct ViewState {}
-
 pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
     let mut page = ui::column()
         .child(ui::page_title("LAN Security Report"))
