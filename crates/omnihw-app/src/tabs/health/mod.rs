@@ -4,16 +4,48 @@
 mod detail;
 mod list;
 
-use super::{page_title, plural, temp};
-use crate::heat::{BLUE, GREEN, ORANGE, RED};
-use crate::sampler::{Sampler, Snapshot};
-use detail::restart_dialog;
-use egui::{Color32, Ui, vec2};
+use crate::app::OmniApp;
+use crate::heat::{BLUE, GREEN, ORANGE, RED, rgb8};
+use crate::nav::Arrow;
+use crate::sampler::Snapshot;
+use crate::ui::{self, plural};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::{
+    AnyElement, App, ClickEvent, Context as ViewContext, Div, ElementId, InteractiveElement,
+    IntoElement, ParentElement, Rgba, ScrollHandle, StatefulInteractiveElement, Styled, Window,
+    rems,
+};
 use omnihw_core::SystemInfo;
 use omnihw_core::diagnostics::{self, Category, CheckResult, Context, Finding, Level, Outcome};
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn level_color(l: Level) -> Color32 {
+/// Colour of "not checked" markers and neutral pills.
+const GRAY: Rgba = rgb8(160, 160, 160);
+
+/// What the page remembers between redraws.
+#[derive(Default)]
+pub struct ViewState {
+    /// The list entry the user picked; when it is no longer listed (or nothing was picked)
+    /// the most severe finding is shown instead (see [`View::resolve`]).
+    sel: Option<Sel>,
+    /// Category filter from the tiles; None shows every category.
+    filter: Option<Category>,
+    /// Ticked "how to fix" steps by finding title. They only live for this session.
+    done: HashMap<String, Vec<bool>>,
+    /// Scroll position of the list pane (of the whole page when narrow), so an arrow key can
+    /// bring the selected entry into view.
+    list_scroll: ScrollHandle,
+    /// Scroll the selected entry into view on the next draw (an arrow key moved it).
+    reveal: bool,
+    /// "Restart into UEFI" was confirmed and is waiting for its administrator prompt.
+    restarting: bool,
+}
+
+pub fn level_color(l: Level) -> Rgba {
     match l {
         Level::Info => BLUE,
         Level::Warning => ORANGE,
@@ -43,14 +75,6 @@ pub fn run(info: &SystemInfo, snap: &Snapshot) -> Vec<CheckResult> {
     diagnostics::run(&ctx)
 }
 
-/// Read crash dumps when the details pane's button asked for it. Call once per frame, outside
-/// the snapshot lock.
-pub fn dispatch(ctx: &egui::Context, sampler: &Sampler) {
-    if temp::take::<bool>(ctx, detail::read_dumps_id()).unwrap_or(false) {
-        sampler.read_dumps();
-    }
-}
-
 /// Crash dump analysis state, for the blue screen finding's details.
 #[derive(Default, Clone)]
 pub struct DumpStatus {
@@ -61,7 +85,7 @@ pub struct DumpStatus {
 
 /// Health Check results for the Health tab and the Overview banner. The checks only see data
 /// that changes with a new sample, new power info, new WHEA errors or a (un)dismissal, so they
-/// run then rather than on every frame (hovering alone repaints at the display rate).
+/// run then rather than on every redraw.
 #[derive(Default)]
 pub struct HealthCache {
     /// (sample count, power revision, live WHEA revision, dismissed revision, show gaming, dumps
@@ -109,7 +133,7 @@ pub struct Report {
     /// Dismissed findings with the name of their check.
     pub dismissed: Vec<(&'static str, Finding)>,
     /// "1 critical issue, 2 warnings" and its colour; None when nothing general was found.
-    pub summary: Option<(String, Color32)>,
+    pub summary: Option<(String, Rgba)>,
     /// "2 gaming suggestions", if there are any.
     pub gaming_summary: Option<String>,
     /// Crash dump analysis state.
@@ -168,7 +192,7 @@ fn gaming_count(results: &[CheckResult]) -> usize {
 }
 
 /// "1 critical issue, 2 warnings" style summary of general findings, or None when nothing was found.
-fn summary(results: &[CheckResult]) -> Option<(String, Color32)> {
+fn summary(results: &[CheckResult]) -> Option<(String, Rgba)> {
     let (c, w, i) = counts(results);
     let mut parts = Vec::new();
     if c > 0 {
@@ -192,7 +216,7 @@ fn summary(results: &[CheckResult]) -> Option<(String, Color32)> {
 
 /// What the details pane shows. Findings are kept by their dismiss key, so the selection
 /// survives new samples and numbers changing in a title.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Sel {
     /// A current finding.
     Finding(String),
@@ -229,8 +253,8 @@ struct Passed<'a> {
     skipped: usize,
 }
 
-/// What the list and details panes show this frame, narrowed to the category filter.
-/// Findings in each group are most severe first.
+/// What the list and details panes show, narrowed to the category filter. Findings in each
+/// group are most severe first.
 struct View<'a> {
     /// Critical issues and warnings outside Gaming.
     fix: Vec<Item<'a>>,
@@ -370,127 +394,167 @@ impl<'a> View<'a> {
     }
 }
 
-/// Up/Down move the selection through the list, unless a widget has keyboard focus, a menu is
-/// open or a dialog is up. Returns the new selection when it moved.
-fn arrow_step(ctx: &egui::Context, view: &View, sel: Option<&Sel>) -> Option<Sel> {
-    if ctx.egui_wants_keyboard_input()
-        || egui::Popup::is_any_open(ctx)
-        || ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some())
-    {
-        return None;
-    }
-    let delta = ctx.input_mut(|i| {
-        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
-            -1
-        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
-            1
-        } else {
-            0
-        }
-    });
-    if delta == 0 {
-        return None;
-    }
-    view.step(sel, delta).filter(|s| Some(s) != sel)
+/// The category filter, dropped when its category is no longer present (e.g. Gaming turned
+/// off).
+fn live_filter(filter: Option<Category>, report: &Report) -> Option<Category> {
+    filter.filter(|&c| report.results.iter().any(|r| r.category == c))
 }
 
-fn sel_id() -> egui::Id {
-    egui::Id::new("health_selection")
-}
-
-fn filter_id() -> egui::Id {
-    egui::Id::new("health_filter")
-}
-
-/// Show `sel` in the details pane (on a click in either pane).
-fn select(ctx: &egui::Context, sel: Sel) {
-    temp::set(ctx, sel_id(), sel);
-}
-
-/// The stored selection, or the default when it is no longer listed.
-fn selection(ctx: &egui::Context, view: &View) -> Option<Sel> {
-    view.resolve(temp::get::<Sel>(ctx, sel_id()))
-}
-
-/// Below this width the list and the details stack instead of sitting side by side.
-const NARROW: f32 = 760.0;
-
-pub fn show(ui: &mut Ui, info: &SystemInfo, report: &Report) {
-    let uefi = info.checkup.firmware.uefi == Some(true);
-    restart_dialog(ui);
-    let ctx = ui.ctx().clone();
-    // A filter for a category that is no longer present (e.g. Gaming turned off) is dropped.
-    let filter = temp::get::<Option<Category>>(&ctx, filter_id())
-        .flatten()
-        .filter(|&c| report.results.iter().any(|r| r.category == c));
-    let view = View::new(report, filter);
-    let mut before = selection(&ctx, &view);
-    let moved = arrow_step(&ctx, &view, before.as_ref());
-    if let Some(s) = &moved {
-        select(&ctx, s.clone());
-        before = moved.clone();
-    }
-    let moved = moved.is_some();
-
-    if ui.available_width() < NARROW {
-        egui::ScrollArea::vertical()
-            .id_salt("health_page")
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                header(ui, report, filter);
-                list::list(ui, &view, before.as_ref(), moved);
-                ui.add_space(8.0);
-                ui.separator();
-                ui.add_space(8.0);
-                detail::detail(ui, &view, selection(&ctx, &view).as_ref(), uefi);
-            });
+/// An arrow key the navigation did not use while this page is open: Up/Down move the
+/// selection through the findings list. (Keys only get here when no focused widget, menu
+/// or dialog uses them.)
+pub fn arrow_key(app: &mut OmniApp, arrow: Arrow, cx: &mut ViewContext<OmniApp>) {
+    let delta = match arrow {
+        Arrow::Up => -1,
+        Arrow::Down => 1,
+        Arrow::Left | Arrow::Right => return,
+    };
+    let Some(info) = app.sampler.info() else {
         return;
+    };
+    let snap = app.sampler.snapshot();
+    let report = app.health.get(info, &snap, app.settings.show_gaming);
+    let state = &mut app.views.health;
+    let view = View::new(report, live_filter(state.filter, report));
+    let sel = view.resolve(state.sel.clone());
+    if let Some(next) = view
+        .step(sel.as_ref(), delta)
+        .filter(|s| Some(s) != sel.as_ref())
+    {
+        state.sel = Some(next);
+        state.reveal = true;
+        cx.notify();
+    }
+}
+
+/// A click handler that shows `sel` in the details pane.
+fn select(
+    sel: Sel,
+    cx: &mut ViewContext<OmniApp>,
+) -> impl Fn(&ClickEvent, &mut Window, &mut App) + 'static + use<> {
+    let app = cx.weak_entity();
+    move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+        let _ = app.update(cx, |this, cx| {
+            this.views.health.sel = Some(sel.clone());
+            cx.notify();
+        });
+    }
+}
+
+/// Below this width (in rems; 760 px at the default scale) the list and the details stack
+/// instead of sitting side by side.
+const NARROW: f32 = 54.0;
+/// The list pane takes 38% of the width, but at least this many rems (280 px at the default
+/// scale).
+const LIST_MIN: f32 = 20.0;
+
+pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut ViewContext<OmniApp>) -> AnyElement {
+    let Some(info) = app.sampler.info() else {
+        return ui::column().into_any_element();
+    };
+    let uefi = info.checkup.firmware.uefi == Some(true);
+    let width = crate::app::page_width_rems(app.settings.nav_style, window);
+    let snap = app.sampler.snapshot();
+    let report = app.health.get(info, &snap, app.settings.show_gaming);
+    let state = &mut app.views.health;
+    let filter = live_filter(state.filter, report);
+    let view = View::new(report, filter);
+    let sel = view.resolve(state.sel.clone());
+    let reveal = std::mem::take(&mut state.reveal);
+    let handle = state.list_scroll.clone();
+    let details = detail::Details {
+        uefi,
+        restarting: state.restarting,
+        done: &state.done,
+    };
+
+    let header = header(report, filter, cx);
+    let (mut rows, selected_row) = list::list(&view, sel.as_ref(), cx);
+    let detail = detail::detail(&view, sel.as_ref(), &details, cx);
+
+    if width < NARROW {
+        // One scroll area: the header, the list, then the details.
+        let mut children = vec![header.into_any_element()];
+        let offset = children.len();
+        children.append(&mut rows);
+        children.extend([
+            ui::space(8.0).into_any_element(),
+            Separator::horizontal().into_any_element(),
+            ui::space(8.0).into_any_element(),
+            detail.into_any_element(),
+        ]);
+        if reveal && let Some(i) = selected_row {
+            handle.scroll_to_item(offset + i);
+        }
+        return scroll_pane("health-page", &handle, children).into_any_element();
     }
 
-    header(ui, report, filter);
-    let h = ui.available_height();
-    let list_w = (ui.available_width() * 0.38).max(280.0);
-    ui.horizontal_top(|ui| {
-        let down = egui::Layout::top_down(egui::Align::Min);
-        ui.allocate_ui_with_layout(vec2(list_w, h), down, |ui| {
-            ui.set_width(list_w);
-            egui::Frame::new()
-                .fill(ui.visuals().faint_bg_color)
-                .corner_radius(6)
-                .inner_margin(6)
-                .show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .id_salt("health_list")
-                        .auto_shrink(false)
-                        .show(ui, |ui| list::list(ui, &view, before.as_ref(), moved));
-                });
-        });
-        ui.add_space(8.0);
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), h), down, |ui| {
-            let sel = selection(&ctx, &view);
-            let mut area = egui::ScrollArea::vertical()
-                .id_salt("health_detail")
-                .auto_shrink(false);
-            if sel != before || moved {
-                // A new selection starts at the top of its details.
-                area = area.vertical_scroll_offset(0.0);
-            }
-            area.show(ui, |ui| {
-                ui.add_space(2.0);
-                detail::detail(ui, &view, sel.as_ref(), uefi);
-            });
-        });
-    });
+    if reveal && let Some(i) = selected_row {
+        handle.scroll_to_item(i);
+    }
+    let list_w = (width * 0.38).max(LIST_MIN);
+    let theme = cx.theme();
+    let list_pane = v_flex()
+        .flex_none()
+        .w(rems(list_w))
+        .h_full()
+        .p_1p5()
+        .rounded(theme.radius)
+        .bg(theme.muted)
+        .child(scroll_pane("health-list", &handle, rows));
+    // A new selection starts at the top of its details: each selection gets its own scroll
+    // area.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    sel.hash(&mut hasher);
+    let detail_pane = v_flex()
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .min_h_0()
+        .overflow_y_scrollbar()
+        .id(ElementId::NamedInteger(
+            "health-detail".into(),
+            hasher.finish(),
+        ))
+        .child(ui::space(2.0))
+        .child(detail);
+    v_flex()
+        .size_full()
+        .min_h_0()
+        .child(header)
+        .child(
+            h_flex()
+                .flex_1()
+                .min_h_0()
+                .items_stretch()
+                .gap_2()
+                .child(list_pane)
+                .child(detail_pane),
+        )
+        .into_any_element()
+}
+
+/// A vertical scroll area over `handle`, with a scrollbar. Its direct children are the items
+/// `handle.scroll_to_item` counts.
+fn scroll_pane(id: &'static str, handle: &ScrollHandle, children: Vec<AnyElement>) -> Div {
+    v_flex()
+        .relative()
+        .flex_1()
+        .min_h_0()
+        .min_w_0()
+        .child(
+            v_flex()
+                .id(id)
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(handle)
+                .children(children),
+        )
+        .vertical_scrollbar(handle)
 }
 
 /// Page title, the category tiles and the totals line.
-fn header(ui: &mut Ui, report: &Report, filter: Option<Category>) {
-    page_title(ui, "Health Check");
-    ui.add_space(4.0);
-    if let Some(f) = list::tiles(ui, report, filter) {
-        temp::set(ui.ctx(), filter_id(), f);
-    }
-    ui.add_space(2.0);
+fn header(report: &Report, filter: Option<Category>, cx: &mut ViewContext<OmniApp>) -> Div {
     let results = &report.results;
     let count = |p: fn(&Outcome) -> bool| results.iter().filter(|r| p(&r.outcome)).count();
     let found = count(|o| matches!(o, Outcome::Findings(f) if !f.is_empty()));
@@ -503,16 +567,24 @@ fn header(ui: &mut Ui, report: &Report, filter: Option<Category>) {
     if !report.dismissed.is_empty() {
         stats.push_str(&format!(" · {} dismissed", report.dismissed.len()));
     }
-    ui.weak(stats).on_hover_text(
-        "Live checks (memory pressure, temperatures, throttling) use the last ~2 minutes of \
-         sensor data and update as you use the PC.",
-    );
-    ui.add_space(8.0);
+    v_flex()
+        .flex_none()
+        .child(ui::page_title("Health Check"))
+        .child(ui::space(4.0))
+        .child(list::tiles(report, filter, cx))
+        .child(ui::space(2.0))
+        .child(h_flex().child(ui::with_tip(
+            "health-stats",
+            ui::weak(stats, cx),
+            "Live checks (memory pressure, temperatures, throttling) use the last ~2 minutes of \
+             sensor data and update as you use the PC.",
+        )))
+        .child(ui::space(8.0))
 }
 
 /// A category's tile status: "OK", "not checked", or its finding count in the colour of the
 /// worst one. None when no check of the category ran.
-fn category_status(results: &[CheckResult], cat: Category) -> Option<(String, Color32)> {
+fn category_status(results: &[CheckResult], cat: Category) -> Option<(String, Rgba)> {
     let rows: Vec<&CheckResult> = results.iter().filter(|r| r.category == cat).collect();
     if rows.is_empty() {
         return None;
@@ -529,7 +601,7 @@ fn category_status(results: &[CheckResult], cat: Category) -> Option<(String, Co
             .iter()
             .all(|r| matches!(r.outcome, Outcome::Skipped(_))) =>
         {
-            ("not checked".to_string(), Color32::GRAY)
+            ("not checked".to_string(), GRAY)
         }
         None => ("OK".to_string(), GREEN),
     })
@@ -553,6 +625,12 @@ fn count_label(levels: &[Level]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::Tab;
+    use crate::settings::Settings;
+    use crate::tabs::page_tests::{assert_shows, go, machines, open, page, snapshot, texts};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AnyWindowHandle, AppContext, Entity, TestAppContext};
+    use omnihw_core::testkit::{desktop, laptop};
 
     #[test]
     fn count_labels() {
@@ -561,5 +639,206 @@ mod tests {
         assert_eq!(count_label(&[Warning]), "1 warning");
         assert_eq!(count_label(&[Critical, Critical]), "2 critical");
         assert_eq!(count_label(&[Critical, Warning, Info]), "3 issues");
+    }
+
+    /// The app's report as list entries, the default selection and the finding titles and
+    /// details by key, read the way the page reads them.
+    struct Listed {
+        entries: Vec<Sel>,
+        default: Option<Sel>,
+        findings: HashMap<String, (String, String)>,
+        dismissed: Vec<String>,
+    }
+
+    fn listed(cx: &mut TestAppContext, app: &Entity<OmniApp>) -> Listed {
+        cx.update(|cx| {
+            app.update(cx, |app, _| {
+                let info = app.sampler.info().expect("fake info");
+                let snap = app.sampler.snapshot();
+                let report = app.health.get(info, &snap, app.settings.show_gaming);
+                let view = View::new(report, None);
+                Listed {
+                    entries: view.entries(),
+                    default: view.resolve(None),
+                    findings: view
+                        .findings()
+                        .map(|i| (i.key.clone(), (i.f.title.clone(), i.f.detail.clone())))
+                        .collect(),
+                    dismissed: view.dismissed.iter().map(|i| i.key.clone()).collect(),
+                }
+            })
+        })
+    }
+
+    fn selection(cx: &mut TestAppContext, app: &Entity<OmniApp>) -> Option<Sel> {
+        cx.read(|cx| app.read(cx).views.health.sel.clone())
+    }
+
+    /// A snapshot of the fake desktop 40 days after the last restart, so the uptime check
+    /// finds something (a suggestion with steps).
+    fn long_uptime(info: &SystemInfo) -> Snapshot {
+        Snapshot {
+            uptime_secs: Some(40 * 86_400),
+            ..snapshot(info)
+        }
+    }
+
+    fn open_health(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<OmniApp>) {
+        let info = desktop();
+        let (window, app) = open(cx, info.clone(), long_uptime(&info), Settings::default());
+        go(cx, &app, Tab::Health);
+        texts(cx, window);
+        (window, app)
+    }
+
+    fn click(cx: &mut TestAppContext, window: AnyWindowHandle, id: impl Into<ElementId>) {
+        let id = id.into();
+        cx.update_window(window, |_, window, cx| window.click(id, cx))
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn health_page_draws(cx: &mut TestAppContext) {
+        for info in machines() {
+            let shown = page(cx, &info, snapshot(&info), Tab::Health);
+            assert_shows(
+                &shown,
+                &["Health Check", "All", "checks ·", "PASSED CHECKS"],
+            );
+        }
+        let info = desktop();
+        let shown = page(cx, &info, long_uptime(&info), Tab::Health);
+        assert_shows(
+            &shown,
+            &[
+                "SUGGESTIONS · 1",
+                "Windows has been running for 40 days",
+                "HOW TO FIX",
+                "· 0 of 2 done",
+                "1. Restart to clear them out",
+                "Dismiss",
+                "Not relevant to you? Hide it.",
+            ],
+        );
+        // Before the first sample.
+        let shown = page(cx, &info, Snapshot::default(), Tab::Health);
+        assert_shows(&shown, &["Health Check", "All"]);
+    }
+
+    #[gpui_kit::test]
+    fn narrow_window_draws(cx: &mut TestAppContext) {
+        // At twice the UI scale the 1200 px test window is narrower than NARROW rems.
+        let info = desktop();
+        let settings = Settings {
+            ui_scale: 2.0,
+            ..Default::default()
+        };
+        let (window, app) = open(cx, info.clone(), long_uptime(&info), settings);
+        go(cx, &app, Tab::Health);
+        let shown = texts(cx, window);
+        let narrow = cx
+            .update_window(window, |_, window, cx| {
+                crate::app::page_width_rems(app.read(cx).settings.nav_style, window) < NARROW
+            })
+            .unwrap();
+        assert!(
+            narrow,
+            "the test window should get the single-column layout"
+        );
+        assert_shows(
+            &shown,
+            &["Health Check", "PASSED CHECKS", "HOW TO FIX", "Dismiss"],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn clicking_a_row_shows_its_details(cx: &mut TestAppContext) {
+        let (window, app) = open_health(cx);
+        let l = listed(cx, &app);
+        let passed = l
+            .entries
+            .iter()
+            .find(|e| matches!(e, Sel::Passed(_)))
+            .expect("a passed-checks entry")
+            .clone();
+        let Some(Sel::Finding(key)) = l.default.clone() else {
+            panic!("the uptime finding is shown by default");
+        };
+        // A category's passed checks.
+        click(cx, window, list::row_id(&passed));
+        assert_eq!(selection(cx, &app), Some(passed.clone()));
+        let Sel::Passed(c) = &passed else {
+            unreachable!()
+        };
+        assert_shows(
+            &texts(cx, window),
+            &[&format!("{} · passed checks", c.name())],
+        );
+        // Back to the finding.
+        let finding = Sel::Finding(key.clone());
+        click(cx, window, list::row_id(&finding));
+        assert_eq!(selection(cx, &app), Some(finding));
+        let (title, detail) = &l.findings[&key];
+        assert_shows(
+            &texts(cx, window),
+            &[title, detail, "HOW TO FIX", "Dismiss"],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn down_arrow_moves_the_selection(cx: &mut TestAppContext) {
+        let (window, app) = open_health(cx);
+        let l = listed(cx, &app);
+        let i = l
+            .entries
+            .iter()
+            .position(|e| Some(e) == l.default.as_ref())
+            .expect("the default selection is listed");
+        let next = l.entries.get(i + 1).expect("an entry below the default");
+        cx.update_window(window, |_, window, cx| window.press("down", cx))
+            .unwrap();
+        assert_eq!(selection(cx, &app).as_ref(), Some(next));
+        assert_eq!(cx.read(|cx| app.read(cx).tab), Tab::Health);
+        texts(cx, window);
+        cx.update_window(window, |_, window, cx| window.press("up", cx))
+            .unwrap();
+        assert_eq!(selection(cx, &app), l.default);
+    }
+
+    #[gpui_kit::test]
+    fn dismissing_moves_a_finding_to_the_dismissed_list(cx: &mut TestAppContext) {
+        // `crate::dismissed` is shared by every test in the process, so this dismisses a
+        // laptop finding, which the other tests here don't look at (they use the uptime one).
+        let _alone = crate::dismissed::test_lock();
+        let info = laptop();
+        let (window, app) = open(cx, info.clone(), snapshot(&info), Settings::default());
+        go(cx, &app, Tab::Health);
+        texts(cx, window);
+        let l = listed(cx, &app);
+        let Some(Sel::Finding(key)) = l.default.clone() else {
+            panic!("the fake laptop has findings");
+        };
+        let (title, _) = l.findings[&key].clone();
+        click(cx, window, "health-dismiss");
+        let shown = texts(cx, window);
+        let after = listed(cx, &app);
+        // Restore before asserting, so a failure leaves nothing dismissed behind.
+        crate::dismissed::restore(&key);
+        assert!(after.dismissed.contains(&key), "{title:?} wasn't dismissed");
+        assert!(!after.findings.contains_key(&key));
+        assert_shows(&shown, &["Dismissed (1)", "1 dismissed"]);
+
+        // Restoring it from the dismissed list brings it back.
+        crate::dismissed::dismiss(key.clone());
+        texts(cx, window);
+        click(cx, window, list::row_id(&Sel::Dismissed));
+        assert_eq!(selection(cx, &app), Some(Sel::Dismissed));
+        assert_shows(&texts(cx, window), &["Restore", &title]);
+        click(cx, window, ("restore", 0usize));
+        texts(cx, window);
+        let after = listed(cx, &app);
+        crate::dismissed::restore(&key);
+        assert!(!after.dismissed.contains(&key));
+        assert!(after.findings.contains_key(&key));
     }
 }

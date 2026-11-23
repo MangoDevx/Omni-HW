@@ -1,206 +1,262 @@
 //! The details pane (a finding with its fix steps checklist, Fix and firmware buttons; a
 //! category's passed checks; the dismissed list) and the "Restart into UEFI" confirmation.
 
-use super::{DumpStatus, GREEN, Item, Passed, Sel, View, level_color, select};
+use super::{DumpStatus, GRAY, GREEN, Item, Passed, Sel, View, level_color, select};
+use crate::app::OmniApp;
 use crate::heat::{ORANGE, RED};
-use crate::tabs::{pill, temp};
-use egui::{Color32, RichText, Sense, Ui, vec2};
+use crate::ui;
+use crate::ui::LineSized;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, App, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, rems,
+};
 use omnihw_core::diagnostics::{Category, CheckResult, Finding, Outcome, is_blue_screen_finding};
+use std::collections::HashMap;
 
-/// Text in the details pane stops at this width, so lines stay easy to read.
-const MAX_WIDTH: f32 = 680.0;
+/// Text in the details pane stops at this width (in rems; 680 px at the default scale), so
+/// lines stay easy to read.
+const MAX_WIDTH: f32 = 48.5;
+
+/// What the details pane needs besides the list entries.
+pub(super) struct Details<'a> {
+    /// The firmware is UEFI, so "Restart into UEFI / BIOS" can be offered.
+    pub uefi: bool,
+    /// A firmware restart is waiting for its administrator prompt.
+    pub restarting: bool,
+    /// Ticked fix steps by finding title.
+    pub done: &'a HashMap<String, Vec<bool>>,
+}
 
 /// The details of the selected list entry.
-pub(super) fn detail(ui: &mut Ui, view: &View, sel: Option<&Sel>, uefi: bool) {
-    ui.set_max_width(ui.available_width().min(MAX_WIDTH));
+pub(super) fn detail(
+    view: &View,
+    sel: Option<&Sel>,
+    d: &Details,
+    cx: &mut Context<OmniApp>,
+) -> Div {
+    let pane = v_flex().w_full().max_w(rems(MAX_WIDTH));
     match sel {
-        Some(Sel::Finding(k)) => {
-            if let Some(i) = view.finding(k) {
-                finding_detail(ui, i, uefi, false, view.dumps);
-            }
-        }
+        Some(Sel::Finding(k)) => match view.finding(k) {
+            Some(i) => pane.child(finding_detail(i, d, false, view.dumps, cx)),
+            None => pane,
+        },
         Some(Sel::DismissedFinding(k)) => {
-            if ui
-                .small_button("‹ All dismissed")
-                .on_hover_text("Back to the dismissed list")
-                .clicked()
-            {
-                select(ui.ctx(), Sel::Dismissed);
-            }
-            ui.add_space(6.0);
-            if let Some(i) = view.dismissed_finding(k) {
-                finding_detail(ui, i, uefi, true, view.dumps);
-            }
-        }
-        Some(Sel::Passed(c)) => {
-            if let Some(p) = view.passed.iter().find(|p| p.cat == *c) {
-                passed_detail(ui, p);
+            let back = Button::new("health-back")
+                .line_sized()
+                .caption("‹ All dismissed")
+                .tooltip("Back to the dismissed list")
+                .on_click(select(Sel::Dismissed, cx));
+            let pane = pane.child(h_flex().child(back)).child(ui::space(6.0));
+            match view.dismissed_finding(k) {
+                Some(i) => pane.child(finding_detail(i, d, true, view.dumps, cx)),
+                None => pane,
             }
         }
-        Some(Sel::Dismissed) => dismissed_list(ui, &view.dismissed),
-        None => {
-            ui.weak("No checks have run yet.");
-        }
+        Some(Sel::Passed(c)) => match view.passed.iter().find(|p| p.cat == *c) {
+            Some(p) => pane.child(passed_detail(p, cx)),
+            None => pane,
+        },
+        Some(Sel::Dismissed) => pane.child(dismissed_list(&view.dismissed, cx)),
+        None => pane.child(ui::weak("No checks have run yet.", cx)),
     }
+}
+
+/// A large bold heading at the top of the details.
+#[track_caller]
+fn title(text: impl Into<gpui_kit::SharedString>) -> gpui_kit::component::label::Label {
+    ui::label(text).text_size(gpui_kit::rems(18.0 / 16.0))
 }
 
 /// A finding: title, level and category, what was measured, how to fix it, then Dismiss
 /// (or Restore for a dismissed one).
-fn finding_detail(ui: &mut Ui, item: &Item, uefi: bool, dismissed: bool, dumps: &DumpStatus) {
+fn finding_detail(
+    item: &Item,
+    d: &Details,
+    dismissed: bool,
+    dumps: &DumpStatus,
+    cx: &mut Context<OmniApp>,
+) -> Div {
     let f = item.f;
-    // Scope widget ids to the finding: otherwise, when one is dismissed, the next one's
-    // buttons inherit its position-based ids and the same click.
-    ui.push_id(("health_finding", item.check, &f.title), |ui| {
-        ui.add(egui::Label::new(RichText::new(&f.title).size(18.0).strong()).wrap());
-        ui.add_space(4.0);
-        ui.horizontal_wrapped(|ui| {
-            pill(ui, f.level.name(), level_color(f.level), true);
-            pill(ui, f.category.name(), Color32::GRAY, true);
-            if f.security {
-                pill(ui, "Security setting", ORANGE, true);
-            }
-            if dismissed {
-                pill(ui, "Dismissed", Color32::GRAY, true);
-            }
-        });
-        ui.add_space(10.0);
-        finding_body(ui, f, uefi);
-        if is_blue_screen_finding(item.check, f) {
-            dump_button(ui, dumps);
-        }
-        ui.add_space(16.0);
-        ui.separator();
-        ui.add_space(4.0);
-        if dismissed {
-            if ui
-                .button("Restore")
-                .on_hover_text("Show this in the list and the summary again")
-                .clicked()
-            {
-                crate::dismissed::restore(&item.key);
-                select(ui.ctx(), Sel::Finding(item.key.clone()));
-            }
-        } else {
-            ui.horizontal_wrapped(|ui| {
-                if ui
-                    .button("Dismiss")
-                    .on_hover_text(
-                        "Hide this from the Health Check summary and the Overview. \
-                         See or restore it under Dismissed at the bottom of the list.",
-                    )
-                    .clicked()
-                {
-                    crate::dismissed::dismiss(item.key.clone());
-                }
-                ui.weak("Not relevant to you? Hide it.");
-            });
-        }
-    });
-}
-
-/// Memory id of the "Analyze crash dumps" request, taken by [`super::dispatch`].
-pub(super) fn read_dumps_id() -> egui::Id {
-    egui::Id::new("health_read_dumps")
+    let mut pills = ui::wrap_row()
+        .gap_1p5()
+        .child(ui::pill(f.level.name(), level_color(f.level), true, cx))
+        .child(ui::pill(f.category.name(), GRAY, true, cx));
+    if f.security {
+        pills = pills.child(ui::pill("Security setting", ORANGE, true, cx));
+    }
+    if dismissed {
+        pills = pills.child(ui::pill("Dismissed", GRAY, true, cx));
+    }
+    let mut col = v_flex()
+        .child(title(f.title.clone()))
+        .child(ui::space(4.0))
+        .child(pills)
+        .child(ui::space(10.0))
+        .children(finding_body(f, d, cx));
+    if is_blue_screen_finding(item.check, f) {
+        col = col.child(dump_button(dumps, cx));
+    }
+    col = col
+        .child(ui::space(16.0))
+        .child(Separator::horizontal())
+        .child(ui::space(4.0));
+    let key = item.key.clone();
+    if dismissed {
+        col.child(
+            h_flex().child(
+                Button::new("health-restore")
+                    .line_sized()
+                    .caption("Restore")
+                    .tooltip("Show this in the list and the summary again")
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        crate::dismissed::restore(&key);
+                        this.views.health.sel = Some(Sel::Finding(key.clone()));
+                        cx.notify();
+                    })),
+            ),
+        )
+    } else {
+        col.child(
+            ui::wrap_row()
+                .child(
+                    Button::new("health-dismiss")
+                        .line_sized()
+                        .caption("Dismiss")
+                        .tooltip(
+                            "Hide this from the Health Check summary and the Overview. \
+                             See or restore it under Dismissed at the bottom of the list.",
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            crate::dismissed::dismiss(key.clone());
+                            cx.notify();
+                        })),
+                )
+                .child(ui::weak("Not relevant to you? Hide it.", cx)),
+        )
+    }
 }
 
 /// "Analyze crash dumps" with its state: a spinner while reading, then the error or a note
 /// when there were none (the results themselves show in the finding's details and steps).
-fn dump_button(ui: &mut Ui, dumps: &DumpStatus) {
-    ui.add_space(10.0);
-    ui.horizontal_wrapped(|ui| {
-        let label = if crate::elevate::elevated() {
-            "Analyze crash dumps"
-        } else {
-            "Analyze crash dumps (asks for administrator)"
-        };
-        if ui
-            .add_enabled(!dumps.busy, egui::Button::new(label))
-            .on_hover_text(if crate::elevate::elevated() {
-                "Reads C:\\Windows\\Minidump."
-            } else {
-                "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps."
-            })
-            .clicked()
-        {
-            temp::set(ui.ctx(), read_dumps_id(), true);
-        }
-        if dumps.busy {
-            ui.spinner();
-        }
-        match &dumps.result {
-            _ if dumps.busy => {}
-            Some(Err(e)) => {
-                ui.colored_label(
-                    crate::heat::ink(ui.visuals(), RED),
-                    format!("Couldn't read crash dumps: {e}"),
-                );
-            }
-            Some(Ok(0)) => {
-                ui.weak("No crash dumps found");
-            }
-            Some(Ok(n)) => {
-                ui.weak(format!(
-                    "{n} crash {} analysed (listed above)",
-                    if *n == 1 { "dump" } else { "dumps" }
-                ));
-            }
-            None => {}
-        }
-    });
+fn dump_button(dumps: &DumpStatus, cx: &mut Context<OmniApp>) -> Div {
+    let elevated = crate::elevate::elevated();
+    let label = if elevated {
+        "Analyze crash dumps"
+    } else {
+        "Analyze crash dumps (asks for administrator)"
+    };
+    let hover = if elevated {
+        "Reads C:\\Windows\\Minidump."
+    } else {
+        "Reads C:\\Windows\\Minidump. Windows asks for administrator permission because only administrators can read crash dumps."
+    };
+    let mut row = ui::wrap_row().child(
+        Button::new("health-dumps")
+            .line_sized()
+            .caption(label)
+            .tooltip(hover)
+            .disabled(dumps.busy)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.sampler.read_dumps();
+                cx.notify();
+            })),
+    );
+    if dumps.busy {
+        row = row.child(Spinner::new().small());
+    }
+    let status = match &dumps.result {
+        _ if dumps.busy => None,
+        Some(Err(e)) => Some(ui::colored(
+            format!("Couldn't read crash dumps: {e}"),
+            RED,
+            cx,
+        )),
+        Some(Ok(0)) => Some(ui::weak("No crash dumps found", cx)),
+        Some(Ok(n)) => Some(ui::weak(
+            format!(
+                "{n} crash {} analysed (listed above)",
+                if *n == 1 { "dump" } else { "dumps" }
+            ),
+            cx,
+        )),
+        None => None,
+    };
+    v_flex().child(ui::space(10.0)).child(row.children(status))
 }
 
 /// A category's passed (green OK + detail) and not-applicable (reason) checks.
-fn passed_detail(ui: &mut Ui, p: &Passed) {
-    ui.label(
-        RichText::new(format!("{} · passed checks", p.cat.name()))
-            .size(18.0)
-            .strong(),
-    );
+fn passed_detail(p: &Passed, cx: &App) -> Div {
     let mut counts = format!("{} passed", p.passed);
     if p.skipped > 0 {
         counts.push_str(&format!(", {} not applicable to this PC", p.skipped));
     }
-    ui.weak(counts);
-    if let Some(note) = category_note(p.cat) {
-        ui.weak(note);
-    }
-    ui.add_space(8.0);
-    result_grid(ui, ("health_grid", p.cat.name()), &p.rows);
+    v_flex()
+        .child(title(format!("{} · passed checks", p.cat.name())))
+        .child(ui::weak(counts, cx))
+        .children(category_note(p.cat).map(|note| ui::weak(note, cx)))
+        .child(ui::space(8.0))
+        .child(result_grid(&p.rows, cx))
 }
 
 /// Dismissed findings: click one to read it again, Restore brings it back.
-fn dismissed_list(ui: &mut Ui, items: &[Item]) {
-    ui.label(RichText::new("Dismissed").size(18.0).strong());
-    ui.horizontal_wrapped(|ui| {
-        ui.weak("Hidden from the summary and the Overview. Restore one to show it again.");
-        if items.len() > 1 && ui.small_button("Restore all").clicked() {
-            crate::dismissed::restore_all();
-        }
-    });
-    ui.add_space(8.0);
-    for i in items {
-        ui.push_id(("health_dismissed", &i.key), |ui| {
-            ui.horizontal(|ui| {
-                if ui
-                    .small_button("Restore")
-                    .on_hover_text("Show this in the list and the summary again")
-                    .clicked()
-                {
-                    crate::dismissed::restore(&i.key);
-                }
-                let r = super::list::row(
-                    ui,
-                    false,
-                    level_color(i.f.level),
-                    &i.f.title,
-                    i.f.category.name(),
-                );
-                if r.on_hover_text("Read it again").clicked() {
-                    select(ui.ctx(), Sel::DismissedFinding(i.key.clone()));
-                }
-            });
-        });
+fn dismissed_list(items: &[Item], cx: &mut Context<OmniApp>) -> Div {
+    let mut intro = ui::wrap_row().child(ui::weak(
+        "Hidden from the summary and the Overview. Restore one to show it again.",
+        cx,
+    ));
+    if items.len() > 1 {
+        intro = intro.child(
+            Button::new("health-restore-all")
+                .line_sized()
+                .caption("Restore all")
+                .on_click(cx.listener(|_, _, _, cx| {
+                    crate::dismissed::restore_all();
+                    cx.notify();
+                })),
+        );
     }
+    let mut list = v_flex().gap_0p5();
+    for (n, i) in items.iter().enumerate() {
+        let key = i.key.clone();
+        let restore = Button::new(("restore", n))
+            .line_sized()
+            .caption("Restore")
+            .tooltip("Show this in the list and the summary again")
+            .on_click(cx.listener(move |_, _, _, cx| {
+                crate::dismissed::restore(&key);
+                cx.notify();
+            }));
+        let row = super::list::row(
+            ElementId::Name(format!("health-dismissed/{}", i.key).into()),
+            false,
+            level_color(i.f.level),
+            &i.f.title,
+            i.f.category.name(),
+            Some("Read it again"),
+            cx,
+        )
+        .on_click(select(Sel::DismissedFinding(i.key.clone()), cx))
+        .flex_1()
+        .min_w_0();
+        list = list.child(
+            h_flex()
+                .id(("health-dismissed-row", n))
+                .gap_2()
+                .child(restore)
+                .child(row),
+        );
+    }
+    v_flex()
+        .child(title("Dismissed"))
+        .child(intro)
+        .child(ui::space(8.0))
+        .child(list)
 }
 
 fn category_note(cat: Category) -> Option<&'static str> {
@@ -218,198 +274,189 @@ fn category_note(cat: Category) -> Option<&'static str> {
     }
 }
 
-/// Passed (green OK + detail) and skipped (reason) checks as a compact table.
-fn result_grid(ui: &mut Ui, id: impl std::hash::Hash + std::fmt::Debug, rows: &[&CheckResult]) {
-    if rows.is_empty() {
-        return;
+/// Passed (green OK + detail) and skipped (reason) checks as a compact striped table: the
+/// status, the check's name, then the detail, which wraps.
+fn result_grid(rows: &[&CheckResult], cx: &App) -> Div {
+    let stripe = cx.theme().muted;
+    let mut table = v_flex();
+    let mut n = 0;
+    for r in rows {
+        let (status, detail) = match &r.outcome {
+            Outcome::Pass(detail) => (ui::colored("OK", GREEN, cx), detail),
+            Outcome::Skipped(why) => (ui::weak("–", cx), why),
+            Outcome::Findings(_) => continue,
+        };
+        table = table.child(
+            h_flex()
+                .id(n)
+                .items_start()
+                .gap_3()
+                .px_2()
+                .py_0p5()
+                .when(n % 2 == 1, |row| row.bg(stripe))
+                .child(status.flex_none().w(rems(1.75)))
+                .child(ui::label(r.name).flex_none().w(rems(14.0)))
+                .child(ui::weak(detail.clone(), cx).flex_1().min_w_0()),
+        );
+        n += 1;
     }
-    egui::Grid::new(id)
-        .num_columns(3)
-        .spacing([12.0, 4.0])
-        .striped(true)
-        .show(ui, |ui| {
-            for r in rows {
-                match &r.outcome {
-                    Outcome::Pass(detail) => {
-                        ui.colored_label(crate::heat::ink(ui.visuals(), GREEN), "OK");
-                        ui.label(r.name);
-                        ui.weak(detail);
-                    }
-                    Outcome::Skipped(why) => {
-                        ui.weak("–");
-                        ui.label(r.name);
-                        ui.weak(why);
-                    }
-                    Outcome::Findings(_) => continue,
-                }
-                ui.end_row();
-            }
-        });
+    table
 }
 
-/// State id for a finding's checklist (stable across frames by title).
-fn card_id(f: &Finding) -> egui::Id {
-    egui::Id::new(("health_card", &f.title))
-}
-
-fn finding_body(ui: &mut Ui, f: &Finding, uefi: bool) {
-    ui.add(egui::Label::new(&f.detail).wrap());
+/// What was measured, the security warning, the steps checklist, then the Fix and firmware
+/// buttons.
+fn finding_body(f: &Finding, d: &Details, cx: &mut Context<OmniApp>) -> Vec<AnyElement> {
+    let mut out = vec![ui::label(f.detail.clone()).into_any_element()];
     if f.security {
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            security_icon(ui);
-            ui.label(
-                RichText::new(
-                    "Security setting: only change it if you understand the protection you would be giving up.",
+        out.push(ui::space(6.0).into_any_element());
+        out.push(
+            h_flex()
+                .items_start()
+                .gap_2()
+                .child(security_icon())
+                .child(
+                    ui::colored(
+                        "Security setting: only change it if you understand the protection you would be giving up.",
+                        ORANGE,
+                        cx,
+                    )
+                    .flex_1()
+                    .min_w_0(),
                 )
-                .color(crate::heat::ink(ui.visuals(), ORANGE)),
-            );
-        });
+                .into_any_element(),
+        );
     }
     if !f.steps.is_empty() {
-        steps_checklist(ui, f);
+        out.extend(steps_checklist(f, d.done, cx));
     }
     if let Some(a) = &f.fix {
-        ui.add_space(10.0);
-        crate::tabs::power::fix_button(ui, a);
+        out.push(ui::space(10.0).into_any_element());
+        out.push(
+            h_flex()
+                .child(crate::tabs::power::fix_button("health-fix", a, cx))
+                .into_any_element(),
+        );
     }
-    if f.bios && uefi {
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .button("Restart into UEFI / BIOS…")
-                .on_hover_text(
-                    "Restarts the PC straight into the firmware setup, no key presses needed. Asks for administrator rights.",
+    if f.bios && d.uefi {
+        out.push(ui::space(6.0).into_any_element());
+        out.push(
+            h_flex()
+                .child(
+                    Button::new("health-uefi").line_sized()
+                        .caption("Restart into UEFI / BIOS…")
+                        .tooltip(
+                            "Restarts the PC straight into the firmware setup, no key presses needed. Asks for administrator rights.",
+                        )
+                        .disabled(d.restarting)
+                        .on_click(cx.listener(|_, _, window, cx| restart_dialog(window, cx))),
                 )
-                .clicked()
-            {
-                set_confirm_restart(ui.ctx(), true);
-            }
-        });
+                .into_any_element(),
+        );
     }
+    out
 }
 
-/// Small orange warning triangle with "!", drawn so it doesn't depend on font glyphs.
-fn security_icon(ui: &mut Ui) {
-    let (rect, _) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::hover());
-    let c = rect.center();
-    let r = 7.0;
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![
-            c + vec2(0.0, -r),
-            c + vec2(r, r * 0.8),
-            c + vec2(-r, r * 0.8),
-        ],
-        ORANGE,
-        egui::Stroke::NONE,
-    ));
-    ui.painter().text(
-        c + vec2(0.0, 1.5),
-        egui::Align2::CENTER_CENTER,
-        "!",
-        egui::FontId::proportional(10.0),
-        Color32::BLACK,
-    );
+/// Small orange warning triangle with "!" (a bundled icon, so it doesn't depend on font
+/// glyphs).
+fn security_icon() -> Icon {
+    Icon::new(IconName::TriangleAlert)
+        .small()
+        .flex_none()
+        .text_color(ORANGE)
 }
 
 /// The steps as a checklist: tick steps off as you go ("2 of 4 done"). Ticks only live in
 /// memory for this session.
-fn steps_checklist(ui: &mut Ui, f: &Finding) {
-    let id = card_id(f).with("steps");
-    let mut done: Vec<bool> = temp::get(ui.ctx(), id).unwrap_or_else(|| vec![false; f.steps.len()]);
-    done.resize(f.steps.len(), false);
-    let n_done = done.iter().filter(|&&d| d).count();
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new("HOW TO FIX").small().strong().weak());
-        if f.steps.len() > 1 {
-            ui.weak(format!("· {n_done} of {} done", f.steps.len()));
-        }
-    });
+fn steps_checklist(
+    f: &Finding,
+    done: &HashMap<String, Vec<bool>>,
+    cx: &mut Context<OmniApp>,
+) -> Vec<AnyElement> {
     let total = f.steps.len();
-    for (i, s) in f.steps.iter().enumerate() {
-        ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut done[i], "")
-                .on_hover_text(format!("Mark step {} of {total} as done", i + 1));
-            let text = RichText::new(format!("{}. {}", i + 1, s.text));
-            ui.add(egui::Label::new(if done[i] { text.weak() } else { text }).wrap());
-            if let Some(link) = &s.link {
-                let url = link.url();
-                if ui.small_button(link.label()).on_hover_text(&url).clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                }
-            }
-        });
+    let mut ticks = done.get(&f.title).cloned().unwrap_or_default();
+    ticks.resize(total, false);
+    let n_done = ticks.iter().filter(|&&d| d).count();
+    let weak = ui::weak_color(cx);
+    let mut head = ui::row().child(
+        ui::label("HOW TO FIX")
+            .text_size(crate::ui::small_size())
+            .text_color(weak),
+    );
+    if total > 1 {
+        head = head.child(ui::weak(format!("· {n_done} of {total} done"), cx));
     }
-    temp::set(ui.ctx(), id, done);
+    let mut out = vec![ui::space(8.0).into_any_element(), head.into_any_element()];
+    for (i, s) in f.steps.iter().enumerate() {
+        let finding = f.title.clone();
+        let check = Checkbox::new("done")
+            .checked(ticks[i])
+            .tooltip(format!("Mark step {} of {total} as done", i + 1))
+            .on_click(cx.listener(move |this, checked: &bool, _, cx| {
+                let ticks = this.views.health.done.entry(finding.clone()).or_default();
+                ticks.resize(total, false);
+                ticks[i] = *checked;
+                cx.notify();
+            }));
+        let text = ui::label(format!("{}. {}", i + 1, s.text))
+            .flex_1()
+            .min_w_0()
+            .when(ticks[i], |t| t.text_color(weak));
+        let mut row = h_flex()
+            .id(("health-step", i))
+            .items_start()
+            .gap_2()
+            .py_0p5()
+            .child(check)
+            .child(text);
+        if let Some(link) = &s.link {
+            let url = link.url();
+            row = row.child(
+                Button::new("link")
+                    .line_sized()
+                    .caption(link.label())
+                    .tooltip(url.clone())
+                    .on_click(move |_, _, cx| cx.open_url(&url)),
+            );
+        }
+        out.push(row.into_any_element());
+    }
+    out
 }
 
-fn confirm_id() -> egui::Id {
-    egui::Id::new("health_confirm_uefi_restart")
+/// "Restart into UEFI" confirmation.
+fn restart_dialog(window: &mut Window, cx: &mut Context<OmniApp>) {
+    ui::confirm(
+        "Restart into UEFI / BIOS?",
+        "The PC restarts immediately and opens the firmware setup. Save your work and close \
+         other programs first: anything unsaved will be lost.\n\n\
+         Windows asks for administrator rights to do this. In the setup, save and exit \
+         (usually F10) to boot back into Windows.",
+        "Restart now",
+        window,
+        cx,
+        |this, _, cx| start_restart(this, cx),
+    );
 }
 
-fn set_confirm_restart(ctx: &egui::Context, open: bool) {
-    temp::set(ctx, confirm_id(), open);
-}
-
-/// "Restart into UEFI" confirmation, shown over the Health tab when requested.
-pub(super) fn restart_dialog(ui: &mut Ui) {
-    let ctx = ui.ctx().clone();
-    if !temp::get::<bool>(&ctx, confirm_id()).unwrap_or(false) {
+/// Restart into the firmware setup. The UAC prompt blocks the calling thread until answered,
+/// so it runs off the UI thread; an error shows in the status bar.
+fn start_restart(app: &mut OmniApp, cx: &mut Context<OmniApp>) {
+    if app.views.health.restarting {
         return;
     }
-    let error_id = confirm_id().with("error");
-    let busy_id = confirm_id().with("busy");
-    let busy = temp::get::<bool>(&ctx, busy_id).unwrap_or(false);
-    let modal = egui::Modal::new(confirm_id()).show(&ctx, |ui| {
-        ui.set_max_width(420.0);
-        ui.label(
-            RichText::new("Restart into UEFI / BIOS?")
-                .size(16.0)
-                .strong(),
-        );
-        ui.add_space(4.0);
-        ui.label(
-            "The PC restarts immediately and opens the firmware setup. Save your work and close \
-             other programs first: anything unsaved will be lost.",
-        );
-        ui.add_space(2.0);
-        ui.weak(
-            "Windows asks for administrator rights to do this. In the setup, save and exit \
-             (usually F10) to boot back into Windows.",
-        );
-        if let Some(err) = temp::get::<String>(&ctx, error_id) {
-            ui.add_space(4.0);
-            ui.colored_label(crate::heat::ink(ui.visuals(), RED), err);
-        }
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!busy, egui::Button::new("Restart now"))
-                .clicked()
-            {
-                // The UAC prompt blocks the calling thread until answered: keep it off the UI.
-                temp::set(&ctx, busy_id, true);
-                let ctx = ctx.clone();
-                std::thread::spawn(move || {
-                    let result = crate::elevate::restart_to_firmware();
-                    temp::set(&ctx, busy_id, false);
-                    match result {
-                        Ok(()) => set_confirm_restart(&ctx, false),
-                        Err(e) => temp::set(&ctx, error_id, e),
-                    }
-                    ctx.request_repaint();
-                });
+    app.views.health.restarting = true;
+    let restart = cx
+        .background_executor()
+        .spawn(async { crate::elevate::restart_to_firmware() });
+    cx.spawn(async move |this, cx| {
+        let result = restart.await;
+        let _ = this.update(cx, |this, cx| {
+            this.views.health.restarting = false;
+            if let Err(e) = result {
+                this.set_status(e, cx);
             }
-            if ui.button("Cancel").clicked() {
-                set_confirm_restart(&ctx, false);
-            }
+            cx.notify();
         });
-    });
-    if modal.should_close() {
-        set_confirm_restart(&ctx, false);
-    }
-    if !temp::get::<bool>(&ctx, confirm_id()).unwrap_or(false) {
-        temp::take::<String>(&ctx, error_id);
-    }
+    })
+    .detach();
 }

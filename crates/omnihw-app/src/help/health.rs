@@ -1,13 +1,12 @@
 //! Health Check help, including a description of every rule.
 
-use super::{bullets, h, p};
-use egui::{RichText, Ui};
+use super::{Doc, bullets, h, p, strong};
 use omnihw_core::diagnostics::{self, Category};
 use omnihw_core::sensors::SensorTable;
 use std::sync::OnceLock;
 
 /// Every Health Check rule with its category, taken from the diagnostics engine itself.
-fn all_checks() -> &'static [(&'static str, Category)] {
+pub(super) fn all_checks() -> &'static [(&'static str, Category)] {
     static CHECKS: OnceLock<Vec<(&'static str, Category)>> = OnceLock::new();
     CHECKS.get_or_init(|| {
         let info = omnihw_core::SystemInfo::default();
@@ -176,17 +175,17 @@ fn check_description(name: &str) -> &'static str {
     }
 }
 
-pub(super) fn health_check(ui: &mut Ui) {
-    h(ui, "What it does");
+pub(super) fn health_check(doc: &mut Doc) {
+    h(doc, "What it does");
     p(
-        ui,
+        doc,
         "The Health Check runs a set of rules over your hardware information and recent sensor readings, and reports \
          anything that looks wrong or could be better, in plain language with steps to fix it. Nothing is changed \
          automatically: you decide what to do, and only a Fix button you click changes a setting.",
     );
-    h(ui, "Reading the results");
+    h(doc, "Reading the results");
     bullets(
-        ui,
+        doc,
         &[
             "Critical (red): fix soon, e.g. a failing drive or outdated CPU microcode with a known stability problem.",
             "Warning (orange): something is holding your PC back, e.g. memory not running at its rated speed.",
@@ -196,32 +195,32 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Passed checks lists each category's checks that found nothing: OK rows found nothing wrong (with what was measured) and dash rows don't apply to this PC (with the reason, e.g. no battery).",
         ],
     );
-    h(ui, "Gaming section");
+    h(doc, "Gaming section");
     p(
-        ui,
+        doc,
         "Settings that mainly matter for games (Resizable BAR, Memory Integrity, hardware GPU scheduling, Game Mode) are \
          grouped in the Gaming category and listed under For gaming, separate from the main summary. Turn off Show \
          gaming suggestions in Settings > Health Check to hide the Gaming category and its count everywhere.",
     );
-    h(ui, "Dismissing issues");
+    h(doc, "Dismissing issues");
     bullets(
-        ui,
+        doc,
         &[
             "Dismiss at the bottom of a finding's details hides it from the list, the summary and the Overview banner. It moves to Dismissed (n) at the bottom of the list, where you can read it again; Restore brings it back, and Restore all brings them all back.",
             "If the same check later finds something more serious (e.g. a suggestion becomes a warning), it shows up again.",
             "By default dismissed issues stay dismissed after restarting Omni-HW. Turn that off in Settings > Health Check to have them come back on each start; Restore dismissed issues there brings them all back.",
         ],
     );
-    h(ui, "Security settings");
+    h(doc, "Security settings");
     p(
-        ui,
+        doc,
         "Findings about a security setting carry an orange \"Security setting\" badge and a caution note. They explain \
          the trade-off; only change such a setting if you know what you are doing and understand the protection you \
          would give up.",
     );
-    h(ui, "Fixing what it finds");
+    h(doc, "Fixing what it finds");
     bullets(
-        ui,
+        doc,
         &[
             "Each finding has numbered steps. Tick a step's box as you finish it; the header shows how many are done (ticks reset when Omni-HW closes).",
             "Search Google opens a search in your browser built from your hardware, e.g. your motherboard model plus \"enable EXPO\". Open Settings opens the right Windows Settings page, and Open website goes to the official download page. Nothing is opened unless you click.",
@@ -229,9 +228,9 @@ pub(super) fn health_check(ui: &mut Ui) {
             "On UEFI PCs, BIOS-related findings have a Restart into UEFI / BIOS button: after you confirm, Windows asks for administrator rights and restarts straight into the setup, so there's no key to catch. Save your work first.",
         ],
     );
-    h(ui, "Using it");
+    h(doc, "Using it");
     bullets(
-        ui,
+        doc,
         &[
             "The most serious finding is selected when the page opens. The list and the details scroll separately; in a narrow window the details move below the list.",
             "Hover the totals line under the tiles to see how the live checks work.",
@@ -241,7 +240,7 @@ pub(super) fn health_check(ui: &mut Ui) {
             "Some power findings have a Fix button that changes the setting for you. Changes that affect networking or shutdown ask first, and ones that need administrator rights show the Windows permission prompt.",
         ],
     );
-    h(ui, "All checks");
+    h(doc, "All checks");
     for cat in Category::ALL {
         let rows: Vec<String> = all_checks()
             .iter()
@@ -254,8 +253,8 @@ pub(super) fn health_check(ui: &mut Ui) {
         if rows.is_empty() {
             continue;
         }
-        ui.label(RichText::new(cat.name()).strong());
-        bullets(ui, &rows);
+        strong(doc, cat.name());
+        bullets(doc, &rows);
     }
 }
 

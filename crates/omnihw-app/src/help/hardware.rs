@@ -1,16 +1,15 @@
 //! Help pages: the hardware tabs, Power and Sensors.
 
-use super::{bullets, details, h, p};
-use egui::Ui;
+use super::{Doc, bullets, details, h, p};
 
-pub(super) fn hardware(ui: &mut Ui) {
+pub(super) fn hardware(doc: &mut Doc) {
     p(
-        ui,
+        doc,
         "These tabs show detailed, mostly fixed information about each part, read once when Omni-HW starts.",
     );
-    h(ui, "CPU");
+    h(doc, "CPU");
     bullets(
-        ui,
+        doc,
         &[
             "Name, code name, microarchitecture, manufacturing process and socket.",
             "Family / model / stepping and the instruction sets the CPU supports (AVX2, AVX-512 and so on).",
@@ -19,31 +18,31 @@ pub(super) fn hardware(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "cpu",
         &[
             "Read with the CPUID instruction and Windows' processor topology. Live clocks are Windows performance counters (% Processor Performance x base clock).",
             "VT-x may be missing from the instruction list when Hyper-V or Memory Integrity is on; Windows hides it from programs.",
         ],
     );
-    h(ui, "Caches");
+    h(doc, "Caches");
     p(
-        ui,
+        doc,
         "Every cache level with its size, how many copies exist (e.g. one per core), associativity and line size, plus the raw CPUID cache descriptors.",
     );
-    h(ui, "Mainboard");
+    h(doc, "Mainboard");
     p(
-        ui,
+        doc,
         "Motherboard maker and model, system maker and product, BIOS vendor, version and date, SMBIOS version and CPU socket.",
     );
-    h(ui, "Memory");
+    h(doc, "Memory");
     p(
-        ui,
+        doc,
         "Memory type, installed and usable size, slots used, configured speed and live load, plus a table of every module with its size, rated and configured speed, ranks, maker and part number. The quick memory test measures bandwidth and latency; any hardware errors (WHEA) Windows logs while it runs are shown under the result, since they mean the memory or CPU is unstable.",
     );
-    h(ui, "GPU");
+    h(doc, "GPU");
     bullets(
-        ui,
+        doc,
         &[
             "Name, chip, architecture, process, card maker, PCI ids and revision.",
             "PCIe link (current vs maximum), BIOS version, driver version and date (NVIDIA shows more detail).",
@@ -54,7 +53,7 @@ pub(super) fn hardware(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "gpu",
         &[
             "Basic adapter information comes from DXGI and works for every vendor. Temperatures, clocks, power, fan, PCIe and ReBAR come from NVIDIA's NVML library, which ships with the NVIDIA driver.",
@@ -62,9 +61,9 @@ pub(super) fn hardware(ui: &mut Ui) {
             "Virtual display adapters (used by streaming and virtual monitor tools) are hidden so your real card isn't listed twice.",
         ],
     );
-    h(ui, "Storage");
+    h(doc, "Storage");
     bullets(
-        ui,
+        doc,
         &[
             "Each physical drive: model, type (NVMe SSD, SSD, HDD), interface, capacity, firmware and serial number.",
             "Volumes: each drive letter with a free-space bar.",
@@ -76,15 +75,15 @@ pub(super) fn hardware(ui: &mut Ui) {
     );
 }
 
-pub(super) fn network(ui: &mut Ui) {
+pub(super) fn network(doc: &mut Doc) {
     p(
-        ui,
+        doc,
         "The Network page lists every adapter Windows shows in Network Connections. It works fully offline: \
          details are read from Windows, and nothing is sent anywhere unless you click Run internet tests.",
     );
-    h(ui, "What it shows");
+    h(doc, "What it shows");
     bullets(
-        ui,
+        doc,
         &[
             "Status (connected, disconnected, disabled), adapter model, type (Ethernet, Wi-Fi, virtual), MAC address and driver version and date.",
             "Link speed and duplex, plus the fastest speed the adapter supports when it's linked slower.",
@@ -93,9 +92,9 @@ pub(super) fn network(ui: &mut Ui) {
             "Advanced driver properties (Speed & Duplex, Energy-Efficient Ethernet, power saving, jumbo frames, interrupt moderation and so on), as in Device Manager.",
         ],
     );
-    h(ui, "Changing settings");
+    h(doc, "Changing settings");
     bullets(
-        ui,
+        doc,
         &[
             "Per adapter: Enable / Disable, Rename, IP address (automatic DHCP or a fixed IPv4 address, mask and gateway), DNS servers (automatic or your own IPv4 servers), MTU, Release and Renew.",
             "Advanced driver properties with a list of values can be changed from their drop-down; the adapter restarts, so the connection drops for a few seconds. Free-form values are shown read-only (change them in Device Manager).",
@@ -103,9 +102,9 @@ pub(super) fn network(ui: &mut Ui) {
             "Every change asks for confirmation first. Except flushing the DNS cache, they need administrator rights: Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
         ],
     );
-    h(ui, "Tests");
+    h(doc, "Tests");
     bullets(
-        ui,
+        doc,
         &[
             "Local tests (run once when you open the page, and again with Run local tests): link up, a real IP address (169.254.x.x means no DHCP server answered), duplicate addresses, gateway reachable (4 pings), DNS servers on your local network answering, and link speed below what the adapter supports. They only contact your own router and local DNS servers.",
             &format!(
@@ -116,7 +115,7 @@ pub(super) fn network(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "network",
         &[
             "Addresses and link state come from IP Helper (GetAdaptersAddresses, GetIfEntry2); Wi-Fi from the WLAN API; driver details and advanced properties from WMI (MSFT_NetAdapter). They refresh every 5 seconds while the page is open and every minute otherwise, on the background thread.",
@@ -126,17 +125,17 @@ pub(super) fn network(ui: &mut Ui) {
     );
 }
 
-pub(super) fn lan_security(ui: &mut Ui) {
+pub(super) fn lan_security(doc: &mut Doc) {
     p(
-        ui,
+        doc,
         "The LAN Security Report (Network > LAN Security Report) scans your own local network for \
          devices and common security problems. It runs only when you click Scan my network, stays \
          on your local network, and changes nothing: it identifies and explains issues, it does \
          not try to exploit them.",
     );
-    h(ui, "What it does");
+    h(doc, "What it does");
     bullets(
-        ui,
+        doc,
         &[
             "Works out the private subnet of each connected adapter (for example 192.168.1.0/24) and refuses a range wider than a /22, so a scan stays bounded.",
             "Finds which addresses answer (a quick ping and the neighbour/ARP table), and labels each device with its MAC address, a best-effort maker, and its reverse-DNS name when it has one.",
@@ -144,9 +143,9 @@ pub(super) fn lan_security(ui: &mut Ui) {
             "Adds a couple of read-only checks of this PC itself, such as whether the old, insecure SMBv1 protocol is still enabled.",
         ],
     );
-    h(ui, "Reading the report");
+    h(doc, "Reading the report");
     bullets(
-        ui,
+        doc,
         &[
             "Findings are ranked RISK (fix this), CHECK (worth tightening) and INFO (just so you know). Each one explains the problem in plain terms and links to fix steps you open in your browser.",
             "Typical RISK findings: Telnet or FTP (clear-text logins), VNC remote desktop, or an unauthenticated database (Redis, MongoDB) reachable on the network.",
@@ -155,7 +154,7 @@ pub(super) fn lan_security(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "lan_security",
         &[
             "Discovery uses one ICMP echo per address plus the IPv4 neighbour table (GetIpNetTable2); reverse names use a PTR DNS query. Port probes are plain TCP connects from the standard library with short timeouts; banners are at most a couple of hundred printable characters.",
@@ -164,15 +163,15 @@ pub(super) fn lan_security(ui: &mut Ui) {
     );
 }
 
-pub(super) fn power(ui: &mut Ui) {
+pub(super) fn power(doc: &mut Doc) {
     p(
-        ui,
+        doc,
         "The Power page (Hardware > Power) shows and changes Windows power settings in one place. Changes apply to the \
          active power plan right away.",
     );
-    h(ui, "What it shows");
+    h(doc, "What it shows");
     bullets(
-        ui,
+        doc,
         &[
             "Power plan: every plan on the PC (Balanced, High performance, Ultimate Performance, vendor plans). Click one to switch.",
             "Sleep and display: when the screen turns off, the PC sleeps or hibernates and hard disks turn off, plugged in and (on laptops) on battery.",
@@ -183,9 +182,9 @@ pub(super) fn power(ui: &mut Ui) {
             "What's keeping the PC awake: apps and drivers with active power requests (like powercfg /requests).",
         ],
     );
-    h(ui, "Changing settings");
+    h(doc, "Changing settings");
     bullets(
-        ui,
+        doc,
         &[
             "Pick a new value from a drop-down or click a button; the page refreshes when the change is done and the status bar says whether it worked.",
             "Power plan values and plan switching don't need administrator rights. Fast Startup, adapter power saving, Energy-Efficient Ethernet and wake devices do: Windows shows its permission prompt.",
@@ -194,7 +193,7 @@ pub(super) fn power(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "power",
         &[
             "Settings are read with Windows' power APIs when Omni-HW starts, when you open the page or click Refresh, and plan settings every 30 seconds in the background.",
@@ -203,17 +202,17 @@ pub(super) fn power(ui: &mut Ui) {
     );
 }
 
-pub(super) fn sensors(ui: &mut Ui) {
-    h(ui, "What it shows");
+pub(super) fn sensors(doc: &mut Doc) {
+    h(doc, "What it shows");
     p(
-        ui,
+        doc,
         "Every live reading Omni-HW collects, grouped by device (CPU clocks, CPU usage, memory, power, each GPU and drive). \
          For each sensor you see the current value and the minimum, maximum and average since Omni-HW started (or since \
          you last reset them).",
     );
-    h(ui, "Using it");
+    h(doc, "Using it");
     bullets(
-        ui,
+        doc,
         &[
             "Reset min/max clears the statistics, e.g. right before starting a game or a stress test.",
             "Interval sets how often sensors are read: 250, 500, 1000 (default) or 2000 ms. Faster catches short spikes; slower uses less CPU.",
@@ -221,7 +220,7 @@ pub(super) fn sensors(ui: &mut Ui) {
         ],
     );
     details(
-        ui,
+        doc,
         "sensors",
         &[
             "CPU clock per core is the fastest of its threads. GPU 'Load (busiest engine)' is how Task Manager measures GPU usage; 'Core Load' (NVIDIA) is what GPU-Z shows.",

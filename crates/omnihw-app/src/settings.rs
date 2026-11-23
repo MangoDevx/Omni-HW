@@ -284,21 +284,6 @@ impl Settings {
     }
 }
 
-/// Apply theme and UI scale.
-pub fn apply_visuals(ctx: &egui::Context, s: &Settings) {
-    // Retro replaces the light style while selected; any other choice restores egui's own.
-    crate::retro::set_enabled(ctx, s.theme == Theme::Retro);
-    ctx.set_theme(match s.theme {
-        Theme::System => egui::ThemePreference::System,
-        Theme::Dark => egui::ThemePreference::Dark,
-        Theme::Light | Theme::Retro => egui::ThemePreference::Light,
-    });
-    ctx.set_zoom_factor(
-        s.ui_scale
-            .clamp(*UI_SCALE_RANGE.start(), *UI_SCALE_RANGE.end()),
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

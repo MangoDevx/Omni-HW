@@ -1,21 +1,27 @@
-//! Network changes and tests requested by the page: kept in egui memory during the frame, then
-//! (after the editor and confirmation dialogs) run on worker threads by [`dispatch`], outside
-//! the snapshot lock.
+//! Network changes requested by the page: the editor dialog for changes that need input first
+//! (rename, IP, DNS, MTU), the confirmation every change goes through, and the buttons that
+//! ask for them. Confirmed changes run on a worker thread ([`Sampler::net_action`]), outside
+//! the snapshot lock; the result arrives as a status bar message.
+//!
+//! [`Sampler::net_action`]: crate::sampler::Sampler::net_action
 
+use super::ViewState;
+use crate::app::OmniApp;
 use crate::elevate::elevated;
-use crate::sampler::Sampler;
-use crate::tabs::temp;
-use egui::{Id, RichText, Ui};
+use crate::heat::ORANGE;
+use crate::ui;
+use crate::ui::LineSized;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::Dialog;
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::radio::Radio;
+use gpui_kit::component::{Disableable, WindowExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    App, AppContext, Context, ElementId, Entity, InteractiveElement, ParentElement, Styled,
+    WeakEntity, Window, rems,
+};
 use omnihw_core::network::{MAX_DNS, MTU_RANGE, NetAction, parse_ipv4_list, parse_prefix};
-
-const PENDING: &str = "net_pending";
-const CONFIRM: &str = "net_confirm";
-const EDITOR: &str = "net_editor";
-pub(super) const REFRESH: &str = "net_refresh";
-pub(super) const LOCAL_TESTS: &str = "net_local_tests";
-pub(super) const INTERNET_TESTS: &str = "net_internet_tests";
-/// Local tests already ran automatically this session.
-const AUTO_RAN: &str = "net_auto_ran";
 
 /// A change that needs input first, edited in a dialog.
 #[derive(Clone, Debug, PartialEq)]
@@ -56,6 +62,36 @@ impl Editor {
             Editor::Dns { name, .. } => format!("DNS servers of {name}"),
             Editor::Mtu { name, .. } => format!("MTU of {name}"),
         }
+    }
+
+    /// The editor's text, in the order of the dialog's text fields.
+    fn texts(&self) -> [&str; 3] {
+        match self {
+            Editor::Rename { text, .. } | Editor::Dns { text, .. } | Editor::Mtu { text, .. } => {
+                [text, "", ""]
+            }
+            Editor::Ip {
+                ip, mask, gateway, ..
+            } => [ip, mask, gateway],
+        }
+    }
+
+    /// This editor with the text the user typed into the dialog's fields.
+    fn with_texts(mut self, typed: [String; 3]) -> Self {
+        let [a, b, c] = typed;
+        match &mut self {
+            Editor::Rename { text, .. } | Editor::Dns { text, .. } | Editor::Mtu { text, .. } => {
+                *text = a
+            }
+            Editor::Ip {
+                ip, mask, gateway, ..
+            } => {
+                *ip = a;
+                *mask = b;
+                *gateway = c;
+            }
+        }
+        self
     }
 
     /// The action this editor describes, or why it's not valid yet.
@@ -137,22 +173,23 @@ impl Editor {
     }
 }
 
-/// Ask for `action` (it is confirmed first).
-pub fn request(ctx: &egui::Context, action: NetAction) {
-    temp::set(ctx, Id::new(PENDING), Some(action));
-}
-
-/// Open an editor dialog.
-pub fn edit(ctx: &egui::Context, editor: Editor) {
-    temp::set(ctx, Id::new(EDITOR), Some(editor));
-}
-
-pub(super) fn flag(ctx: &egui::Context, key: &str) {
-    temp::set(ctx, Id::new(key), true);
-}
-
-fn take_flag(ctx: &egui::Context, key: &str) -> bool {
-    temp::take::<bool>(ctx, Id::new(key)).unwrap_or(false)
+/// Ask for `action`: a confirmation dialog first, then the change runs on a worker thread.
+pub(super) fn request(action: NetAction, window: &mut Window, cx: &mut Context<OmniApp>) {
+    let mut text = action.confirm_text().to_string();
+    if action.needs_restart() {
+        text.push_str("\n\nRestart required: Windows must restart for this to take effect.");
+    }
+    if action.needs_admin() && !elevated() {
+        text.push_str("\n\nWindows will ask for administrator permission.");
+    }
+    ui::confirm(
+        action.label(),
+        text,
+        "Apply",
+        window,
+        cx,
+        move |this, _, _| this.sampler.net_action(action.clone()),
+    );
 }
 
 pub(super) fn admin_hint(a: &NetAction) -> &'static str {
@@ -163,214 +200,232 @@ pub(super) fn admin_hint(a: &NetAction) -> &'static str {
     }
 }
 
-/// A button that requests `action`.
-pub(super) fn action_button(ui: &mut Ui, text: &str, action: NetAction, hover: &str) {
-    let hint = admin_hint(&action);
-    if ui
-        .button(text)
-        .on_hover_text(format!("{hover}\n{hint}"))
-        .clicked()
-    {
-        request(ui.ctx(), action);
-    }
-}
-
-/// Like [`action_button`] for an action that needs administrator rights, but builds the action
-/// only when the button is clicked, so drawing a frame allocates nothing.
-pub(super) fn lazy_action_button(
-    ui: &mut Ui,
-    text: &str,
+/// A button that requests `action` (disabled while another change runs).
+pub(super) fn action_button(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    action: NetAction,
     hover: &str,
-    make: impl FnOnce() -> NetAction,
-) {
-    let hint = if elevated() {
-        "Applies the change after you confirm"
-    } else {
-        "Asks for administrator permission"
-    };
-    if ui
-        .button(text)
-        .on_hover_text(format!(
-            "{hover}
-{hint}"
-        ))
-        .clicked()
-    {
-        request(ui.ctx(), make());
-    }
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> Button {
+    let hint = admin_hint(&action);
+    Button::new(id)
+        .line_sized()
+        .caption(text)
+        .tooltip(format!("{hover}\n{hint}"))
+        .disabled(busy)
+        .on_click(cx.listener(move |_, _, window, cx| request(action.clone(), window, cx)))
 }
 
-/// The editor dialog. Returns the action once the user clicks Continue on valid input.
-fn editor_dialog(ctx: &egui::Context, mut ed: Editor) -> Option<NetAction> {
-    let mut close = false;
-    let mut result = None;
+/// Open the editor dialog for `editor`, its text fields filled from it.
+pub(super) fn edit(
+    app: &mut OmniApp,
+    editor: Editor,
+    window: &mut Window,
+    cx: &mut Context<OmniApp>,
+) {
+    let fields = app
+        .views
+        .network
+        .fields
+        .get_or_insert_with(|| std::array::from_fn(|_| cx.new(|cx| InputState::new(window, cx))))
+        .clone();
+    for (field, text) in fields.iter().zip(editor.texts()) {
+        let text = text.to_string();
+        field.update(cx, |f, cx| f.set_value(text, window, cx));
+    }
+    app.views.network.editor = Some(editor);
+    let weak = cx.weak_entity();
+    window.open_dialog(cx, move |dialog, _, cx| editor_dialog(dialog, &weak, cx));
+}
+
+/// The open editor with what has been typed so far.
+fn current(view: &ViewState, cx: &App) -> Option<(Editor, [Entity<InputState>; 3])> {
+    let fields = view.fields.clone()?;
+    let typed = fields.each_ref().map(|f| f.read(cx).value().to_string());
+    let mut ed = view.editor.clone()?.with_texts(typed);
+    // Windows only applies a fixed address to a connected adapter.
+    if let Editor::Ip {
+        dhcp,
+        connected: false,
+        ..
+    } = &mut ed
+    {
+        *dhcp = true;
+    }
+    Some((ed, fields))
+}
+
+/// Change the open editor (a radio button was picked).
+fn update_editor(app: &WeakEntity<OmniApp>, cx: &mut App, change: impl FnOnce(&mut Editor)) {
+    let _ = app.update(cx, |this, cx| {
+        if let Some(ed) = &mut this.views.network.editor {
+            change(ed);
+        }
+        cx.notify();
+    });
+}
+
+/// The editor dialog: built again on every redraw from the page's [`ViewState`], so it shows
+/// whether the input is valid as the user types.
+fn editor_dialog(dialog: Dialog, app: &WeakEntity<OmniApp>, cx: &mut App) -> Dialog {
+    let Some(entity) = app.upgrade() else {
+        return dialog;
+    };
+    let Some((ed, fields)) = current(&entity.read(cx).views.network, cx) else {
+        return dialog;
+    };
     let check = ed.action();
-    egui::Modal::new(Id::new("net_editor_modal")).show(ctx, |ui| {
-        ui.set_max_width(440.0);
-        ui.label(RichText::new(ed.title()).size(16.0).strong());
-        ui.add_space(6.0);
-        match &mut ed {
-            Editor::Rename { text, .. } => {
-                ui.label("New name");
-                ui.text_edit_singleline(text);
-            }
-            Editor::Ip {
-                dhcp,
-                connected,
-                ip,
-                mask,
-                gateway,
-                ..
-            } => {
-                if !*connected {
-                    *dhcp = true;
-                }
-                ui.radio_value(dhcp, true, "Get an IP address automatically (DHCP)");
-                ui.add_enabled_ui(*connected, |ui| {
-                    ui.radio_value(dhcp, false, "Use this IP address:");
-                })
-                .response
-                .on_disabled_hover_text(
-                    "Connect the adapter first: Windows only applies a fixed address to a connected adapter.",
+    let mut body = ui::column().gap_2();
+    match &ed {
+        Editor::Rename { .. } => {
+            body = body
+                .child(ui::label("New name"))
+                .child(Input::new(&fields[0]));
+        }
+        Editor::Ip {
+            dhcp, connected, ..
+        } => {
+            let dhcp = *dhcp;
+            let (auto, manual) = (app.clone(), app.clone());
+            body = body
+                .child(
+                    Radio::new("net-ip-dhcp")
+                        .label("Get an IP address automatically (DHCP)")
+                        .checked(dhcp)
+                        .on_click(move |_, _, cx| {
+                            update_editor(&auto, cx, |ed| {
+                                if let Editor::Ip { dhcp, .. } = ed {
+                                    *dhcp = true;
+                                }
+                            })
+                        }),
+                )
+                .child(
+                    Radio::new("net-ip-static")
+                        .label("Use this IP address:")
+                        .checked(!dhcp)
+                        .disabled(!*connected)
+                        .when(!*connected, |r| {
+                            r.tooltip(
+                                "Connect the adapter first: Windows only applies a fixed address to a connected adapter.",
+                            )
+                        })
+                        .on_click(move |_, _, cx| {
+                            update_editor(&manual, cx, |ed| {
+                                if let Editor::Ip { dhcp, .. } = ed {
+                                    *dhcp = false;
+                                }
+                            })
+                        }),
                 );
-                ui.add_enabled_ui(!*dhcp, |ui| {
-                    egui::Grid::new("net_ip_grid")
-                        .num_columns(2)
-                        .spacing([12.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("IP address");
-                            ui.text_edit_singleline(ip);
-                            ui.end_row();
-                            ui.label("Subnet mask");
-                            ui.text_edit_singleline(mask);
-                            ui.end_row();
-                            ui.label("Default gateway");
-                            ui.text_edit_singleline(gateway);
-                            ui.end_row();
-                        });
-                });
-                ui.add_space(4.0);
-                ui.weak(if *dhcp {
+            for (k, (name, field)) in ["IP address", "Subnet mask", "Default gateway"]
+                .into_iter()
+                .zip(fields.iter())
+                .enumerate()
+            {
+                body = body.child(
+                    ui::row()
+                        .id(("net-ip-field", k))
+                        .child(ui::label(name).flex_none().w(rems(9.0)))
+                        .child(Input::new(field).disabled(dhcp).flex_1()),
+                );
+            }
+            body = body.child(ui::weak(
+                if dhcp {
                     "DNS servers are also set back to automatic."
                 } else {
                     "IPv4 only. Set DNS servers separately (DNS button)."
-                });
-            }
-            Editor::Dns { auto, text, .. } => {
-                ui.radio_value(auto, true, "Get DNS servers automatically");
-                ui.radio_value(auto, false, "Use these DNS servers (IPv4):");
-                ui.add_enabled_ui(!*auto, |ui| {
-                    ui.text_edit_singleline(text);
-                    ui.weak(format!(
-                        "Up to {MAX_DNS}, separated by commas, e.g. 1.1.1.1, 8.8.8.8"
-                    ));
-                });
-            }
-            Editor::Mtu { text, .. } => {
-                ui.label(format!(
+                },
+                cx,
+            ));
+        }
+        Editor::Dns { auto, .. } => {
+            let (to_auto, to_manual) = (app.clone(), app.clone());
+            body = body
+                .child(
+                    Radio::new("net-dns-auto")
+                        .label("Get DNS servers automatically")
+                        .checked(*auto)
+                        .on_click(move |_, _, cx| {
+                            update_editor(&to_auto, cx, |ed| {
+                                if let Editor::Dns { auto, .. } = ed {
+                                    *auto = true;
+                                }
+                            })
+                        }),
+                )
+                .child(
+                    Radio::new("net-dns-manual")
+                        .label("Use these DNS servers (IPv4):")
+                        .checked(!*auto)
+                        .on_click(move |_, _, cx| {
+                            update_editor(&to_manual, cx, |ed| {
+                                if let Editor::Dns { auto, .. } = ed {
+                                    *auto = false;
+                                }
+                            })
+                        }),
+                )
+                .child(Input::new(&fields[0]).disabled(*auto))
+                .child(ui::weak(
+                    format!("Up to {MAX_DNS}, separated by commas, e.g. 1.1.1.1, 8.8.8.8"),
+                    cx,
+                ));
+        }
+        Editor::Mtu { .. } => {
+            body = body
+                .child(ui::label(format!(
                     "MTU in bytes ({}-{}; 1500 is standard)",
                     MTU_RANGE.start(),
                     MTU_RANGE.end()
-                ));
-                ui.text_edit_singleline(text);
-            }
+                )))
+                .child(Input::new(&fields[0]));
         }
-        ui.add_space(6.0);
-        if let Err(e) = &check {
-            ui.colored_label(crate::heat::ORANGE, e);
-        }
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    check.is_ok(),
-                    egui::Button::new(RichText::new("Continue").strong()),
-                )
-                .clicked()
-            {
-                result = check.clone().ok();
-                close = true;
-            }
-            if ui.button("Cancel").clicked() {
-                close = true;
-            }
-        });
-    });
-    if close {
-        temp::take::<Option<Editor>>(ctx, Id::new(EDITOR));
-    } else {
-        temp::set(ctx, Id::new(EDITOR), Some(ed));
     }
-    result
+    if let Err(e) = &check {
+        body = body.child(ui::colored(e.clone(), ORANGE, cx));
+    }
+    let (ok, cancel) = (app.clone(), app.clone());
+    body = body.child(
+        ui::row()
+            .pt_1()
+            .child(
+                Button::new("net-editor-continue")
+                    .line_sized()
+                    .primary()
+                    .caption("Continue")
+                    .disabled(check.is_err())
+                    .on_click(move |_, window, cx| {
+                        let _ = ok.update(cx, |this, cx| finish(this, window, cx));
+                    }),
+            )
+            .child(
+                Button::new("net-editor-cancel")
+                    .line_sized()
+                    .caption("Cancel")
+                    .on_click(move |_, window, cx| {
+                        let _ = cancel.update(cx, |this, cx| {
+                            this.views.network.editor = None;
+                            cx.notify();
+                        });
+                        window.close_dialog(cx);
+                    }),
+            ),
+    );
+    dialog.title(ui::strong(ed.title())).child(body)
 }
 
-/// Run requested changes and tests, and show the editor and confirmation dialogs. Call once per
-/// frame, outside the snapshot lock. Returns a status message when a change finished.
-pub fn dispatch(ctx: &egui::Context, sampler: &Sampler, page_open: bool) -> Option<String> {
-    if take_flag(ctx, REFRESH) {
-        sampler.refresh_network();
-    }
-    if take_flag(ctx, LOCAL_TESTS) {
-        sampler.run_local_tests();
-    }
-    if take_flag(ctx, INTERNET_TESTS) {
-        sampler.run_internet_tests();
-    }
-    // The local tests only contact the local network, so they run once by themselves the
-    // first time the page shows adapters.
-    if page_open && !temp::get::<bool>(ctx, Id::new(AUTO_RAN)).unwrap_or(false) {
-        let ready = sampler.snapshot().network.is_some();
-        if ready {
-            temp::set(ctx, Id::new(AUTO_RAN), true);
-            sampler.run_local_tests();
-        }
-    }
-    if let Some(ed) = temp::get::<Option<Editor>>(ctx, Id::new(EDITOR)).flatten()
-        && let Some(a) = editor_dialog(ctx, ed)
-    {
-        request(ctx, a);
-    }
-    if let Some(a) = temp::take::<Option<NetAction>>(ctx, Id::new(PENDING)).flatten() {
-        temp::set(ctx, Id::new(CONFIRM), Some(a));
-    }
-    if let Some(a) = temp::get::<Option<NetAction>>(ctx, Id::new(CONFIRM)).flatten() {
-        let mut close = None;
-        egui::Modal::new(Id::new("net_confirm_modal")).show(ctx, |ui| {
-            ui.set_max_width(440.0);
-            ui.label(RichText::new(a.label()).size(16.0).strong());
-            ui.add_space(6.0);
-            ui.add(egui::Label::new(a.confirm_text()).wrap());
-            if a.needs_restart() {
-                ui.add_space(4.0);
-                ui.label(
-                    RichText::new(
-                        "Restart required: Windows must restart for this to take effect.",
-                    )
-                    .color(crate::heat::ORANGE),
-                );
-            }
-            if a.needs_admin() && !elevated() {
-                ui.add_space(4.0);
-                ui.weak("Windows will ask for administrator permission.");
-            }
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button(RichText::new("Apply").strong()).clicked() {
-                    close = Some(true);
-                }
-                if ui.button("Cancel").clicked() {
-                    close = Some(false);
-                }
-            });
-        });
-        if let Some(apply) = close {
-            temp::take::<Option<NetAction>>(ctx, Id::new(CONFIRM));
-            if apply {
-                sampler.net_action(a);
-            }
-        }
-    }
-    sampler.snapshot().net_msg.take()
+/// Continue was clicked: close the editor and confirm the change it describes.
+fn finish(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) {
+    let Some((ed, _)) = current(&app.views.network, cx) else {
+        return;
+    };
+    let Ok(action) = ed.action() else { return };
+    app.views.network.editor = None;
+    window.close_dialog(cx);
+    request(action, window, cx);
 }
 
 #[cfg(test)]
@@ -445,5 +500,28 @@ mod tests {
         assert!(rename("Desk LAN").action().is_ok());
         assert!(rename("a:b").action().is_err());
         assert!(rename("   ").action().is_err());
+    }
+
+    #[test]
+    fn typed_text_goes_to_the_right_fields() {
+        let ip = Editor::Ip {
+            if_index: 7,
+            name: "Ethernet".into(),
+            dhcp: false,
+            connected: true,
+            ip: String::new(),
+            mask: String::new(),
+            gateway: String::new(),
+        };
+        let typed = ["10.0.0.5".to_string(), "24".into(), "10.0.0.1".into()];
+        let ip = ip.with_texts(typed);
+        assert_eq!(ip.texts(), ["10.0.0.5", "24", "10.0.0.1"]);
+        assert!(ip.action().is_ok());
+        let mtu = Editor::Mtu {
+            if_index: 7,
+            name: "Ethernet".into(),
+            text: "1500".into(),
+        };
+        assert_eq!(mtu.texts(), ["1500", "", ""]);
     }
 }

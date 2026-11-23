@@ -1,19 +1,18 @@
 //! Help pages: getting started, the Overview, settings, privacy and troubleshooting.
 
-use super::{bullets, details, h, p, pct};
+use super::{Doc, bullets, details, h, p, pct};
 use crate::heat;
-use egui::Ui;
 
-pub(super) fn getting_started(ui: &mut Ui) {
-    h(ui, "What is Omni-HW?");
+pub(super) fn getting_started(doc: &mut Doc) {
+    h(doc, "What is Omni-HW?");
     p(
-        ui,
+        doc,
         "Omni-HW combines what CPU-Z, GPU-Z and HWiNFO do in one app: it identifies your hardware, shows live sensors, \
          and goes further by explaining what it finds (Health Check), alerting you, recording sessions and analyzing them.",
     );
-    h(ui, "Finding your way around");
+    h(doc, "Finding your way around");
     bullets(
-        ui,
+        doc,
         &[
             "Overview: a one-page dashboard of CPU, GPU, memory, storage and system, with live numbers and graphs.",
             "Health Check: automatic checks that flag common problems and explain how to fix them.",
@@ -23,9 +22,9 @@ pub(super) fn getting_started(ui: &mut Ui) {
             "Record (start/stop a recording from any page) and Report (save an HTML report or copy a text one) are always at the top right, next to the alerts badge while alerts fire.",
         ],
     );
-    h(ui, "Navigation styles");
+    h(doc, "Navigation styles");
     bullets(
-        ui,
+        doc,
         &[
             "Sidebar (the default): every page listed down the left side under its category. Feature guide (this guide), About and Settings are at the bottom of the sidebar; the bar above the page shows where you are.",
             "Tabs: category tabs along the top, with the open category's pages as a row of chips under them. Info (this guide and About) and Settings are on the right.",
@@ -33,9 +32,9 @@ pub(super) fn getting_started(ui: &mut Ui) {
             "Switch between them in Settings > Navigation bar.",
         ],
     );
-    h(ui, "Keyboard");
+    h(doc, "Keyboard");
     bullets(
-        ui,
+        doc,
         &[
             "Sidebar and Tabs: Left and Right move between the top-level entries (Overview, Health Check, Hardware, Network, \
              Monitoring, About, Settings), returning to the page you last used in a category. Up and Down move \
@@ -45,29 +44,29 @@ pub(super) fn getting_started(ui: &mut Ui) {
              with Tab, or a menu is open.",
         ],
     );
-    h(ui, "Static and live data");
+    h(doc, "Static and live data");
     p(
-        ui,
+        doc,
         "Hardware details (model names, sizes, versions) are read once when Omni-HW starts. Live sensors (clocks, usage, \
          temperatures, power) are read in the background once per second by default; the screen only redraws when new \
          data arrives, so Omni-HW stays light while it runs. Change the sampling interval on the Sensors tab.",
     );
-    h(ui, "No driver needed");
+    h(doc, "No driver needed");
     p(
-        ui,
+        doc,
         "Omni-HW uses only standard Windows interfaces and the graphics driver's own monitoring library (NVIDIA). \
          It installs nothing and runs as a single program.",
     );
-    h(ui, "Administrator prompt (UAC)");
+    h(doc, "Administrator prompt (UAC)");
     p(
-        ui,
+        doc,
         "Reading the health (SMART) data of SATA drives needs administrator rights. If Omni-HW finds a SATA-type drive \
          and isn't already running as administrator, it asks once via the Windows UAC prompt when it starts. If you \
          click No, it simply carries on without SATA health; everything else works. PCs with only NVMe drives are \
          never asked.",
     );
     details(
-        ui,
+        doc,
         "start",
         &[
             "Start Omni-HW with --no-elevate to skip the prompt.",
@@ -76,15 +75,15 @@ pub(super) fn getting_started(ui: &mut Ui) {
     );
 }
 
-pub(super) fn overview(ui: &mut Ui) {
-    h(ui, "What it shows");
+pub(super) fn overview(doc: &mut Doc) {
+    h(doc, "What it shows");
     p(
-        ui,
+        doc,
         "The first tab puts the most useful information from every other tab on one page: your CPU and graphics card \
          names, the Health Check summary, and a card each for the processor, graphics card(s), memory, storage and system.",
     );
     bullets(
-        ui,
+        doc,
         &[
             "Processor: average and fastest core clock, total usage, package power (where Windows reports it), a usage graph, and one tile per physical core.",
             "Graphics card: load, temperature, power and core clock, graphs of load and temperature, a VRAM bar, Resizable BAR status, fan speed, memory clock and power state.",
@@ -93,9 +92,9 @@ pub(super) fn overview(ui: &mut Ui) {
             "System: Windows version, computer name, uptime, motherboard, BIOS, CPU socket and combined CPU + GPU power.",
         ],
     );
-    h(ui, "Using it");
+    h(doc, "Using it");
     bullets(
-        ui,
+        doc,
         &[
             "Click a card's header to collapse or expand it.",
             "Click the Health Check line under the title to open the Health Check tab.",
@@ -103,13 +102,13 @@ pub(super) fn overview(ui: &mut Ui) {
             "Graphs show roughly the last two minutes (120 samples).",
         ],
     );
-    h(ui, "Heatmap colors");
+    h(doc, "Heatmap colors");
     p(
-        ui,
+        doc,
         "Numbers, bars and tiles change color as a reading gets worse: the normal color, then orange (warning), then red (critical).",
     );
     bullets(
-        ui,
+        doc,
         &[
             format!(
                 "Core tiles: blue shade follows the core's busiest thread; orange with a warning triangle from {:.0} %, red with an exclamation mark from {:.0} %.",
@@ -139,29 +138,29 @@ pub(super) fn overview(ui: &mut Ui) {
         ],
     );
     p(
-        ui,
+        doc,
         "High CPU usage or warm temperatures under load are normal; the colors simply draw your eye to what's busy or hot. \
          The Health Check looks at sustained readings before calling something a problem.",
     );
 }
 
-pub(super) fn settings(ui: &mut Ui) {
+pub(super) fn settings(doc: &mut Doc) {
     p(
-        ui,
+        doc,
         "Settings change immediately and are saved automatically, so they survive restarts.",
     );
-    h(ui, "Appearance");
+    h(doc, "Appearance");
     bullets(
-        ui,
+        doc,
         &[
             "Theme: Match Windows (follows your light/dark mode), Dark, Light or Retro (2000s), a classic beveled desktop look with square buttons and sunken fields.",
             "UI scale: makes everything larger or smaller (75 % to 200 %). Reset returns to 100 %.",
             "Navigation bar: Sidebar (the default) lists every page down the left side, sorted into categories; Tabs shows category tabs with the open category's pages on a second row; Classic shows every page as its own tab (it may wrap onto two lines in small windows).",
         ],
     );
-    h(ui, "Startup");
+    h(doc, "Startup");
     bullets(
-        ui,
+        doc,
         &[
             "Start page: the page Omni-HW opens on.",
             "Launch Omni-HW when I sign in to Windows: adds Omni-HW to your startup programs. Turn it off to remove it again.",
@@ -170,22 +169,22 @@ pub(super) fn settings(ui: &mut Ui) {
             "Ask for administrator rights at start: only matters if you have SATA drives, whose health (SMART) can only be read as administrator. Turn it off to never see the prompt (SATA health will then be unavailable). Launches at sign-in never ask.",
         ],
     );
-    h(ui, "Monitoring");
+    h(doc, "Monitoring");
     bullets(
-        ui,
+        doc,
         &[
             "Sampling interval: how often sensors are read (250 ms to 2 s). Shorter gives more detail in graphs and recordings but uses a little more CPU.",
             "Show Windows notifications for alerts: turn off to keep alerts inside the app only (the ALERT button and history still show them).",
         ],
     );
-    h(ui, "Files");
+    h(doc, "Files");
     p(
-        ui,
+        doc,
         "Choose where recordings and reports are saved by pasting a folder path and pressing Apply. \
          Reset to Documents goes back to the default. Open folder shows the current folder in Explorer.",
     );
     details(
-        ui,
+        doc,
         "settings",
         &[
             r"Settings are stored in %APPDATA%\OmniHW\settings.ini (plain text).",
@@ -196,10 +195,10 @@ pub(super) fn settings(ui: &mut Ui) {
     );
 }
 
-pub(super) fn privacy(ui: &mut Ui) {
-    h(ui, "Everything stays on your PC");
+pub(super) fn privacy(doc: &mut Doc) {
+    h(doc, "Everything stays on your PC");
     bullets(
-        ui,
+        doc,
         &[
             "Omni-HW makes no network connections on its own and works fully offline: no telemetry, no uploads.",
             "The update check only runs when you click Check for updates in Settings or turn on Check for updates when Omni-HW starts (off by default). It asks GitHub for the latest release's version number and sends nothing about your PC.",
@@ -210,59 +209,59 @@ pub(super) fn privacy(ui: &mut Ui) {
             "It installs no driver or service. The only files it writes are reports and recordings (Documents, or the folder chosen in Settings) and its own settings and alert rules in AppData.",
         ],
     );
-    h(ui, "Administrator rights");
+    h(doc, "Administrator rights");
     p(
-        ui,
+        doc,
         "Administrator rights are used to read SATA drive health (SMART) and link speed and, on some systems, the NVMe health log. Omni-HW asks for them at start only when a SATA-type drive is present, and works without them if you decline. The Restart into UEFI / BIOS button and power changes that need them (Fast Startup, adapter power saving, wake devices) ask separately, only when you click them.",
     );
     p(
-        ui,
+        doc,
         "Some power changes (Fast Startup, adapter power saving, wake devices), network changes on the Network page and reading power requests also need them. \
          Windows asks each time, and a short-lived copy of Omni-HW makes just that one change and exits.",
     );
-    h(ui, "Security-related advice");
+    h(doc, "Security-related advice");
     p(
-        ui,
+        doc,
         "Some Health Check suggestions involve security features (marked with an orange Security setting badge). Omni-HW \
          explains the trade-off but never recommends turning protection off blindly.",
     );
 }
 
-pub(super) fn troubleshooting(ui: &mut Ui) {
-    h(ui, "A sensor or value is missing");
+pub(super) fn troubleshooting(doc: &mut Doc) {
+    h(doc, "A sensor or value is missing");
     bullets(
-        ui,
+        doc,
         &[
             "GPU temperature, clocks, power, fan, PCIe link and Resizable BAR are read through NVIDIA's NVML, so they currently appear for NVIDIA cards only. AMD and Intel cards show load and VRAM use.",
             "CPU package power appears only when the CPU reports it to Windows (common on Intel; many AMD systems don't).",
             "The About tab lists any part Omni-HW couldn't read.",
         ],
     );
-    h(ui, "Resizable BAR shows Unknown");
+    h(doc, "Resizable BAR shows Unknown");
     p(
-        ui,
+        doc,
         "Detection currently works on NVIDIA cards only. On AMD and Intel, check the BIOS (Above 4G Decoding and Re-Size BAR Support) or the vendor's control panel.",
     );
-    h(ui, "Drive health is unavailable");
+    h(doc, "Drive health is unavailable");
     bullets(
-        ui,
+        doc,
         &[
             "SATA health needs administrator rights: accept the UAC prompt at start, or right-click Omni-HW > Run as administrator.",
             "Drives behind USB adapters, RAID arrays or Storage Spaces often don't pass health data through.",
         ],
     );
-    h(ui, "Notifications don't appear");
+    h(doc, "Notifications don't appear");
     bullets(
-        ui,
+        doc,
         &[
             "Turn off Do Not Disturb / Focus, and check Settings > System > Notifications.",
             "Use Alerts > Test notification to check.",
             "Notifications only fire while Omni-HW is running (it can be minimized).",
         ],
     );
-    h(ui, "Numbers differ from other tools");
+    h(doc, "Numbers differ from other tools");
     p(
-        ui,
+        doc,
         "Tools sample at different moments and some report different sensors (e.g. GPU 'Core Load' vs Task Manager's busiest \
          engine, or effective vs reported clocks). Small differences are normal.",
     );

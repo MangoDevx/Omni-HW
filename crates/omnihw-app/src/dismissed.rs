@@ -106,6 +106,14 @@ pub fn split(mut results: Vec<CheckResult>) -> (Vec<CheckResult>, Vec<(&'static 
     (results, hidden)
 }
 
+/// The dismissed set is one store for the whole process, and tests run in parallel: a test
+/// that changes it holds this lock, so two of them never see each other's keys.
+#[cfg(test)]
+pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +152,7 @@ mod tests {
 
     #[test]
     fn split_moves_dismissed_findings_out() {
+        let _alone = test_lock();
         let results = vec![CheckResult {
             name: "Uptime",
             category: Category::System,

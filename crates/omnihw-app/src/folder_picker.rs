@@ -1,5 +1,6 @@
 //! Windows "Select folder" dialog, run on its own thread so the UI keeps painting while it's open.
 
+use crate::repaint::Repaint;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -21,7 +22,7 @@ impl FolderPicker {
     }
 
     /// Open the dialog starting in `start`, unless one is already open.
-    pub fn open(&self, ctx: &egui::Context, start: PathBuf) {
+    pub fn open(&self, ctx: &Repaint, start: PathBuf) {
         {
             let Ok(mut s) = self.state.lock() else { return };
             if s.open {

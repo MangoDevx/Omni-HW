@@ -1,137 +1,161 @@
 //! The category tiles above the panes and the list pane: findings grouped by what to do about
 //! them, then each category's passed checks and the dismissed findings.
 
-use super::{GREEN, Item, Report, Sel, View, category_status, level_color, plural, select};
-use egui::{Color32, RichText, Sense, TextWrapMode, Ui, WidgetText, vec2};
+use super::{
+    GRAY, GREEN, Item, Report, Sel, View, category_status, findings_of, level_color, select,
+};
+use crate::app::OmniApp;
+use crate::ui::{self, plural};
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::{ActiveTheme, StyledExt};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, App, Context, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Rgba, StatefulInteractiveElement, Styled, div, px, rems,
+};
 use omnihw_core::diagnostics::{Category, Level};
 
-/// One tile per category with its status, plus "All". Returns the new filter when one is
-/// clicked (clicking the active tile clears it).
-pub(super) fn tiles(
-    ui: &mut Ui,
-    report: &Report,
-    filter: Option<Category>,
-) -> Option<Option<Category>> {
-    let mut clicked = None;
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
-        let total = report
-            .results
-            .iter()
-            .flat_map(super::findings_of)
-            .map(|f| f.level)
-            .collect::<Vec<Level>>();
-        let all_status = match total.iter().max() {
-            Some(&worst) => (plural(total.len(), "finding"), level_color(worst)),
-            None => ("OK".to_string(), GREEN),
+/// One tile per category with its status, plus "All". Clicking one filters the list to its
+/// category (clicking the active tile clears the filter).
+pub(super) fn tiles(report: &Report, filter: Option<Category>, cx: &mut Context<OmniApp>) -> Div {
+    let total = report
+        .results
+        .iter()
+        .flat_map(findings_of)
+        .map(|f| f.level)
+        .collect::<Vec<Level>>();
+    let all_status = match total.iter().max() {
+        Some(&worst) => (plural(total.len(), "finding"), level_color(worst)),
+        None => ("OK".to_string(), GREEN),
+    };
+    let mut row = ui::wrap_row().gap_1p5().child(tile(
+        0,
+        "All",
+        &all_status,
+        filter.is_none(),
+        "Show every category".to_string(),
+        None,
+        cx,
+    ));
+    for (i, cat) in Category::ALL.into_iter().enumerate() {
+        let Some(status) = category_status(&report.results, cat) else {
+            continue;
         };
-        if tile(ui, "All", &all_status, filter.is_none())
-            .on_hover_text("Show every category")
-            .clicked()
-        {
-            clicked = Some(None);
-        }
-        for cat in Category::ALL {
-            let Some(status) = category_status(&report.results, cat) else {
-                continue;
-            };
-            let active = filter == Some(cat);
-            let hover = if active {
-                "Click again to show every category".to_string()
-            } else {
-                format!("Show only {}", cat.name())
-            };
-            if tile(ui, cat.name(), &status, active)
-                .on_hover_text(hover)
-                .clicked()
-            {
-                clicked = Some((!active).then_some(cat));
-            }
-        }
-    });
-    clicked
+        let active = filter == Some(cat);
+        let hover = if active {
+            "Click again to show every category".to_string()
+        } else {
+            format!("Show only {}", cat.name())
+        };
+        row = row.child(tile(
+            i + 1,
+            cat.name(),
+            &status,
+            active,
+            hover,
+            (!active).then_some(cat),
+            cx,
+        ));
+    }
+    row
 }
 
-/// A small rounded tile: the name above a coloured status. Outlined when active.
+/// A small rounded tile: the name above a coloured status. Outlined when active. A click
+/// sets the filter to `pick`.
 fn tile(
-    ui: &mut Ui,
-    name: &str,
-    (status, color): &(String, Color32),
+    index: usize,
+    name: &'static str,
+    (status, color): &(String, Rgba),
     active: bool,
-) -> egui::Response {
-    ui.push_id(("health_tile", name), |ui| {
-        let v = ui.visuals();
-        let stroke_color = v.selection.stroke.color;
-        let hover_color = v.widgets.hovered.bg_stroke.color;
-        let ink = crate::heat::ink(v, *color);
-        let mut frame = egui::Frame::new()
-            .fill(v.faint_bg_color)
-            .corner_radius(6)
-            .inner_margin(egui::Margin::symmetric(10, 4));
-        if active {
-            frame = frame
-                .fill(v.selection.bg_fill.gamma_multiply(0.35))
-                .stroke(egui::Stroke::new(1.0, stroke_color));
-        }
-        let resp = frame
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.add(egui::Label::new(RichText::new(name).strong()).selectable(false));
-                    ui.add(
-                        egui::Label::new(RichText::new(status).small().color(ink))
-                            .selectable(false),
-                    );
-                });
-            })
-            .response
-            .interact(Sense::click());
-        if resp.hovered() && !active {
-            ui.painter().rect_stroke(
-                resp.rect,
-                6,
-                egui::Stroke::new(1.0, hover_color),
-                egui::StrokeKind::Inside,
-            );
-        }
-        resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-    })
-    .inner
+    hover: String,
+    pick: Option<Category>,
+    cx: &mut Context<OmniApp>,
+) -> ui::Clickable {
+    let t = cx.theme();
+    let (fill, accent, hover_border, radius) = (t.muted, t.primary, t.border, t.radius);
+    let ink = ui::ink(cx, *color);
+    ui::clickable(("health-tile", index))
+        .v_flex()
+        .px(px(10.0))
+        .py(px(4.0))
+        .rounded(radius)
+        .border_1()
+        .cursor_pointer()
+        .map(|tile| {
+            if active {
+                tile.bg(accent.opacity(0.25)).border_color(accent)
+            } else {
+                tile.bg(fill)
+                    .border_color(gpui_kit::transparent_black())
+                    .hover(move |s| s.border_color(hover_border))
+            }
+        })
+        .child(ui::strong(name))
+        .child(
+            ui::label(status.clone())
+                .text_size(crate::ui::small_size())
+                .text_color(ink),
+        )
+        .tooltip(ui::tip(hover))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.views.health.filter = pick;
+            cx.notify();
+        }))
 }
 
-/// The list pane. Clicking an entry selects it; with `scroll` the selected entry is scrolled
-/// into view (after an arrow key moved it).
-pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>, scroll: bool) {
-    ui.spacing_mut().item_spacing.y = 1.0;
+/// The id of a list entry's row, so it can be clicked by id.
+pub(super) fn row_id(sel: &Sel) -> ElementId {
+    match sel {
+        Sel::Finding(k) => ElementId::Name(format!("health-item/{k}").into()),
+        Sel::Passed(c) => ElementId::Name(format!("health-passed/{}", c.name()).into()),
+        Sel::Dismissed | Sel::DismissedFinding(_) => "health-dismissed".into(),
+    }
+}
+
+/// The list pane's rows, and which of them is the selected entry (to scroll it into view
+/// after an arrow key moved it). Clicking an entry selects it.
+pub(super) fn list(
+    view: &View,
+    sel: Option<&Sel>,
+    cx: &mut Context<OmniApp>,
+) -> (Vec<AnyElement>, Option<usize>) {
+    let mut out = Vec::new();
+    let mut at = None;
     if view.fix.is_empty() && view.suggestions.is_empty() {
         let text = match view.filter {
             Some(c) => format!("Nothing to fix in {}", c.name()),
             None => "Everything looks good".to_string(),
         };
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.add_space(6.0);
-            ui.label(
-                RichText::new(text)
-                    .size(15.0)
-                    .strong()
-                    .color(crate::heat::ink(ui.visuals(), GREEN)),
-            );
-        });
-        ui.add_space(4.0);
+        out.push(
+            ui::strong(text)
+                .text_size(rems(15.0 / 16.0))
+                .text_color(ui::ink(cx, GREEN))
+                .px(px(6.0))
+                .py_1()
+                .into_any_element(),
+        );
     }
-    findings_group(ui, "Fix these", &view.fix, sel, scroll, None);
-    findings_group(ui, "Suggestions", &view.suggestions, sel, scroll, None);
+    findings_group(&mut out, &mut at, "Fix these", &view.fix, sel, None, cx);
     findings_group(
-        ui,
+        &mut out,
+        &mut at,
+        "Suggestions",
+        &view.suggestions,
+        sel,
+        None,
+        cx,
+    );
+    findings_group(
+        &mut out,
+        &mut at,
         "For gaming",
         &view.gaming,
         sel,
-        scroll,
         Some("Settings that mainly affect games: frame rates, latency and GPU features."),
+        cx,
     );
     if !view.passed.is_empty() {
-        heading(ui, "Passed checks", None);
+        out.push(heading("Passed checks".to_string(), None, cx));
         for p in &view.passed {
             let s = Sel::Passed(p.cat);
             let meta = match (p.passed, p.skipped) {
@@ -139,147 +163,141 @@ pub(super) fn list(ui: &mut Ui, view: &View, sel: Option<&Sel>, scroll: bool) {
                 (n, 0) => format!("{n} passed"),
                 (n, s) => format!("{n} passed · {s} n/a"),
             };
-            let dot = if p.passed == 0 { Color32::GRAY } else { GREEN };
-            let r = ui.push_id(("health_passed", p.cat.name()), |ui| {
-                row(ui, sel == Some(&s), dot, p.cat.name(), &meta)
-            });
-            reveal(&r.inner, scroll && sel == Some(&s));
-            if r.inner.clicked() {
-                select(ui.ctx(), s);
+            let dot = if p.passed == 0 { GRAY } else { GREEN };
+            let selected = sel == Some(&s);
+            if selected {
+                at = Some(out.len());
             }
+            let r = row(row_id(&s), selected, dot, p.cat.name(), &meta, None, cx);
+            out.push(r.on_click(select(s, cx)).into_any_element());
         }
     }
     if !view.dismissed.is_empty() {
-        ui.add_space(6.0);
-        ui.separator();
+        out.push(ui::space(6.0).into_any_element());
+        out.push(Separator::horizontal().into_any_element());
         let selected = matches!(sel, Some(Sel::Dismissed | Sel::DismissedFinding(_)));
-        let title = format!("Dismissed ({})", view.dismissed.len());
-        let r = ui.push_id("health_dismissed_entry", |ui| {
-            row(ui, selected, Color32::GRAY, &title, "")
-        });
-        reveal(&r.inner, scroll && selected);
-        if r.inner
-            .on_hover_text("Findings you dismissed: read them again or restore them")
-            .clicked()
-        {
-            select(ui.ctx(), Sel::Dismissed);
+        if selected {
+            at = Some(out.len());
         }
+        let title = format!("Dismissed ({})", view.dismissed.len());
+        let r = row(
+            row_id(&Sel::Dismissed),
+            selected,
+            GRAY,
+            &title,
+            "",
+            Some("Findings you dismissed: read them again or restore them"),
+            cx,
+        );
+        out.push(r.on_click(select(Sel::Dismissed, cx)).into_any_element());
     }
-    ui.add_space(4.0);
+    out.push(ui::space(4.0).into_any_element());
+    (out, at)
 }
 
-/// A heading and one row per finding; nothing when there are none.
+/// A heading and one row per finding; nothing when there are none. Notes in `at` which row is
+/// the selected one.
 fn findings_group(
-    ui: &mut Ui,
+    out: &mut Vec<AnyElement>,
+    at: &mut Option<usize>,
     title: &str,
     items: &[Item],
     sel: Option<&Sel>,
-    scroll: bool,
-    note: Option<&str>,
+    note: Option<&'static str>,
+    cx: &mut Context<OmniApp>,
 ) {
     if items.is_empty() {
         return;
     }
-    heading(ui, &format!("{title} · {}", items.len()), note);
+    out.push(heading(format!("{title} · {}", items.len()), note, cx));
     for i in items {
         let s = Sel::Finding(i.key.clone());
-        let r = ui.push_id(("health_item", &i.key), |ui| {
-            row(
-                ui,
-                sel == Some(&s),
-                level_color(i.f.level),
-                &i.f.title,
-                i.f.category.name(),
-            )
-        });
-        reveal(&r.inner, scroll && sel == Some(&s));
-        if r.inner.clicked() {
-            select(ui.ctx(), s);
+        let selected = sel == Some(&s);
+        if selected {
+            *at = Some(out.len());
         }
+        let r = row(
+            row_id(&s),
+            selected,
+            level_color(i.f.level),
+            &i.f.title,
+            i.f.category.name(),
+            Some(&i.f.title),
+            cx,
+        );
+        out.push(r.on_click(select(s, cx)).into_any_element());
     }
 }
 
-/// Scrolls `row` into view when `on`.
-fn reveal(row: &egui::Response, on: bool) {
-    if on {
-        row.scroll_to_me(None);
+/// Small caps-style group heading, with hover text when given.
+fn heading(text: String, hover: Option<&'static str>, cx: &App) -> AnyElement {
+    let label = ui::label(text.to_uppercase())
+        .text_size(crate::ui::small_size())
+        .text_color(crate::theme::palette(cx).strong);
+    let box_ = h_box().pt_2().pb_0p5().px(px(6.0));
+    match hover {
+        Some(h) => box_
+            .child(ui::with_tip(ElementId::Name(text.into()), label, h))
+            .into_any_element(),
+        None => box_.child(label).into_any_element(),
     }
 }
 
-/// Small caps-style group heading.
-fn heading(ui: &mut Ui, text: &str, hover: Option<&str>) {
-    ui.add_space(8.0);
-    let r = ui.horizontal(|ui| {
-        ui.add_space(6.0);
-        ui.label(RichText::new(text.to_uppercase()).small().strong().weak())
-    });
-    if let Some(h) = hover {
-        r.inner.on_hover_text(h);
-    }
-    ui.add_space(2.0);
+/// A row that keeps its children at their natural width.
+fn h_box() -> Div {
+    div().flex().flex_none()
 }
 
 /// A selectable full-width row: a coloured dot, the title (cut short with … when it doesn't
-/// fit, in full on hover) and muted text on the right.
+/// fit) and muted text on the right. `tip` is its hover text (the full title for findings,
+/// which may be cut short).
 pub(super) fn row(
-    ui: &mut Ui,
+    id: impl Into<ElementId>,
     selected: bool,
-    dot: Color32,
+    dot: Rgba,
     title: &str,
     meta: &str,
-) -> egui::Response {
-    let height = 26.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
-    resp.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, title)
-    });
-    let v = ui.visuals();
-    let (fill, text, muted) = if selected {
-        let c = v.selection.stroke.color;
-        (Some(v.selection.bg_fill), c, c.gamma_multiply(0.75))
+    tip: Option<&str>,
+    cx: &App,
+) -> ui::Clickable {
+    let (t, p) = (cx.theme(), crate::theme::palette(cx));
+    let (selected_fill, hover_fill, radius) = (p.selection, t.accent, t.radius);
+    let (text, muted): (Hsla, Hsla) = if selected {
+        (p.selection_text.into(), p.selection_text.into())
     } else {
-        let fill = resp.hovered().then_some(v.widgets.hovered.weak_bg_fill);
-        (fill, v.text_color(), v.weak_text_color())
+        (t.foreground, t.muted_foreground)
     };
-    let mut elided = false;
-    if ui.is_rect_visible(rect) {
-        let painter = ui.painter();
-        if let Some(fill) = fill {
-            painter.rect_filled(rect, 4, fill);
-        }
-        let pad = 8.0;
-        painter.circle_filled(
-            egui::pos2(rect.left() + pad + 4.0, rect.center().y),
-            4.0,
-            dot,
-        );
-        let meta = WidgetText::from(RichText::new(meta).small().color(muted)).into_galley(
-            ui,
-            Some(TextWrapMode::Extend),
-            f32::INFINITY,
-            egui::TextStyle::Body,
-        );
-        let left = rect.left() + pad + 16.0;
-        let title_w = (rect.right() - pad - meta.size().x - 10.0 - left).max(20.0);
-        let title = WidgetText::from(RichText::new(title).color(text)).into_galley(
-            ui,
-            Some(TextWrapMode::Truncate),
-            title_w,
-            egui::TextStyle::Body,
-        );
-        elided = title.elided;
-        let y = |g: &egui::Galley| rect.center().y - g.size().y / 2.0;
-        painter.galley(egui::pos2(left, y(&title)), title, text);
-        painter.galley(
-            egui::pos2(rect.right() - pad - meta.size().x, y(&meta)),
-            meta,
-            muted,
-        );
-    }
-    let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    if elided {
-        resp.on_hover_text(title)
-    } else {
-        resp
-    }
+    ui::clickable(id)
+        .h_flex()
+        .flex_none()
+        .w_full()
+        .h(rems(24.0 / 16.0))
+        .gap_2()
+        .px_2()
+        .rounded(radius)
+        .cursor_pointer()
+        .map(|row| {
+            if selected {
+                row.bg(selected_fill)
+            } else {
+                row.hover(move |s| s.bg(hover_fill))
+            }
+        })
+        .child(div().flex_none().size(px(8.0)).rounded_full().bg(dot))
+        .child(
+            ui::label(title.to_string())
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .text_color(text),
+        )
+        .when(!meta.is_empty(), |row| {
+            row.child(
+                ui::label(meta.to_string())
+                    .flex_none()
+                    .text_size(crate::ui::small_size())
+                    .text_color(muted),
+            )
+        })
+        .when_some(tip, |row, tip| row.tooltip(ui::tip(tip.to_string())))
 }

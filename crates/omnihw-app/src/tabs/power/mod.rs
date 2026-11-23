@@ -1,175 +1,226 @@
 //! Power page: power plans, timers, buttons, processor limits, device power saving, wake
-//! sources and power requests, with in-place editing. Changes are requested here and applied
-//! by `dispatch` (outside the snapshot lock) on a worker thread; the page itself only reads the
-//! snapshot.
+//! sources and power requests, with in-place editing. The page only reads the snapshot; its
+//! buttons and drop-downs call [`request`] (or the sampler), which applies changes on a worker
+//! thread. Results arrive as status bar messages.
+//!
+//! The helpers shared with the Health Check page ([`request`], [`fix_button`],
+//! [`admin_hint`]) live here too.
 
-mod actions;
-
-use super::{group_box, header_row, page_title};
+use crate::app::OmniApp;
 use crate::elevate::elevated;
 use crate::heat::{GREEN, ORANGE};
-use crate::sampler::Snapshot;
-use actions::{QUERY, REFRESH, admin_hint, flag};
-pub use actions::{dispatch, fix_button, request};
-use egui::{RichText, Ui};
+use crate::ui::LineSized;
+use crate::ui::{self, Table};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, App, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
+    SharedString, Stateful, Styled, Window, div,
+};
 use omnihw_core::power::{
     Action, AdapterKind, Kind, PERCENT_PRESETS, PowerInfo, Setting, Source, TIMEOUT_PRESETS,
 };
 
-pub fn show(ui: &mut Ui, snap: &Snapshot) {
-    ui.horizontal(|ui| {
-        page_title(ui, "Power");
-        if snap.power_busy {
-            ui.spinner();
-            ui.weak("Working...");
-        } else if ui
-            .small_button("Refresh")
-            .on_hover_text("Read power settings, devices and wake history again")
-            .clicked()
-        {
-            flag(ui.ctx(), REFRESH);
-        }
-    });
+/// Key of the collapsible wake history.
+const WAKE_HISTORY: &str = "power/wake-history";
+
+pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let history_open = ui::is_open(app, WAKE_HISTORY, false);
+    let snap = app.sampler.snapshot();
+    let busy = snap.power_busy;
+    let mut header = ui::row().child(ui::page_title("Power"));
+    if busy {
+        header = header
+            .child(Spinner::new().small())
+            .child(ui::weak("Working...", cx));
+    } else {
+        header = header.child(
+            Button::new("power-refresh")
+                .line_sized()
+                .caption("Refresh")
+                .tooltip("Read power settings, devices and wake history again")
+                .on_click(cx.listener(|this, _, _, _| this.sampler.refresh_power())),
+        );
+    }
+    let page = ui::column().child(header);
     let Some(p) = &snap.power else {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Reading power settings...");
-        });
-        return;
+        return page
+            .child(
+                ui::row()
+                    .child(Spinner::new().small())
+                    .child(ui::label("Reading power settings...")),
+            )
+            .into_any_element();
     };
-    ui.weak(
-        "Changes apply to the active power plan right away. Some need administrator permission; Windows asks when needed.",
-    );
-    ui.add_space(8.0);
-    ui.add_enabled_ui(!snap.power_busy, |ui| {
-        plans(ui, p);
-        settings_group(
-            ui,
-            p,
-            "Sleep and display",
-            &[
-                Setting::DisplayOff,
-                Setting::Sleep,
-                Setting::Hibernate,
-                Setting::DiskOff,
-            ]
-            .into_iter()
-            .filter(|s| *s != Setting::Hibernate || p.caps.hibernate)
-            .collect::<Vec<_>>(),
-        );
-        let mut buttons = vec![Setting::PowerButton];
-        if p.caps.sleep_button {
-            buttons.push(Setting::SleepButton);
-        }
-        if p.caps.lid {
-            buttons.push(Setting::LidAction);
-        }
-        settings_group(ui, p, "Power buttons and lid", &buttons);
-        settings_group(
-            ui,
-            p,
-            "Processor",
-            &[Setting::ProcessorMin, Setting::ProcessorMax],
-        );
-        let mut adv = vec![
-            Setting::UsbSelectiveSuspend,
-            Setting::PcieAspm,
-            Setting::WakeTimers,
-        ];
-        if p.adapters.iter().any(|a| a.kind == AdapterKind::WiFi) {
-            adv.push(Setting::WirelessPowerSaving);
-        }
-        if p.is_portable() {
-            adv.push(Setting::BatterySaverThreshold);
-        }
-        settings_group(ui, p, "Advanced", &adv);
-        if !p.sensitive_usb.is_empty() {
-            let names: Vec<String> = p
-                .sensitive_usb
-                .iter()
-                .map(|(n, k)| format!("{n} ({})", k.name()))
-                .collect();
-            ui.weak(format!(
-                "USB devices that may drop out with selective suspend: {}",
-                names.join(", ")
-            ));
-            ui.add_space(6.0);
-        }
-        startup(ui, p);
-        adapters(ui, p);
-        waking(ui, p);
-        requests(ui, p);
-    });
+    let mut page = page
+        .child(ui::weak(
+            "Changes apply to the active power plan right away. Some need administrator \
+             permission; Windows asks when needed.",
+            cx,
+        ))
+        .child(ui::space(8.0))
+        .child(plans(p, busy, cx));
+    page = page.child(settings_group(
+        p,
+        busy,
+        "Sleep and display",
+        &[
+            Setting::DisplayOff,
+            Setting::Sleep,
+            Setting::Hibernate,
+            Setting::DiskOff,
+        ]
+        .into_iter()
+        .filter(|s| *s != Setting::Hibernate || p.caps.hibernate)
+        .collect::<Vec<_>>(),
+        cx,
+    ));
+    let mut buttons = vec![Setting::PowerButton];
+    if p.caps.sleep_button {
+        buttons.push(Setting::SleepButton);
+    }
+    if p.caps.lid {
+        buttons.push(Setting::LidAction);
+    }
+    page = page.child(settings_group(
+        p,
+        busy,
+        "Power buttons and lid",
+        &buttons,
+        cx,
+    ));
+    page = page.child(settings_group(
+        p,
+        busy,
+        "Processor",
+        &[Setting::ProcessorMin, Setting::ProcessorMax],
+        cx,
+    ));
+    let mut adv = vec![
+        Setting::UsbSelectiveSuspend,
+        Setting::PcieAspm,
+        Setting::WakeTimers,
+    ];
+    if p.adapters.iter().any(|a| a.kind == AdapterKind::WiFi) {
+        adv.push(Setting::WirelessPowerSaving);
+    }
+    if p.is_portable() {
+        adv.push(Setting::BatterySaverThreshold);
+    }
+    page = page.child(settings_group(p, busy, "Advanced", &adv, cx));
+    if !p.sensitive_usb.is_empty() {
+        let names: Vec<String> = p
+            .sensitive_usb
+            .iter()
+            .map(|(n, k)| format!("{n} ({})", k.name()))
+            .collect();
+        page = page
+            .child(ui::weak(
+                format!(
+                    "USB devices that may drop out with selective suspend: {}",
+                    names.join(", ")
+                ),
+                cx,
+            ))
+            .child(ui::space(6.0));
+    }
+    page = page.child(startup(p, busy, cx));
+    if !p.adapters.is_empty() {
+        page = page.child(adapters(p, busy, cx));
+    }
+    page.child(waking(p, busy, history_open, cx))
+        .child(requests(p, busy, cx))
+        .into_any_element()
 }
 
-fn group(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
-    group_box(ui, RichText::new(title).strong(), 2.0, 6.0, body);
+/// A titled group box. The title doubles as its id, so groups' identical labels ("-") stay
+/// apart.
+fn group(title: &'static str, cx: &App) -> Stateful<Div> {
+    ui::group_box(cx).id(title).child(ui::strong(title))
 }
 
-fn plans(ui: &mut Ui, p: &PowerInfo) {
-    group(ui, "Power plan", |ui| {
-        if p.schemes.is_empty() {
-            ui.weak("No power plans found.");
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            for s in &p.schemes {
-                let active = p.active.as_deref() == Some(s.guid.as_str());
-                let name = if s.name.is_empty() {
-                    "Unnamed plan"
+/// Cells of a free-form grid, each with its own id so equal texts ("-") in one grid don't
+/// clash.
+fn grid_of(cols: u16, cells: Vec<AnyElement>) -> Div {
+    ui::hug(
+        ui::grid(cols).children(
+            cells
+                .into_iter()
+                .enumerate()
+                .map(|(i, c)| div().id(i).child(c)),
+        ),
+    )
+}
+
+fn plans(p: &PowerInfo, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    let g = group("Power plan", cx);
+    if p.schemes.is_empty() {
+        return g.child(ui::weak("No power plans found.", cx));
+    }
+    let mut row = ui::wrap_row();
+    for (i, s) in p.schemes.iter().enumerate() {
+        let active = p.active.as_deref() == Some(s.guid.as_str());
+        let name = if s.name.is_empty() {
+            "Unnamed plan"
+        } else {
+            &s.name
+        };
+        let guid = s.guid.clone();
+        row = row.child(
+            Button::new(("plan", i))
+                .line_sized()
+                .caption(name.to_string())
+                .selectable(active, cx)
+                .disabled(busy)
+                .tooltip(if active {
+                    "Active plan"
                 } else {
-                    &s.name
-                };
-                if ui
-                    .selectable_label(active, name)
-                    .on_hover_text(if active {
-                        "Active plan"
-                    } else {
-                        "Switch to this plan"
-                    })
-                    .clicked()
-                    && !active
-                {
-                    request(ui.ctx(), Action::SetScheme(s.guid.clone()));
-                }
-            }
-        });
-    });
+                    "Switch to this plan"
+                })
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    if !active {
+                        request(this, Action::SetScheme(guid.clone()), window, cx);
+                    }
+                })),
+        );
+    }
+    g.child(row)
 }
 
 /// Rows of AC (and battery, on laptops) value pickers.
-fn settings_group(ui: &mut Ui, p: &PowerInfo, title: &str, settings: &[Setting]) {
+fn settings_group(
+    p: &PowerInfo,
+    busy: bool,
+    title: &'static str,
+    settings: &[Setting],
+    cx: &mut Context<OmniApp>,
+) -> impl IntoElement {
     let portable = p.is_portable();
-    group(ui, title, |ui| {
-        egui::Grid::new(("power_grid", title))
-            .num_columns(if portable { 3 } else { 2 })
-            .spacing([16.0, 4.0])
-            .show(ui, |ui| {
-                if portable {
-                    ui.label("");
-                    ui.label(RichText::new("Plugged in").underline());
-                    ui.label(RichText::new("On battery").underline());
-                    ui.end_row();
-                }
-                for &s in settings {
-                    let v = p.get(s);
-                    if v.ac.is_none() && v.dc.is_none() {
-                        continue;
-                    }
-                    ui.label(s.label());
-                    // Battery saver only matters on battery.
-                    if s != Setting::BatterySaverThreshold {
-                        value_combo(ui, s, Source::Ac, v.ac);
-                    } else {
-                        ui.weak("-");
-                    }
-                    if portable {
-                        value_combo(ui, s, Source::Dc, v.dc);
-                    }
-                    ui.end_row();
-                }
-            });
-    });
+    let mut cells: Vec<AnyElement> = Vec::new();
+    if portable {
+        cells.push(div().into_any_element());
+        cells.push(ui::label("Plugged in").underline().into_any_element());
+        cells.push(ui::label("On battery").underline().into_any_element());
+    }
+    for &s in settings {
+        let v = p.get(s);
+        if v.ac.is_none() && v.dc.is_none() {
+            continue;
+        }
+        cells.push(ui::label(s.label()).into_any_element());
+        // Battery saver only matters on battery.
+        if s != Setting::BatterySaverThreshold {
+            cells.push(value_combo(s, Source::Ac, v.ac, busy, cx));
+        } else {
+            cells.push(ui::weak("-", cx).into_any_element());
+        }
+        if portable {
+            cells.push(value_combo(s, Source::Dc, v.dc, busy, cx));
+        }
+    }
+    group(title, cx).child(grid_of(if portable { 3 } else { 2 }, cells))
 }
 
 /// Choices offered for a setting, including the current value if it isn't a preset.
@@ -191,286 +242,409 @@ fn options(s: Setting, current: u32) -> Vec<u32> {
     v
 }
 
-fn value_combo(ui: &mut Ui, s: Setting, source: Source, current: Option<u32>) {
+fn value_combo(
+    s: Setting,
+    source: Source,
+    current: Option<u32>,
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> AnyElement {
     let Some(cur) = current else {
-        ui.weak("-");
+        return ui::weak("-", cx).into_any_element();
+    };
+    let id = ElementId::Name(
+        format!(
+            "power-value-{}-{}",
+            s.key(),
+            if source == Source::Ac { "ac" } else { "dc" }
+        )
+        .into(),
+    );
+    if busy {
+        // A change is being applied: show the value without a menu.
+        return Button::new(id)
+            .line_sized()
+            .caption(s.format(cur))
+            .dropdown_caret(true)
+            .disabled(true)
+            .into_any_element();
+    }
+    let values = options(s, cur);
+    ui::dropdown(
+        id,
+        s.format(cur),
+        values
+            .iter()
+            .map(|&v| SharedString::from(s.format(v)))
+            .collect(),
+        values.iter().position(|&v| v == cur),
+        cx,
+        move |this, i, window, cx| {
+            let value = values[i];
+            if value != cur {
+                request(
+                    this,
+                    Action::SetValue {
+                        setting: s,
+                        source,
+                        value,
+                    },
+                    window,
+                    cx,
+                );
+            }
+        },
+    )
+}
+
+fn on_off(on: bool, on_text: &'static str, off_text: &'static str, cx: &App) -> AnyElement {
+    if on {
+        ui::colored(on_text, ORANGE, cx).into_any_element()
+    } else {
+        ui::colored(off_text, GREEN, cx).into_any_element()
+    }
+}
+
+fn action_button(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    action: Action,
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> AnyElement {
+    Button::new(id)
+        .line_sized()
+        .caption(text)
+        .tooltip(admin_hint(&action))
+        .disabled(busy)
+        .on_click(cx.listener(move |this, _, window, cx| request(this, action.clone(), window, cx)))
+        .into_any_element()
+}
+
+fn startup(p: &PowerInfo, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    let mut cells: Vec<AnyElement> = vec![ui::label("Fast Startup").into_any_element()];
+    match p.fast_startup {
+        Some(on) => {
+            let effective = p.fast_startup_effective() == Some(true);
+            cells.push(
+                ui::label(match (on, effective) {
+                    (true, true) => "On",
+                    (true, false) => "On (unused: hibernation is off)",
+                    _ => "Off",
+                })
+                .into_any_element(),
+            );
+            cells.push(action_button(
+                "fast-startup",
+                if on { "Turn off" } else { "Turn on" },
+                Action::FastStartup(!on),
+                busy,
+                cx,
+            ));
+        }
+        None => {
+            cells.push(ui::weak("-", cx).into_any_element());
+            cells.push(div().into_any_element());
+        }
+    }
+    cells.push(ui::label("Hibernation").into_any_element());
+    cells.push(
+        ui::label(match (p.caps.hibernate, p.caps.hiberfile) {
+            (true, true) => "On",
+            (true, false) => "Off",
+            _ => "Not supported",
+        })
+        .into_any_element(),
+    );
+    cells.push(div().into_any_element());
+    cells.push(ui::label("Standby").into_any_element());
+    cells.push(
+        ui::label(if p.caps.modern_standby {
+            "Modern Standby (S0 low power idle)"
+        } else if p.caps.s3 {
+            "Sleep (S3)"
+        } else {
+            "-"
+        })
+        .into_any_element(),
+    );
+    cells.push(div().into_any_element());
+    group("Startup and standby", cx).child(grid_of(3, cells))
+}
+
+fn adapters(p: &PowerInfo, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    let mut table = Table::new(&[
+        "Adapter",
+        "Windows may turn it off",
+        "Energy-Efficient Ethernet",
+    ])
+    .striped();
+    for (i, a) in p.adapters.iter().enumerate() {
+        let turn_off = match a.allow_turn_off {
+            Some(on) => ui::row()
+                .child(on_off(on, "Yes", "No", cx))
+                .child(action_button(
+                    ("allow-turn-off", i),
+                    if on { "Stop" } else { "Allow" },
+                    Action::AllowTurnOff {
+                        instance_id: a.instance_id.clone(),
+                        allow: !on,
+                    },
+                    busy,
+                    cx,
+                ))
+                .into_any_element(),
+            None => ui::weak("-", cx).into_any_element(),
+        };
+        let eee = match (&a.eee, &a.class_key) {
+            (Some(e), Some(k)) => ui::row()
+                .child(on_off(e.enabled, "On", "Off", cx))
+                .child(action_button(
+                    ("eee", i),
+                    if e.enabled { "Turn off" } else { "Turn on" },
+                    Action::NicProperty {
+                        class_key: k.clone(),
+                        value: e.value.clone(),
+                        data: if e.enabled { "0" } else { "1" }.into(),
+                    },
+                    busy,
+                    cx,
+                ))
+                .into_any_element(),
+            _ => ui::weak("-", cx).into_any_element(),
+        };
+        table.push_row([
+            ui::label(format!("{} ({})", a.name, a.kind.name())).into_any_element(),
+            turn_off,
+            eee,
+        ]);
+    }
+    group("Network and Bluetooth adapters", cx).child(table.build(cx))
+}
+
+fn waking(
+    p: &PowerInfo,
+    busy: bool,
+    history_open: bool,
+    cx: &mut Context<OmniApp>,
+) -> impl IntoElement {
+    let v = p.get(Setting::WakeTimers);
+    let cells = vec![
+        ui::label("Last wake from sleep").into_any_element(),
+        ui::label(match p.last_wake() {
+            Some(w) => format!("{} ({} UTC)", w.source.describe(), w.time),
+            None => "None in the last 2 weeks".into(),
+        })
+        .into_any_element(),
+        ui::label("Allow wake timers").into_any_element(),
+        ui::label(match (v.ac, v.dc, p.is_portable()) {
+            (Some(a), Some(d), true) => format!(
+                "{} plugged in, {} on battery",
+                Setting::WakeTimers.format(a),
+                Setting::WakeTimers.format(d)
+            ),
+            (Some(a), _, _) => Setting::WakeTimers.format(a),
+            _ => "-".into(),
+        })
+        .into_any_element(),
+    ];
+    let mut g = group("Waking", cx)
+        .child(grid_of(2, cells))
+        .child(ui::space(4.0))
+        .child(ui::strong("Devices that can wake the PC"));
+    if p.wake_armed.is_empty() {
+        g = g.child(ui::weak("None", cx));
+    }
+    for (i, d) in p.wake_armed.iter().enumerate() {
+        g = g.child(
+            ui::row()
+                .id(("wake-armed", i))
+                .child(ui::label(d.clone()))
+                .child(action_button(
+                    ("disarm", i),
+                    "Disarm",
+                    Action::DisarmWake(d.clone()),
+                    busy,
+                    cx,
+                )),
+        );
+    }
+    g = g
+        .child(ui::space(4.0))
+        .child(ui::strong("Active wake timers"));
+    match &p.wake_timers {
+        Some(t) if t.is_empty() => g = g.child(ui::weak("None", cx)),
+        Some(t) => {
+            g = g.children(
+                t.iter()
+                    .enumerate()
+                    .map(|(i, x)| div().id(("wake-timer", i)).child(ui::label(x.clone()))),
+            )
+        }
+        None => g = g.child(check_now("check-wake-timers", busy, cx)),
+    }
+    if !p.wakes.is_empty() {
+        g = g.child(ui::collapse_header(
+            WAKE_HISTORY,
+            ui::label(format!("Wake history, last 2 weeks ({})", p.wakes.len())),
+            history_open,
+            cx,
+        ));
+        if history_open {
+            let mut cells = Vec::new();
+            for w in &p.wakes {
+                cells.push(ui::label(format!("{} UTC", w.time)).into_any_element());
+                cells.push(
+                    ui::label(if w.fast_startup {
+                        "Start-up from Fast Startup shutdown".to_string()
+                    } else {
+                        w.source.describe()
+                    })
+                    .into_any_element(),
+                );
+            }
+            g = g.child(striped(2, cells, cx).pl_4());
+        }
+    }
+    g
+}
+
+/// A striped grid without headings ([`Table`] always has them).
+fn striped(cols: u16, cells: Vec<AnyElement>, cx: &App) -> Div {
+    let stripe = cx.theme().muted;
+    let per_row = cols as usize;
+    ui::hug(
+        div()
+            .grid()
+            .grid_cols_max_content(cols)
+            .children(cells.into_iter().enumerate().map(|(i, c)| {
+                div()
+                    .id(i)
+                    .px_2()
+                    .py_0p5()
+                    .when((i / per_row) % 2 == 1, |d| d.bg(stripe))
+                    .child(c)
+            })),
+    )
+}
+
+/// "Needs administrator rights to read." and a button that reads them now.
+fn check_now(id: &'static str, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    ui::row()
+        .id(id)
+        .child(ui::weak("Needs administrator rights to read.", cx))
+        .child(
+            Button::new(id)
+                .line_sized()
+                .caption("Check now")
+                .tooltip(if elevated() {
+                    "Read now"
+                } else {
+                    "Asks for administrator permission"
+                })
+                .disabled(busy)
+                .on_click(cx.listener(|this, _, _, _| this.sampler.power_query_admin())),
+        )
+}
+
+fn check_again(busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    Button::new("check-requests-again")
+        .line_sized()
+        .caption("Check again")
+        .disabled(busy)
+        .on_click(cx.listener(|this, _, _, _| this.sampler.power_query_admin()))
+}
+
+fn requests(p: &PowerInfo, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
+    let g = group("What's keeping the PC awake", cx);
+    match &p.requests {
+        None => g.child(check_now("check-requests", busy, cx)),
+        Some(r) if r.is_empty() => g
+            .child(ui::label("Nothing: no app or driver is preventing sleep."))
+            .child(check_again(busy, cx)),
+        Some(r) => {
+            let mut table = Table::new(&["Keeps awake", "Requested by", "Reason"]).striped();
+            for (i, x) in r.iter().enumerate() {
+                let kind = match x.kind.as_str() {
+                    "DISPLAY" => "Display",
+                    "SYSTEM" => "System",
+                    "AWAYMODE" => "Away mode",
+                    "EXECUTION" => "Execution",
+                    k => k,
+                };
+                table.push_row([
+                    ui::label(kind.to_string()).into_any_element(),
+                    ui::with_tip(
+                        ("request", i),
+                        ui::label(format!("{} ({})", x.short_name(), x.origin.to_lowercase())),
+                        x.name.clone(),
+                    )
+                    .into_any_element(),
+                    ui::weak(x.reason.clone(), cx).into_any_element(),
+                ]);
+            }
+            g.child(table.build(cx)).child(check_again(busy, cx))
+        }
+    }
+}
+
+/// Apply `action`, after a confirmation dialog if it is disruptive. The change runs on a
+/// worker thread; its result arrives as a status bar message.
+pub fn request(app: &mut OmniApp, action: Action, window: &mut Window, cx: &mut Context<OmniApp>) {
+    let Some(text) = action.confirm_text() else {
+        app.sampler.power_action(action);
         return;
     };
-    egui::ComboBox::from_id_salt(("power_value", s.key(), source == Source::Ac))
-        .selected_text(s.format(cur))
-        .show_ui(ui, |ui| {
-            for v in options(s, cur) {
-                if ui.selectable_label(v == cur, s.format(v)).clicked() && v != cur {
-                    request(
-                        ui.ctx(),
-                        Action::SetValue {
-                            setting: s,
-                            source,
-                            value: v,
-                        },
-                    );
-                }
-            }
-        });
+    let mut text = text.to_string();
+    if action.needs_admin() && !elevated() {
+        text.push_str("\n\nWindows will ask for administrator permission.");
+    }
+    ui::confirm(
+        action.label(),
+        text,
+        "Apply",
+        window,
+        cx,
+        move |this, _, _| this.sampler.power_action(action.clone()),
+    );
 }
 
-fn on_off(ui: &mut Ui, on: bool, on_text: &str, off_text: &str) {
-    if on {
-        ui.label(RichText::new(on_text).color(crate::heat::ink(ui.visuals(), ORANGE)));
+/// Hover text of a button that applies `a`.
+pub fn admin_hint(a: &Action) -> &'static str {
+    if a.needs_admin() && !elevated() {
+        "Asks for administrator permission"
     } else {
-        ui.label(RichText::new(off_text).color(crate::heat::ink(ui.visuals(), GREEN)));
+        "Applies the change now"
     }
 }
 
-fn action_button(ui: &mut Ui, text: &str, action: Action) {
-    if ui
-        .small_button(text)
-        .on_hover_text(admin_hint(&action))
-        .clicked()
-    {
-        request(ui.ctx(), action);
-    }
-}
-
-fn startup(ui: &mut Ui, p: &PowerInfo) {
-    group(ui, "Startup and standby", |ui| {
-        egui::Grid::new("power_startup")
-            .num_columns(3)
-            .spacing([16.0, 4.0])
-            .show(ui, |ui| {
-                ui.label("Fast Startup");
-                match p.fast_startup {
-                    Some(on) => {
-                        let effective = p.fast_startup_effective() == Some(true);
-                        ui.label(match (on, effective) {
-                            (true, true) => "On",
-                            (true, false) => "On (unused: hibernation is off)",
-                            _ => "Off",
-                        });
-                        action_button(
-                            ui,
-                            if on { "Turn off" } else { "Turn on" },
-                            Action::FastStartup(!on),
-                        );
-                    }
-                    None => {
-                        ui.weak("-");
-                        ui.label("");
-                    }
-                }
-                ui.end_row();
-                ui.label("Hibernation");
-                ui.label(match (p.caps.hibernate, p.caps.hiberfile) {
-                    (true, true) => "On",
-                    (true, false) => "Off",
-                    _ => "Not supported",
-                });
-                ui.label("");
-                ui.end_row();
-                ui.label("Standby");
-                ui.label(if p.caps.modern_standby {
-                    "Modern Standby (S0 low power idle)"
-                } else if p.caps.s3 {
-                    "Sleep (S3)"
-                } else {
-                    "-"
-                });
-                ui.label("");
-                ui.end_row();
-            });
-    });
-}
-
-fn adapters(ui: &mut Ui, p: &PowerInfo) {
-    if p.adapters.is_empty() {
-        return;
-    }
-    group(ui, "Network and Bluetooth adapters", |ui| {
-        egui::Grid::new("power_adapters")
-            .num_columns(3)
-            .spacing([16.0, 4.0])
-            .striped(true)
-            .show(ui, |ui| {
-                header_row(
-                    ui,
-                    &[
-                        "Adapter",
-                        "Windows may turn it off",
-                        "Energy-Efficient Ethernet",
-                    ],
-                );
-                for a in &p.adapters {
-                    ui.label(format!("{} ({})", a.name, a.kind.name()));
-                    ui.horizontal(|ui| match a.allow_turn_off {
-                        Some(on) => {
-                            on_off(ui, on, "Yes", "No");
-                            action_button(
-                                ui,
-                                if on { "Stop" } else { "Allow" },
-                                Action::AllowTurnOff {
-                                    instance_id: a.instance_id.clone(),
-                                    allow: !on,
-                                },
-                            );
-                        }
-                        None => {
-                            ui.weak("-");
-                        }
-                    });
-                    ui.horizontal(|ui| match (&a.eee, &a.class_key) {
-                        (Some(e), Some(k)) => {
-                            on_off(ui, e.enabled, "On", "Off");
-                            action_button(
-                                ui,
-                                if e.enabled { "Turn off" } else { "Turn on" },
-                                Action::NicProperty {
-                                    class_key: k.clone(),
-                                    value: e.value.clone(),
-                                    data: if e.enabled { "0" } else { "1" }.into(),
-                                },
-                            );
-                        }
-                        _ => {
-                            ui.weak("-");
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
-    });
-}
-
-fn waking(ui: &mut Ui, p: &PowerInfo) {
-    group(ui, "Waking", |ui| {
-        egui::Grid::new("power_wake")
-            .num_columns(2)
-            .spacing([16.0, 4.0])
-            .show(ui, |ui| {
-                ui.label("Last wake from sleep");
-                ui.label(match p.last_wake() {
-                    Some(w) => format!("{} ({} UTC)", w.source.describe(), w.time),
-                    None => "None in the last 2 weeks".into(),
-                });
-                ui.end_row();
-                ui.label("Allow wake timers");
-                let v = p.get(Setting::WakeTimers);
-                ui.label(match (v.ac, v.dc, p.is_portable()) {
-                    (Some(a), Some(d), true) => format!(
-                        "{} plugged in, {} on battery",
-                        Setting::WakeTimers.format(a),
-                        Setting::WakeTimers.format(d)
-                    ),
-                    (Some(a), _, _) => Setting::WakeTimers.format(a),
-                    _ => "-".into(),
-                });
-                ui.end_row();
-            });
-        ui.add_space(4.0);
-        ui.label(RichText::new("Devices that can wake the PC").strong());
-        if p.wake_armed.is_empty() {
-            ui.weak("None");
-        }
-        for d in &p.wake_armed {
-            ui.horizontal(|ui| {
-                ui.label(d);
-                action_button(ui, "Disarm", Action::DisarmWake(d.clone()));
-            });
-        }
-        ui.add_space(4.0);
-        ui.label(RichText::new("Active wake timers").strong());
-        match &p.wake_timers {
-            Some(t) if t.is_empty() => {
-                ui.weak("None");
-            }
-            Some(t) => {
-                for x in t {
-                    ui.add(egui::Label::new(x).wrap());
-                }
-            }
-            None => check_now(ui),
-        }
-        if !p.wakes.is_empty() {
-            egui::CollapsingHeader::new(format!("Wake history, last 2 weeks ({})", p.wakes.len()))
-                .id_salt("power_wake_history")
-                .show(ui, |ui| {
-                    egui::Grid::new("power_wake_hist")
-                        .num_columns(2)
-                        .spacing([16.0, 2.0])
-                        .striped(true)
-                        .show(ui, |ui| {
-                            for w in &p.wakes {
-                                ui.label(format!("{} UTC", w.time));
-                                ui.label(if w.fast_startup {
-                                    "Start-up from Fast Startup shutdown".to_string()
-                                } else {
-                                    w.source.describe()
-                                });
-                                ui.end_row();
-                            }
-                        });
-                });
-        }
-    });
-}
-
-fn check_now(ui: &mut Ui) {
-    ui.horizontal(|ui| {
-        ui.weak("Needs administrator rights to read.");
-        if ui
-            .small_button("Check now")
-            .on_hover_text(if elevated() {
-                "Read now"
-            } else {
-                "Asks for administrator permission"
-            })
-            .clicked()
-        {
-            flag(ui.ctx(), QUERY);
-        }
-    });
-}
-
-fn requests(ui: &mut Ui, p: &PowerInfo) {
-    group(ui, "What's keeping the PC awake", |ui| match &p.requests {
-        None => check_now(ui),
-        Some(r) if r.is_empty() => {
-            ui.label("Nothing: no app or driver is preventing sleep.");
-            if ui.small_button("Check again").clicked() {
-                flag(ui.ctx(), QUERY);
-            }
-        }
-        Some(r) => {
-            egui::Grid::new("power_requests")
-                .num_columns(3)
-                .spacing([16.0, 2.0])
-                .striped(true)
-                .show(ui, |ui| {
-                    header_row(ui, &["Keeps awake", "Requested by", "Reason"]);
-                    for x in r {
-                        ui.label(match x.kind.as_str() {
-                            "DISPLAY" => "Display",
-                            "SYSTEM" => "System",
-                            "AWAYMODE" => "Away mode",
-                            "EXECUTION" => "Execution",
-                            k => k,
-                        });
-                        ui.label(format!("{} ({})", x.short_name(), x.origin.to_lowercase()))
-                            .on_hover_text(&x.name);
-                        ui.weak(&x.reason);
-                        ui.end_row();
-                    }
-                });
-            if ui.small_button("Check again").clicked() {
-                flag(ui.ctx(), QUERY);
-            }
-        }
-    });
+/// A "Fix" button for a Health Check finding. `id` must be unique on the page.
+pub fn fix_button(
+    id: impl Into<ElementId>,
+    action: &Action,
+    cx: &mut Context<OmniApp>,
+) -> AnyElement {
+    let apply = action.clone();
+    Button::new(id)
+        .line_sized()
+        .caption(format!("Fix: {}", action.label()))
+        .tooltip(admin_hint(action))
+        .on_click(cx.listener(move |this, _, window, cx| request(this, apply.clone(), window, cx)))
+        .into_any_element()
 }
 
 #[cfg(test)]
 mod tests {
     use super::options;
-    use omnihw_core::power::Setting;
+    use crate::app::Tab;
+    use crate::sampler::Snapshot;
+    use crate::settings::Settings;
+    use crate::tabs::page_tests::{assert_shows, go, open, page, snapshot, texts};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, TestAppContext};
+    use omnihw_core::power::{AcDc, BALANCED, Capabilities, PowerInfo, Scheme, Setting};
+    use omnihw_core::testkit::{desktop, laptop};
+    use omnihw_core::win::PlanKind;
 
     #[test]
     fn options_keep_custom_values() {
@@ -480,5 +654,114 @@ mod tests {
         assert!(o.windows(2).take(o.len() - 2).all(|w| w[0] < w[1]));
         assert_eq!(options(Setting::PcieAspm, 1), vec![0, 1, 2]);
         assert!(options(Setting::ProcessorMax, 42).contains(&42));
+    }
+
+    /// A laptop's power settings: two plans, Balanced active, Fast Startup on.
+    fn power_info() -> PowerInfo {
+        PowerInfo {
+            schemes: vec![
+                Scheme {
+                    guid: BALANCED.into(),
+                    name: "Balanced".into(),
+                    kind: PlanKind::Balanced,
+                },
+                Scheme {
+                    guid: "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c".into(),
+                    name: "High performance".into(),
+                    kind: PlanKind::HighPerformance,
+                },
+            ],
+            active: Some(BALANCED.into()),
+            values: vec![
+                (
+                    Setting::Sleep,
+                    AcDc {
+                        ac: Some(1800),
+                        dc: Some(900),
+                    },
+                ),
+                (
+                    Setting::ProcessorMax,
+                    AcDc {
+                        ac: Some(100),
+                        dc: Some(100),
+                    },
+                ),
+            ],
+            caps: Capabilities {
+                battery: true,
+                lid: true,
+                hibernate: true,
+                hiberfile: true,
+                modern_standby: true,
+                ..Default::default()
+            },
+            fast_startup: Some(true),
+            wake_armed: vec!["HID Keyboard Device".into()],
+            ..Default::default()
+        }
+    }
+
+    #[gpui_kit::test]
+    fn empty_state(cx: &mut TestAppContext) {
+        let info = desktop();
+        let shown = page(cx, &info, Snapshot::default(), Tab::Power);
+        assert_shows(&shown, &["Power", "Refresh", "Reading power settings..."]);
+    }
+
+    #[gpui_kit::test]
+    fn shows_plans_and_settings(cx: &mut TestAppContext) {
+        let info = laptop();
+        let snap = Snapshot {
+            power: Some(power_info()),
+            ..snapshot(&info)
+        };
+        let shown = page(cx, &info, snap, Tab::Power);
+        assert_shows(
+            &shown,
+            &[
+                "Balanced",
+                "High performance",
+                "Plugged in",
+                "On battery",
+                "Fast Startup",
+                "Turn off",
+                "Modern Standby (S0 low power idle)",
+                "HID Keyboard Device",
+                "Needs administrator rights to read.",
+                "What's keeping the PC awake",
+            ],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn busy_shows_working(cx: &mut TestAppContext) {
+        let info = desktop();
+        let snap = Snapshot {
+            power: Some(power_info()),
+            power_busy: true,
+            ..snapshot(&info)
+        };
+        let shown = page(cx, &info, snap, Tab::Power);
+        assert_shows(&shown, &["Working...", "Balanced"]);
+        assert!(!shown.iter().any(|t| t == "Refresh"));
+    }
+
+    #[gpui_kit::test]
+    fn disruptive_change_asks_first(cx: &mut TestAppContext) {
+        let info = laptop();
+        let snap = Snapshot {
+            power: Some(power_info()),
+            ..snapshot(&info)
+        };
+        let (window, app) = open(cx, info, snap, Settings::default());
+        go(cx, &app, Tab::Power);
+        assert!(!texts(cx, window).iter().any(|t| t == "Apply"));
+        // Turning Fast Startup off asks first; the dialog is never confirmed here. (The
+        // dialog's title and text are not labels the tests can see, only its buttons.)
+        cx.update_window(window, |_, window, cx| window.click("fast-startup", cx))
+            .unwrap();
+        assert_shows(&texts(cx, window), &["Apply", "Cancel"]);
+        assert!(!cx.read(|cx| app.read(cx).sampler.snapshot().power_busy));
     }
 }

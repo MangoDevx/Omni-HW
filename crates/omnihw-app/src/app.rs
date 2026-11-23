@@ -1,8 +1,28 @@
-use crate::nav::{self, GROUPS};
+//! The main window: navigation (sidebar, tabs or classic bar), the actions bar, the status
+//! bar and the open page.
+//!
+//! [`OmniApp`] is the one gpui view. It redraws only when it is notified: by the sampler and
+//! the worker threads through [`Repaint`] (new data), or by a click or key press handled here
+//! or in a page. Pages are functions in [`crate::tabs`] that build their elements from the
+//! latest snapshot.
+
+use crate::nav::{self, Arrow, GROUPS};
+use crate::repaint::Repaint;
 use crate::sampler::Sampler;
 use crate::settings::{NavStyle, Settings};
-use crate::{export, tabs};
-use egui::{Button, RichText, TextStyle};
+use crate::ui::LineSized;
+use crate::{export, heat, tabs, ui};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Sizable, StyledExt, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, App, ClickEvent, ClipboardItem, Context, FocusHandle, InteractiveElement,
+    IntoElement, KeyBinding, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity,
+    Window, div, px, rems,
+};
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -68,26 +88,26 @@ impl Tab {
         }
     }
 
-    /// Leading glyph in the sidebar (all present in egui's built-in fonts).
+    /// Leading icon in the sidebar (all in the bundled default icon set).
     pub fn icon(self) -> &'static str {
         match self {
-            Tab::Overview => "🏠",
-            Tab::Health => "❤",
-            Tab::Cpu => "🔲",
-            Tab::Caches => "⚡",
-            Tab::Mainboard => "🔧",
-            Tab::Memory => "💾",
-            Tab::Gpu => "🖵",
-            Tab::Storage => "🖴",
-            Tab::Network => "🌐",
-            Tab::LanSecurity => "🛡",
-            Tab::Power => "🔌",
-            Tab::Sensors => "📈",
-            Tab::Recording => "⏺",
-            Tab::Alerts => "🔔",
-            Tab::EventLog => "📋",
-            Tab::About => "ℹ",
-            Tab::Settings => "⚙",
+            Tab::Overview => "\u{1F3E0}",
+            Tab::Health => "\u{2764}",
+            Tab::Cpu => "\u{1F532}",
+            Tab::Caches => "\u{26A1}",
+            Tab::Mainboard => "\u{1F527}",
+            Tab::Memory => "\u{1F4BE}",
+            Tab::Gpu => "\u{1F5B5}",
+            Tab::Storage => "\u{1F5B4}",
+            Tab::Network => "\u{1F310}",
+            Tab::LanSecurity => "\u{1F6E1}",
+            Tab::Power => "\u{1F50C}",
+            Tab::Sensors => "\u{1F4C8}",
+            Tab::Recording => "\u{23FA}",
+            Tab::Alerts => "\u{1F514}",
+            Tab::EventLog => "\u{1F4CB}",
+            Tab::About => "\u{2139}",
+            Tab::Settings => "\u{2699}",
         }
     }
 
@@ -122,316 +142,317 @@ impl Tab {
     }
 }
 
+gpui_kit::actions!(omnihw, [NavLeft, NavRight, NavUp, NavDown]);
+
+/// Key context of the main window: the arrow keys below apply inside it, except where a
+/// focused widget (text field, slider, menu) binds them itself.
+const KEY_CONTEXT: &str = "OmniHW";
+
+/// Bind the arrow keys to page navigation. Call once at startup.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("left", NavLeft, Some(KEY_CONTEXT)),
+        KeyBinding::new("right", NavRight, Some(KEY_CONTEXT)),
+        KeyBinding::new("up", NavUp, Some(KEY_CONTEXT)),
+        KeyBinding::new("down", NavDown, Some(KEY_CONTEXT)),
+    ]);
+}
+
 const STATUS_DURATION: Duration = Duration::from_secs(6);
+/// How long after the last settings change the file is written, so dragging the UI scale
+/// slider doesn't rewrite it on every step.
+const SAVE_DELAY: Duration = Duration::from_millis(400);
 /// Hover text of the "running as administrator" indicator, in every navigation style.
 const ADMIN_HOVER: &str = "Omni-HW has administrator rights: you approved its UAC prompt or \
                            started it as administrator.";
-/// Width of the navigation sidebar.
-const SIDEBAR_WIDTH: f32 = 190.0;
-/// Height of one sidebar row.
-const ROW_HEIGHT: f32 = 26.0;
+/// Width of the navigation sidebar, in rems.
+const SIDEBAR_WIDTH: f32 = 190.0 / 16.0;
+/// Height of one sidebar row, in rems.
+const ROW_HEIGHT: f32 = 26.0 / 16.0;
+/// Padding around a page on each side, in points.
+const PAGE_MARGIN: f32 = 8.0;
+/// Padding around a page, left and right together, in rems.
+const PAGE_PADDING: f32 = 2.0 * PAGE_MARGIN / 16.0;
+/// Feature guide's glyph in the sidebar.
+const HELP_ICON: &str = "\u{1F4D6}";
 
-/// Sidebar background: a shade darker than the page, so it reads as its own surface.
-fn sidebar_fill(v: &egui::Visuals) -> egui::Color32 {
-    let t = if v.dark_mode { 0.3 } else { 0.035 };
-    v.panel_fill.lerp_to_gamma(egui::Color32::BLACK, t)
-}
-
-/// Small uppercase category heading in the sidebar.
-fn nav_section(ui: &mut egui::Ui, title: &str) {
-    ui.add_space(12.0);
-    ui.horizontal(|ui| {
-        ui.add_space(10.0);
-        let color = ui.visuals().weak_text_color();
-        ui.add(
-            egui::Label::new(
-                RichText::new(title.to_uppercase())
-                    .small()
-                    .strong()
-                    .extra_letter_spacing(1.0)
-                    .color(color),
-            )
-            .selectable(false),
-        );
-    });
-    ui.add_space(2.0);
-}
-
-/// A full-width sidebar row: glyph and label; when selected, filled with an accent bar on the
-/// left edge.
-fn nav_row(ui: &mut egui::Ui, selected: bool, icon: &str, label: &str) -> egui::Response {
-    let size = egui::vec2(ui.available_width(), ROW_HEIGHT);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, label)
-    });
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-    let v = ui.visuals();
-    let radius = v.widgets.hovered.corner_radius;
-    let painter = ui.painter();
-    let text_color = if selected {
-        painter.rect_filled(rect, radius, v.selection.bg_fill.gamma_multiply(0.6));
-        let bar = egui::Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height()));
-        painter.rect_filled(
-            bar.shrink2(egui::vec2(0.0, 4.0)),
-            2.0,
-            v.selection.stroke.color,
-        );
-        v.selection.stroke.color
-    } else if response.hovered() {
-        painter.rect_filled(rect, radius, v.widgets.hovered.weak_bg_fill);
-        v.widgets.hovered.text_color()
-    } else {
-        v.text_color()
-    };
-    let font = egui::TextStyle::Button.resolve(ui.style());
-    let y = rect.center().y;
-    let icon_color = if selected {
-        text_color
-    } else {
-        text_color.gamma_multiply(0.7)
-    };
-    painter.text(
-        egui::pos2(rect.left() + 20.0, y),
-        egui::Align2::CENTER_CENTER,
-        icon,
-        font.clone(),
-        icon_color,
-    );
-    painter.text(
-        egui::pos2(rect.left() + 36.0, y),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
-        text_color,
-    );
-    response
-}
-
-/// Gap between the Tabs bar's category tabs.
-const TAB_GAP: f32 = 2.0;
-/// Thickness of the active category tab's underline.
-const TAB_UNDERLINE: f32 = 3.0;
-const TAB_PADDING: egui::Vec2 = egui::vec2(12.0, 7.0);
-const CHIP_PADDING: egui::Vec2 = egui::vec2(11.0, 3.0);
-
-fn tab_galley(ui: &egui::Ui, label: &str, size_delta: f32) -> std::sync::Arc<egui::Galley> {
-    let size = TextStyle::Button.resolve(ui.style()).size + size_delta;
-    egui::WidgetText::from(RichText::new(label).size(size)).into_galley(
-        ui,
-        Some(egui::TextWrapMode::Extend),
-        f32::INFINITY,
-        TextStyle::Button,
-    )
-}
-
-fn underline_tab_size(ui: &egui::Ui, label: &str) -> egui::Vec2 {
-    tab_galley(ui, label, 1.0).size() + 2.0 * TAB_PADDING + egui::vec2(0.0, TAB_UNDERLINE)
-}
-
-/// A category tab: frameless text, tinted on hover, with an accent underline when selected.
-fn underline_tab(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let galley = tab_galley(ui, label, 1.0);
-    let size = galley.size() + 2.0 * TAB_PADDING + egui::vec2(0.0, TAB_UNDERLINE);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label)
-    });
-    if ui.is_rect_visible(rect) {
-        let v = ui.visuals();
-        let hovered = response.hovered() || response.has_focus();
-        if hovered && !selected {
-            let top = egui::CornerRadius {
-                nw: 4,
-                ne: 4,
-                sw: 0,
-                se: 0,
-            };
-            ui.painter().rect_filled(
-                rect,
-                top,
-                v.widgets.hovered.weak_bg_fill.gamma_multiply(0.6),
-            );
+/// The embedded font that has a sidebar glyph: the black-and-white emoji font, or the icon
+/// font for the few it lacks.
+fn glyph_font(glyph: &str) -> &'static str {
+    match glyph {
+        "\u{1F5B5}" | "\u{1F5B4}" | "\u{1F6E1}" | "\u{23FA}" | "\u{2699}" => {
+            crate::theme::ICON_FONT
         }
-        let color = if selected {
-            v.strong_text_color()
-        } else if hovered {
-            v.widgets.hovered.text_color()
-        } else {
-            v.widgets.inactive.text_color()
-        };
-        let line = egui::Rect::from_min_max(
-            egui::pos2(rect.left() + 4.0, rect.bottom() - TAB_UNDERLINE),
-            egui::pos2(rect.right() - 4.0, rect.bottom()),
-        );
-        if selected {
-            ui.painter().rect_filled(line, 1.5, v.hyperlink_color);
-        } else if hovered {
-            let faint = v.hyperlink_color.gamma_multiply(0.35);
-            ui.painter()
-                .rect_filled(line.shrink2(egui::vec2(0.0, 0.5)), 1.0, faint);
-        }
-        let pos = rect.min + TAB_PADDING;
-        ui.painter().galley(pos, galley, color);
+        _ => crate::theme::EMOJI_FONT,
     }
-    response
 }
 
-fn page_chip_size(ui: &egui::Ui, label: &str) -> egui::Vec2 {
-    tab_galley(ui, label, -0.5).size() + 2.0 * CHIP_PADDING
-}
-
-/// A page chip on the Tabs bar's second row: a pill, filled with the selection colour when
-/// selected and outlined otherwise.
-fn page_chip(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
-    let galley = tab_galley(ui, label, -0.5);
-    let size = galley.size() + 2.0 * CHIP_PADDING;
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label)
-    });
-    if ui.is_rect_visible(rect) {
-        let v = ui.visuals();
-        let hovered = response.hovered() || response.has_focus();
-        let (fill, stroke, text) = if selected {
-            (
-                v.selection.bg_fill,
-                egui::Stroke::NONE,
-                v.selection.stroke.color,
-            )
-        } else if hovered {
-            (
-                v.widgets.hovered.weak_bg_fill,
-                v.widgets.hovered.bg_stroke,
-                v.widgets.hovered.text_color(),
-            )
-        } else {
-            (
-                egui::Color32::TRANSPARENT,
-                egui::Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color),
-                v.widgets.inactive.text_color(),
-            )
-        };
-        let radius = rect.height() / 2.0;
-        ui.painter()
-            .rect(rect, radius, fill, stroke, egui::StrokeKind::Inside);
-        ui.painter().galley(rect.min + CHIP_PADDING, galley, text);
-    }
-    response
+/// Width a page has to lay itself out in, in rems: the window without the sidebar and the
+/// page padding. Pages that switch between a wide and a narrow layout use it (an element
+/// can't ask for its own width while it is being built).
+pub fn page_width_rems(nav_style: NavStyle, window: &Window) -> f32 {
+    let beside = match nav_style {
+        NavStyle::Sidebar => SIDEBAR_WIDTH + PAGE_PADDING,
+        NavStyle::Tabs | NavStyle::Classic => PAGE_PADDING,
+    };
+    window.viewport_size().width / window.rem_size() - beside
 }
 
 pub struct OmniApp {
-    tab: Tab,
-    /// Page shown last frame, to notice when the Power page is opened.
-    last_tab: Option<Tab>,
+    /// The open page. Change it with [`OmniApp::open`], which also runs the page's on-open reads.
+    pub tab: Tab,
     /// Last page used in each navigation category, for Left/Right arrows.
     nav_memory: nav::NavMemory,
-    /// Persisted user settings (theme, navigation style, start page, ...).
-    settings: Settings,
-    /// Selected adapter on the GPU tab.
-    gpu_index: usize,
-    sampler: Sampler,
+    /// Persisted user settings (theme, navigation style, start page, ...). After changing
+    /// them call [`OmniApp::settings_changed`].
+    pub settings: Settings,
+    pub sampler: Sampler,
+    /// Wakes this view from worker threads (handed to the update check, folder picker, ...).
+    pub repaint: Repaint,
     /// Transient message shown in the status bar (e.g. where a report was saved).
     status: Option<(String, Instant)>,
-    rec_view: tabs::recording::ViewState,
-    alerts_view: tabs::alerts::ViewState,
-    event_log_view: tabs::eventlog::ViewState,
-    /// Window handle passed to the sampler for notifications.
-    hwnd_sent: bool,
-    /// Started with `--minimized` (launch at startup); minimize on the first frame.
-    minimize_on_start: bool,
+    /// Per-page view state (selections, filters, edit buffers).
+    pub views: tabs::Views,
     /// In-app documentation window.
-    help: crate::help::HelpState,
-    updates: crate::update::UpdateChecker,
-    pawnio: crate::pawnio::Installer,
+    pub help: crate::help::HelpState,
+    pub updates: crate::update::UpdateChecker,
+    pub pawnio: crate::pawnio::Installer,
     /// Health Check results, shared by the Health tab and the Overview banner.
-    health: tabs::health::HealthCache,
-    /// Width of the Tabs bar's actions last frame, to right-align them.
-    actions_width: f32,
-    /// Settings changed but not written to disk yet: they're saved once no mouse button is
-    /// held, so dragging the UI scale slider doesn't rewrite the file on every frame.
+    pub health: tabs::health::HealthCache,
+    /// Bumped by every settings change; a delayed save only writes if no later change came.
+    settings_rev: u64,
     settings_unsaved: bool,
+    focus: FocusHandle,
 }
 
 impl OmniApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut settings = Settings::load();
         // The Run entry is the source of truth (it may have been removed outside Omni-HW).
         settings.launch_at_startup = crate::autostart::is_enabled();
-        crate::retro::install(&cc.egui_ctx);
-        crate::settings::apply_visuals(&cc.egui_ctx, &settings);
         crate::export::set_data_dir(settings.data_dir.clone());
         crate::dismissed::load(&settings.dismissed);
-        crate::tray::start(cc.egui_ctx.clone());
+
+        // Redraw when a worker thread has new data. One pending wake-up at most, so idle
+        // costs nothing.
+        let (repaint, wake) = Repaint::channel();
+        cx.spawn(async move |this, cx| {
+            while wake.recv().await.is_ok() {
+                if this.update(cx, |_, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        crate::tray::start(repaint.clone());
         crate::tray::set_icon_visible(settings.minimize_to_tray);
-        let sampler = Sampler::start(cc.egui_ctx.clone(), settings.use_pawnio);
+        let sampler = Sampler::start(repaint.clone(), settings.use_pawnio);
         sampler.set_interval_ms(settings.sample_interval_ms);
         sampler.set_alert_notifications(settings.alert_notifications);
+        if let Some(hwnd) = window_hwnd(window) {
+            sampler.set_window_handle(hwnd);
+            crate::tray::set_main_window(hwnd);
+        }
         let updates = crate::update::UpdateChecker::default();
         if settings.check_updates_at_start {
-            updates.start(&cc.egui_ctx);
+            updates.start(&repaint);
         }
-        OmniApp {
-            tab: Tab::from_key(&settings.start_page).unwrap_or(Tab::Overview),
-            last_tab: None,
+
+        // Follow Windows' light/dark setting while the theme is "System".
+        cx.observe_window_appearance(window, |this, window, cx| {
+            crate::theme::apply(&this.settings, Some(window), cx);
+        })
+        .detach();
+        // Minimizing deactivates the window: that is when it may go to the tray.
+        cx.observe_window_activation(window, |this, _window, _cx| this.minimized_to_tray())
+            .detach();
+        cx.observe_window_bounds(window, |this, _window, _cx| this.minimized_to_tray())
+            .detach();
+        // Started with `--minimized` (launch at startup).
+        if crate::autostart::launch_flags().1 {
+            window.minimize_window();
+        }
+
+        Self::build(settings, sampler, repaint, updates, window, cx)
+    }
+
+    /// The app over a fake sampler, for page tests: no sampling thread, tray icon or settings
+    /// file.
+    #[cfg(test)]
+    pub fn for_test(
+        settings: Settings,
+        sampler: Sampler,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let updates = Default::default();
+        Self::build(settings, sampler, Repaint::detached(), updates, window, cx)
+    }
+
+    fn build(
+        settings: Settings,
+        sampler: Sampler,
+        repaint: Repaint,
+        updates: crate::update::UpdateChecker,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        crate::theme::apply(&settings, Some(window), cx);
+        let focus = cx.focus_handle();
+        window.focus(&focus, cx);
+        let mut app = OmniApp {
+            tab: Tab::Overview,
             nav_memory: Default::default(),
             settings,
-            gpu_index: 0,
             sampler,
+            repaint,
             status: None,
-            rec_view: Default::default(),
-            alerts_view: Default::default(),
-            event_log_view: Default::default(),
-            hwnd_sent: false,
-            minimize_on_start: crate::autostart::launch_flags().1,
+            views: Default::default(),
             help: Default::default(),
             updates,
             pawnio: Default::default(),
             health: Default::default(),
-            actions_width: 0.0,
+            settings_rev: 0,
             settings_unsaved: false,
+            focus,
+        };
+        let start = Tab::from_key(&app.settings.start_page).unwrap_or(Tab::Overview);
+        app.open(start, cx);
+        app
+    }
+
+    /// Switch to `tab`, starting the reads a page wants when it is opened.
+    pub fn open(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        let from = std::mem::replace(&mut self.tab, tab);
+        self.nav_memory.visit(tab);
+        // Re-read power devices and wake history whenever the Power page is opened.
+        if tab == Tab::Power && from != Tab::Power {
+            self.sampler.refresh_power();
+        }
+        // Read network adapters often (and in full right away) while the Network page is open.
+        self.sampler.set_network_page(tab == Tab::Network);
+        if tab == Tab::Network && from != Tab::Network {
+            self.sampler.refresh_network();
+        }
+        // Read the event logs the first time the Event Log page is opened (Refresh re-reads).
+        if tab == Tab::EventLog {
+            let unread = {
+                let snap = self.sampler.snapshot();
+                snap.event_log.is_none() && !snap.event_log_busy
+            };
+            if unread {
+                self.sampler.read_event_log();
+            }
+        }
+        cx.notify();
+    }
+
+    /// Show `msg` in the status bar for a few seconds.
+    pub fn set_status(&mut self, msg: impl Into<String>, cx: &mut Context<Self>) {
+        self.status = Some((msg.into(), Instant::now()));
+        cx.notify();
+        // One redraw when the message expires; nothing runs in between.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STATUS_DURATION).await;
+            let _ = this.update(cx, |this, cx| {
+                if this
+                    .status
+                    .as_ref()
+                    .is_some_and(|(_, at)| at.elapsed() >= STATUS_DURATION)
+                {
+                    this.status = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The settings were edited: apply theme and scale now, and save them to disk shortly.
+    pub fn settings_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        crate::theme::apply(&self.settings, Some(window), cx);
+        crate::tray::set_icon_visible(self.settings.minimize_to_tray);
+        self.save_settings_soon(cx);
+        cx.notify();
+    }
+
+    /// Write the settings file once no further change arrives for [`SAVE_DELAY`].
+    pub fn save_settings_soon(&mut self, cx: &mut Context<Self>) {
+        // Page tests change settings in memory only: they must never write the user's file.
+        self.settings_unsaved = !cfg!(test);
+        self.settings_rev += 1;
+        let rev = self.settings_rev;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(SAVE_DELAY).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.settings_rev == rev {
+                    this.save_settings_now(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn save_settings_now(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.settings_unsaved)
+            && let Err(e) = self.settings.save()
+        {
+            self.set_status(e, cx);
         }
     }
 
-    /// Arrow keys switch pages (see [`nav`]) unless a widget has keyboard focus (text field,
-    /// slider, Tab-key focus) or a menu is open. Keys that don't move are left for the page.
-    fn arrow_navigation(&mut self, ctx: &egui::Context) {
-        self.nav_memory.visit(self.tab);
-        if ctx.egui_wants_keyboard_input()
-            || egui::Popup::is_any_open(ctx)
-            || ctx.memory(|m| m.focused().is_some())
-        {
+    /// Health Check dismissals changed: keep them in the settings (saved to disk only when
+    /// "remember dismissed" is on).
+    fn sync_dismissed(&mut self, cx: &mut Context<Self>) {
+        // The dismissed set is process-wide: a page test drawing a frame must not take the
+        // changes another test is checking for.
+        if cfg!(test) {
             return;
         }
-        let pressed = ctx.input(|i| {
-            if !i.modifiers.is_none() {
-                return None;
+        if let Some(keys) = crate::dismissed::take_changes() {
+            self.settings.dismissed = keys;
+            if self.settings.remember_dismissed {
+                self.save_settings_soon(cx);
             }
-            nav::Arrow::ALL
-                .into_iter()
-                .find(|&(key, _)| i.key_pressed(key))
-        });
-        let Some((key, arrow)) = pressed else {
-            return;
+        }
+    }
+
+    /// Results of power and network changes, which finish on worker threads: show them in
+    /// the status bar.
+    fn worker_messages(&mut self, cx: &mut Context<Self>) {
+        let msg = {
+            let mut snap = self.sampler.snapshot();
+            snap.power_msg.take().or_else(|| snap.net_msg.take())
         };
+        if let Some(msg) = msg {
+            self.set_status(msg, cx);
+        }
+    }
+
+    /// With "minimize to tray" on, a minimized window leaves the taskbar for the tray.
+    fn minimized_to_tray(&mut self) {
+        if self.settings.minimize_to_tray && crate::tray::main_window_minimized() {
+            crate::tray::hide_main_window();
+        }
+    }
+
+    /// The window is closing: remove the tray icon and write unsaved settings.
+    pub fn shutdown(&mut self) {
+        crate::tray::shutdown();
+        if std::mem::take(&mut self.settings_unsaved) {
+            let _ = self.settings.save();
+        }
+    }
+
+    /// Arrow keys switch pages (see [`nav`]). They only reach here when no focused widget
+    /// (text field, slider, menu) uses them. Keys that don't move are left for the page.
+    fn arrow(&mut self, arrow: Arrow, cx: &mut Context<Self>) {
         if let Some(next) = nav::target(self.settings.nav_style, self.tab, arrow, &self.nav_memory)
         {
-            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key));
-            self.tab = next;
-            self.nav_memory.visit(next);
-        }
-    }
-
-    fn set_status(&mut self, msg: String) {
-        self.status = Some((msg, Instant::now()));
-    }
-
-    /// Classic bar: every page as its own tab in one row.
-    fn page_nav(&mut self, ui: &mut egui::Ui) {
-        for tab in Tab::ALL {
-            ui.selectable_value(&mut self.tab, tab, tab.name());
+            self.open(next, cx);
+        } else if self.tab == Tab::Health {
+            tabs::health::arrow_key(self, arrow, cx);
         }
     }
 
@@ -442,589 +463,625 @@ impl OmniApp {
         (tabs::alerts::firing_count(&snap), elapsed)
     }
 
-    /// Red "N ALERTS" badge, shown only while alerts fire.
-    fn alerts_badge(&mut self, ui: &mut egui::Ui, firing: usize) {
-        if firing == 0 {
-            return;
-        }
-        let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
-        let b = Button::new(RichText::new(text).strong().color(egui::Color32::WHITE))
-            .fill(crate::heat::RED);
-        if ui.add(b).on_hover_text("Open the Alerts tab").clicked() {
-            self.tab = Tab::Alerts;
-        }
-    }
-
-    /// Record / Stop button.
-    fn record_button(&mut self, ui: &mut egui::Ui, elapsed: Option<f64>) {
-        let rec_button = match elapsed {
-            Some(t) => Button::new(
-                RichText::new(format!(
-                    "Stop  {}",
-                    omnihw_core::recording::format_elapsed(t)
-                ))
-                .strong(),
-            )
-            .fill(crate::heat::RED.gamma_multiply(0.6)),
-            None => Button::new("Record"),
-        };
-        let hover = if elapsed.is_some() {
-            "Stop recording and save the CSV"
-        } else {
-            "Record all sensors over time (until stopped) to a CSV in Documents"
-        };
-        if ui.add(rec_button).on_hover_text(hover).clicked() {
-            self.status = Some((tabs::recording::toggle(&self.sampler), Instant::now()));
-        }
-    }
-
-    /// "Report" menu: save an HTML report or copy a text one.
-    fn report_menu(&mut self, ui: &mut egui::Ui) {
+    fn save_html_report(&mut self, cx: &mut Context<Self>) {
         let Some(info) = self.sampler.info() else {
             return;
         };
-        let mut msg = None;
-        egui::containers::menu::MenuButton::new("Report  ⏷").ui(ui, |ui| {
-            if ui
-                .button("Save HTML report")
-                .on_hover_text("Save a report to Documents and open it in your browser")
-                .clicked()
-            {
-                msg = Some(match export::save_html(info, &self.sampler.snapshot()) {
-                    Ok(p) => format!("Saved {}", p.display()),
-                    Err(e) => e,
-                });
-                ui.close();
-            }
-            if ui
-                .button("Copy text report")
-                .on_hover_text("Copy a plain-text report to the clipboard")
-                .clicked()
-            {
-                ui.ctx()
-                    .copy_text(export::text(info, &self.sampler.snapshot()));
-                msg = Some("Report copied to clipboard".into());
-                ui.close();
-            }
-        });
-        if let Some(m) = msg {
-            self.set_status(m);
+        let msg = match export::save_html(info, &self.sampler.snapshot()) {
+            Ok(p) => format!("Saved {}", p.display()),
+            Err(e) => e,
+        };
+        self.set_status(msg, cx);
+    }
+
+    fn copy_text_report(&mut self, cx: &mut Context<Self>) {
+        let Some(info) = self.sampler.info() else {
+            return;
+        };
+        let text = export::text(info, &self.sampler.snapshot());
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        self.set_status("Report copied to clipboard", cx);
+    }
+
+    // ---- Actions (right-hand side of every bar) ---------------------------------------------
+
+    /// Red "N ALERTS" badge, shown only while alerts fire.
+    fn alerts_badge(&self, firing: usize, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if firing == 0 {
+            return None;
         }
+        let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
+        Some(
+            Button::new("alerts-badge")
+                .line_sized()
+                .danger()
+                .caption(text)
+                .tooltip("Open the Alerts tab")
+                .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Alerts, cx)))
+                .into_any_element(),
+        )
+    }
+
+    /// Record / Stop button.
+    fn record_button(&self, elapsed: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
+        let button = match elapsed {
+            Some(t) => Button::new("record")
+                .line_sized()
+                .danger()
+                .caption(format!(
+                    "Stop  {}",
+                    omnihw_core::recording::format_elapsed(t)
+                ))
+                .tooltip("Stop recording and save the CSV"),
+            None => Button::new("record")
+                .line_sized()
+                .caption("Record")
+                .tooltip("Record all sensors over time (until stopped) to a CSV in Documents"),
+        };
+        button
+            .on_click(cx.listener(|this, _, _, cx| {
+                let msg = tabs::recording::toggle(&this.sampler);
+                this.set_status(msg, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// "Report" menu: save an HTML report or copy a text one.
+    fn report_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let app = cx.weak_entity();
+        Button::new("report")
+            .line_sized()
+            .caption("Report")
+            .dropdown_caret(true)
+            .dropdown_menu(move |menu, _, _| {
+                menu.item(menu_item("Save HTML report", &app, |this, _, cx| {
+                    this.save_html_report(cx)
+                }))
+                .item(menu_item("Copy text report", &app, |this, _, cx| {
+                    this.copy_text_report(cx)
+                }))
+            })
+            .into_any_element()
     }
 
     /// "Update available" button, shown only when a newer version was found.
-    fn update_button(&mut self, ui: &mut egui::Ui) {
-        if let crate::update::Status::Available(v) = self.updates.status()
-            && ui
-                .button(format!("Update {v} available"))
-                .on_hover_text("Open Settings to check or download the new version")
-                .clicked()
-        {
-            self.tab = Tab::Settings;
-        }
+    fn update_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let crate::update::Status::Available(v) = self.updates.status() else {
+            return None;
+        };
+        Some(
+            Button::new("update")
+                .line_sized()
+                .primary()
+                .caption(format!("Update {v} available"))
+                .tooltip("Open Settings to check or download the new version")
+                .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Settings, cx)))
+                .into_any_element(),
+        )
     }
 
-    /// Right-hand actions of the Classic and Tabs bars: alerts indicator, record, report and info
-    /// menus, Settings, then the administrator indicator.
-    fn actions(&mut self, ui: &mut egui::Ui) {
+    /// "Info" menu of the Tabs and Classic bars: the feature guide and the About page.
+    fn info_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let app = cx.weak_entity();
+        Button::new("info")
+            .line_sized()
+            .caption("Info")
+            .dropdown_caret(true)
+            .highlighted(
+                self.settings.nav_style == NavStyle::Tabs && self.tab == Tab::About,
+                cx,
+            )
+            .dropdown_menu(move |menu, _, _| {
+                menu.item(menu_item("Feature guide", &app, |this, _, cx| {
+                    this.help.toggle(cx);
+                    cx.notify();
+                }))
+                .item(menu_item("About Omni-HW", &app, |this, _, cx| {
+                    this.open(Tab::About, cx)
+                }))
+            })
+            .into_any_element()
+    }
+
+    /// Right-hand actions of the Classic and Tabs bars: alerts indicator, record, report and
+    /// info menus, Settings, then the administrator indicator.
+    fn actions(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let mut out = Vec::new();
         if self.sampler.info().is_none() {
-            return;
+            return out;
         }
-        let tabbed = self.settings.nav_style == NavStyle::Tabs;
         // One short lock for what the bar shows.
         let (firing, elapsed) = self.bar_state();
-        self.alerts_badge(ui, firing);
-        self.record_button(ui, elapsed);
-        self.report_menu(ui);
-        self.update_button(ui);
-
-        let mut open_about = false;
-        // In the Tabs bar, highlighted while About is open, like a selected category tab (the
-        // classic bar has its own About tab).
-        let info_button = Button::new("Info  ⏷").selected(tabbed && self.tab == Tab::About);
-        egui::containers::menu::MenuButton::from_button(info_button).ui(ui, |ui| {
-            if ui.button("Feature guide").clicked() {
-                self.help.open = true;
-                ui.close();
-            }
-            if ui.button("About Omni-HW").clicked() {
-                open_about = true;
-                ui.close();
-            }
-        });
-        if open_about {
-            self.tab = Tab::About;
+        out.extend(self.alerts_badge(firing, cx));
+        out.push(self.record_button(elapsed, cx));
+        out.push(self.report_menu(cx));
+        out.extend(self.update_button(cx));
+        out.push(self.info_menu(cx));
+        out.push(
+            Button::new("settings")
+                .line_sized()
+                .caption("Settings")
+                .highlighted(self.tab == Tab::Settings, cx)
+                .tooltip("Theme, navigation bar, startup and more")
+                .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Settings, cx)))
+                .into_any_element(),
+        );
+        if crate::elevate::elevated() {
+            let (text, color) = if self.settings.nav_style == NavStyle::Tabs {
+                // A compact badge, so the actions still fit beside the category tabs.
+                ("ADMIN", heat::GREEN)
+            } else {
+                ("Running as administrator", heat::YELLOW)
+            };
+            out.push(
+                ui::with_tip("admin", ui::pill(text, color, true, cx), ADMIN_HOVER)
+                    .into_any_element(),
+            );
         }
-        if ui
-            .add(Button::new("Settings").selected(self.tab == Tab::Settings))
-            .on_hover_text("Theme, navigation bar, startup and more")
-            .clicked()
-        {
-            self.tab = Tab::Settings;
-        }
-        if !crate::elevate::elevated() {
-            return;
-        }
-        if tabbed {
-            // A compact badge, so the actions still fit beside the category tabs.
-            let ink = crate::heat::ink(ui.visuals(), crate::heat::GREEN);
-            let badge = Button::new(RichText::new("ADMIN").small().strong().color(ink))
-                .fill(ink.gamma_multiply(0.12))
-                .stroke(egui::Stroke::new(1.0, ink.gamma_multiply(0.6)))
-                .corner_radius(8.0)
-                .frame_when_inactive(true)
-                .sense(egui::Sense::hover());
-            ui.add(badge).on_hover_text(ADMIN_HOVER);
-        } else {
-            let ink = crate::heat::ink(ui.visuals(), crate::heat::YELLOW);
-            ui.add(
-                egui::Label::new(
-                    RichText::new("Running as administrator")
-                        .strong()
-                        .color(ink),
-                )
-                .selectable(false),
-            )
-            .on_hover_text(ADMIN_HOVER);
-        }
+        out
     }
 
-    /// Tabs bar, top row: category tabs on the left, actions right-aligned. The actions are
-    /// placed using their width from the last frame; when they don't fit beside the tabs (narrow
-    /// window) they get their own line above the tabs, so the tabs stay on the page strip.
-    fn primary_row(&mut self, ui: &mut egui::Ui) {
-        let tabs_width: f32 = (0..nav::TAB_CATEGORIES)
-            .map(|c| underline_tab_size(ui, nav::category_label(c)).x + TAB_GAP)
-            .sum();
-        let fits = tabs_width + 24.0 + self.actions_width <= ui.available_width();
-        if !fits {
-            ui.horizontal_wrapped(|ui| self.actions(ui));
+    // ---- Sidebar style ----------------------------------------------------------------------
+
+    /// A full-width sidebar row: glyph and label; when selected, filled with an accent bar on
+    /// the left edge.
+    fn nav_row(
+        &self,
+        id: impl Into<gpui_kit::ElementId>,
+        selected: bool,
+        icon: &'static str,
+        label: &'static str,
+        cx: &App,
+    ) -> ui::Clickable {
+        let p = crate::theme::palette(cx);
+        let (hover, hover_text) = (p.hover, p.hover_text);
+        let text: gpui_kit::Hsla = if selected { p.selection_text } else { p.text }.into();
+        let glyph = if selected { text } else { text.opacity(0.7) };
+        ui::clickable(id)
+            .relative()
+            .h_flex()
+            .flex_none()
+            .w_full()
+            .h(rems(ROW_HEIGHT))
+            .rounded(px(3.0))
+            .cursor_pointer()
+            .text_color(text)
+            .map(|row| {
+                if selected {
+                    row.bg(gpui_kit::Hsla::from(p.selection).opacity(0.6))
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px(4.0))
+                                .bottom(px(4.0))
+                                .w(px(3.0))
+                                .rounded(px(2.0))
+                                .bg(p.selection_text),
+                        )
+                } else {
+                    row.hover(move |s| s.bg(hover).text_color(hover_text))
+                }
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .justify_center()
+                    .w(rems(40.0 / 16.0))
+                    .child(
+                        ui::label(icon)
+                            .font_family(glyph_font(icon))
+                            .text_color(glyph),
+                    ),
+            )
+            .child(ui::label(label))
+    }
+
+    /// A sidebar row that opens `tab`.
+    fn nav_page(&self, tab: Tab, cx: &mut Context<Self>) -> ui::Clickable {
+        self.nav_row(
+            ("nav", tab as usize),
+            self.tab == tab,
+            tab.icon(),
+            tab.name(),
+            cx,
+        )
+        .on_click(cx.listener(move |this, _, _, cx| this.open(tab, cx)))
+    }
+
+    /// Sidebar navigation: every page listed under its category, with Feature guide, About and
+    /// Settings pinned to the bottom.
+    fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let t = cx.theme();
+        let (fill, text, border, weak) = (
+            t.sidebar,
+            t.sidebar_foreground,
+            t.sidebar_border,
+            t.muted_foreground,
+        );
+        let mut pages = v_flex()
+            .id("nav-pages")
+            .flex_1()
+            .min_h_0()
+            .gap(px(3.0))
+            .overflow_y_scroll();
+        for tab in [Tab::Overview, Tab::Health] {
+            pages = pages.child(self.nav_page(tab, cx));
         }
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing.x = TAB_GAP;
-            let current = nav::category_of(self.tab);
-            for c in 0..nav::TAB_CATEGORIES {
-                let label = nav::category_label(c);
-                if underline_tab(ui, label, current == Some(c)).clicked()
-                    && current != Some(c)
-                    && let Some(page) = self.nav_memory.page_in(c)
+        for (group, tabs) in GROUPS {
+            // Small uppercase category heading.
+            pages = pages.child(
+                ui::label(group.to_uppercase())
+                    .pt(px(15.0))
+                    .pb(px(5.0))
+                    .pl(px(10.0))
+                    .text_size(ui::small_size())
+                    .text_color(weak),
+            );
+            for &tab in tabs {
+                pages = pages.child(self.nav_page(tab, cx));
+            }
+        }
+
+        let mut footer = v_flex()
+            .flex_none()
+            .gap(px(3.0))
+            .mt(px(4.0))
+            .pt(px(5.0))
+            .border_t_1()
+            .border_color(border)
+            .child(
+                self.nav_row(
+                    "nav-help",
+                    self.help.is_open(),
+                    HELP_ICON,
+                    "Feature guide",
+                    cx,
+                )
+                .tooltip(ui::tip("What every page shows and how to use it"))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.help.toggle(cx);
+                    cx.notify();
+                })),
+            )
+            .child(self.nav_page(Tab::About, cx))
+            .child(self.nav_page(Tab::Settings, cx));
+        if crate::elevate::elevated() {
+            footer = footer.child(ui::with_tip(
+                "admin",
+                ui::colored("● Running as administrator", heat::GREEN, cx)
+                    .text_size(ui::small_size())
+                    .pl(px(8.0))
+                    .pt(px(6.0)),
+                ADMIN_HOVER,
+            ));
+        }
+
+        v_flex()
+            .flex_none()
+            .w(rems(SIDEBAR_WIDTH))
+            .h_full()
+            .px(px(8.0))
+            .py(px(10.0))
+            .bg(fill)
+            .text_color(text)
+            .border_r_1()
+            .border_color(border)
+            .child(
+                h_flex()
+                    .flex_none()
+                    .items_baseline()
+                    .gap(px(8.0))
+                    .pl(px(6.0))
+                    .mb(px(11.0))
+                    .child(ui::strong("Omni-HW").text_size(rems(20.0 / 16.0)))
+                    .child(
+                        ui::label(concat!("v", env!("CARGO_PKG_VERSION")))
+                            .text_size(ui::small_size())
+                            .text_color(weak),
+                    ),
+            )
+            .child(pages)
+            .child(footer)
+    }
+
+    /// Slim bar above the page (sidebar style): where you are on the left, actions on the right.
+    fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let mut crumbs = h_flex().gap_1p5().min_w_0();
+        if let Some((group, _)) = GROUPS.iter().find(|(_, p)| p.contains(&self.tab)) {
+            crumbs = crumbs.child(ui::weak(*group, cx)).child(ui::weak("›", cx));
+        }
+        crumbs = crumbs.child(ui::strong(self.tab.name()).text_size(rems(1.0)));
+        let mut actions = h_flex().flex_none().gap(px(8.0));
+        if self.sampler.info().is_some() {
+            let (firing, elapsed) = self.bar_state();
+            actions = actions
+                .children(self.alerts_badge(firing, cx))
+                .children(self.update_button(cx))
+                .child(self.record_button(elapsed, cx))
+                .child(self.report_menu(cx));
+        }
+        h_flex()
+            .flex_none()
+            .justify_between()
+            .gap_3()
+            .pl(px(12.0))
+            .pr(px(8.0))
+            .pt(px(6.0))
+            .pb(px(4.0))
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(crumbs)
+            .child(actions)
+    }
+
+    // ---- Tabs style -------------------------------------------------------------------------
+
+    /// A category tab: frameless text, tinted on hover, with an accent underline when selected.
+    fn underline_tab(&self, category: usize, cx: &mut Context<Self>) -> ui::Clickable {
+        let p = crate::theme::palette(cx);
+        let link: gpui_kit::Hsla = p.link.into();
+        let hover: gpui_kit::Hsla = p.hover.into();
+        let hover_text = p.hover_text;
+        let selected = nav::category_of(self.tab) == Some(category);
+        // The underline: 3 points tall, inset 4 from the tab's sides.
+        let line = div()
+            .absolute()
+            .left(px(4.0))
+            .right(px(4.0))
+            .bottom_0()
+            .h(px(3.0))
+            .rounded(px(1.5));
+        ui::clickable(("category", category))
+            .relative()
+            .px(px(12.0))
+            .pt(px(7.0))
+            .pb(px(10.0))
+            .rounded_t(px(4.0))
+            .cursor_pointer()
+            .text_size(rems(14.0 / 16.0))
+            .text_color(if selected { p.strong } else { p.widget_text })
+            .map(|tab| {
+                if selected {
+                    tab.child(line.bg(link))
+                } else {
+                    tab.hover(move |s| s.bg(hover.opacity(0.6)).text_color(hover_text))
+                }
+            })
+            .child(ui::label(nav::category_label(category)))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if nav::category_of(this.tab) != Some(category)
+                    && let Some(page) = this.nav_memory.page_in(category)
                 {
-                    self.tab = page;
+                    this.open(page, cx);
                 }
-            }
-            if fits {
-                let row = ui.min_rect();
-                let right = ui.max_rect().right();
-                let rect = egui::Rect::from_min_max(
-                    egui::pos2(right - self.actions_width, row.top()),
-                    egui::pos2(right, row.bottom() - TAB_UNDERLINE),
-                );
-                let builder = egui::UiBuilder::new()
-                    .max_rect(rect)
-                    .layout(egui::Layout::left_to_right(egui::Align::Center));
-                let width = ui
-                    .scope_builder(builder, |ui| self.actions(ui))
-                    .response
-                    .rect
-                    .width();
-                if (width - self.actions_width).abs() > 0.5 {
-                    self.actions_width = width;
-                    ui.ctx().request_discard("navigation actions resized");
+            }))
+    }
+
+    /// Tabs bar, top row: category tabs on the left, actions on the right. When they don't
+    /// fit side by side (narrow window) the actions wrap onto their own line.
+    fn primary_row(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let tabs = h_flex()
+            .flex_none()
+            .items_end()
+            .gap_0p5()
+            .children((0..nav::TAB_CATEGORIES).map(|c| self.underline_tab(c, cx)));
+        h_flex()
+            .flex_none()
+            .flex_wrap_reverse()
+            .items_end()
+            .justify_between()
+            .gap_x_4()
+            .px_2()
+            .pt_1p5()
+            .child(tabs)
+            .child(h_flex().gap_1p5().pb_1().children(self.actions(cx)))
+    }
+
+    /// A page chip on the Tabs bar's second row: a pill, filled with the selection colour when
+    /// selected and outlined otherwise.
+    fn page_chip(&self, tab: Tab, cx: &mut Context<Self>) -> ui::Clickable {
+        let t = cx.theme();
+        let (accent, on_accent, hover, border, text) = (
+            t.primary,
+            t.primary_foreground,
+            t.accent,
+            t.border,
+            t.foreground,
+        );
+        let selected = self.tab == tab;
+        ui::clickable(("chip", tab as usize))
+            .px(px(11.0))
+            .py(px(2.0))
+            .text_size(rems(12.5 / 16.0))
+            .rounded_full()
+            .border_1()
+            .cursor_pointer()
+            .map(|chip| {
+                if selected {
+                    chip.bg(accent).border_color(accent)
+                } else {
+                    chip.border_color(border).hover(move |s| s.bg(hover))
                 }
-            }
-        });
+            })
+            .child(ui::label(tab.name()).text_color(if selected { on_accent } else { text }))
+            .on_click(cx.listener(move |this, _, _, cx| this.open(tab, cx)))
     }
 
     /// Tabs bar, second row: the open category's pages as chips, or the page name for a
     /// single-page category. Always shown (same height either way) so switching categories
     /// doesn't make the page below jump.
-    fn page_strip(&mut self, ui: &mut egui::Ui) {
-        let chip_height = page_chip_size(ui, "Ag").y;
+    fn page_strip(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let pages = nav::category_of(self.tab).map_or(&[][..], |c| nav::CATEGORIES[c]);
-        ui.horizontal_wrapped(|ui| {
-            ui.set_min_height(chip_height);
-            ui.spacing_mut().item_spacing.x = 6.0;
-            if pages.len() > 1 {
-                for &t in pages {
-                    if page_chip(ui, t.name(), self.tab == t).clicked() {
-                        self.tab = t;
-                    }
-                }
-            } else {
-                ui.add_space(4.0);
-                ui.label(RichText::new(self.tab.name()).color(ui.visuals().weak_text_color()));
-            }
-            let hint = if pages.len() > 1 {
-                "\u{2190} \u{2192} sections    \u{2191} \u{2193} pages"
-            } else {
-                "\u{2190} \u{2192} sections"
-            };
-            // Monospace: the proportional UI font has no arrow glyphs.
-            let hint = RichText::new(hint)
-                .small()
-                .family(egui::FontFamily::Monospace)
-                .color(ui.visuals().weak_text_color());
-            let hint_width = egui::WidgetText::from(hint.clone())
-                .into_galley(
-                    ui,
-                    Some(egui::TextWrapMode::Extend),
-                    f32::INFINITY,
-                    TextStyle::Small,
+        let mut left = h_flex().flex_wrap().gap_1p5().min_h(rems(1.6));
+        let hint = if pages.len() > 1 {
+            left = left.children(pages.iter().map(|&t| self.page_chip(t, cx)));
+            "← → sections    ↑ ↓ pages"
+        } else {
+            left = left.child(ui::weak(self.tab.name(), cx).pl_1());
+            "← → sections"
+        };
+        let t = cx.theme();
+        h_flex()
+            .flex_none()
+            .justify_between()
+            .gap_3()
+            .px_2()
+            .py_1()
+            .bg(t.muted)
+            .border_y_1()
+            .border_color(t.border)
+            .child(left)
+            .child(
+                ui::with_tip(
+                    "arrows-hint",
+                    ui::small_weak(hint, cx).whitespace_nowrap(),
+                    "Arrow keys switch pages when no text field is focused",
                 )
-                .size()
-                .x;
-            // Only when there's room, so it never pushes the chips onto another line.
-            if ui.available_width() > hint_width + 24.0 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(4.0);
-                    ui.label(hint)
-                        .on_hover_text("Arrow keys switch pages when no text field is focused");
-                });
-            }
+                .flex_none(),
+            )
+    }
+
+    // ---- Classic style ----------------------------------------------------------------------
+
+    /// Classic bar: every page as its own tab in one row, then the actions.
+    fn classic_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
+        let pages = Tab::ALL.into_iter().map(|tab| {
+            Button::new(("page", tab as usize))
+                .line_sized()
+                .caption(tab.name())
+                .selectable(self.tab == tab, cx)
+                .on_click(cx.listener(move |this, _, _, cx| this.open(tab, cx)))
         });
+        let t = cx.theme();
+        h_flex()
+            .flex_none()
+            .flex_wrap()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(t.border)
+            .children(pages.collect::<Vec<_>>())
+            .child(div().w(px(1.0)).h(rems(1.2)).mx_1().bg(t.border))
+            .children(self.actions(cx))
     }
 
-    /// Sidebar navigation: every page listed under its category, with Feature guide, About and
-    /// Settings pinned to the bottom.
-    fn sidebar(&mut self, ui: &mut egui::Ui) {
-        let fill = sidebar_fill(ui.visuals());
-        let frame = egui::Frame::side_top_panel(ui.style())
-            .fill(fill)
-            .inner_margin(egui::Margin::symmetric(8, 10));
-        egui::Panel::left("nav")
-            .resizable(false)
-            .exact_size(SIDEBAR_WIDTH)
-            .frame(frame)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_space(6.0);
-                    ui.add(
-                        egui::Label::new(RichText::new("Omni-HW").size(20.0).strong())
-                            .selectable(false),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(concat!("v", env!("CARGO_PKG_VERSION")))
-                                .small()
-                                .weak(),
-                        )
-                        .selectable(false),
-                    );
-                });
-                ui.add_space(8.0);
-
-                egui::Panel::bottom("nav_footer")
-                    .frame(egui::Frame::NONE)
-                    .resizable(false)
-                    .show_separator_line(false)
-                    .show(ui, |ui| {
-                        ui.add_space(4.0);
-                        ui.separator();
-                        ui.add_space(2.0);
-                        if nav_row(ui, self.help.open, "📖", "Feature guide")
-                            .on_hover_text("What every page shows and how to use it")
-                            .clicked()
-                        {
-                            self.help.open = !self.help.open;
-                        }
-                        for tab in [Tab::About, Tab::Settings] {
-                            if nav_row(ui, self.tab == tab, tab.icon(), tab.name()).clicked() {
-                                self.tab = tab;
-                            }
-                        }
-                        if crate::elevate::elevated() {
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(8.0);
-                                let ink = crate::heat::ink(ui.visuals(), crate::heat::GREEN);
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new("● Running as administrator")
-                                            .small()
-                                            .color(ink),
-                                    )
-                                    .selectable(false),
-                                )
-                                .on_hover_text(ADMIN_HOVER);
-                            });
-                        }
-                    });
-
-                egui::CentralPanel::no_frame().show(ui, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink(false)
-                        .show(ui, |ui| {
-                            for tab in [Tab::Overview, Tab::Health] {
-                                if nav_row(ui, self.tab == tab, tab.icon(), tab.name()).clicked() {
-                                    self.tab = tab;
-                                }
-                            }
-                            for (group, pages) in GROUPS {
-                                nav_section(ui, group);
-                                for &tab in pages {
-                                    if nav_row(ui, self.tab == tab, tab.icon(), tab.name())
-                                        .clicked()
-                                    {
-                                        self.tab = tab;
-                                    }
-                                }
-                            }
-                        });
-                });
-            });
-    }
-
-    /// Slim bar above the page (sidebar style): where you are on the left, actions on the right.
-    fn top_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("actions").show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                if let Some((group, _)) = GROUPS.iter().find(|(_, p)| p.contains(&self.tab)) {
-                    ui.weak(*group);
-                    ui.weak("›");
-                }
-                ui.label(RichText::new(self.tab.name()).size(16.0).strong());
-                if self.sampler.info().is_none() {
-                    return;
-                }
-                let (firing, elapsed) = self.bar_state();
-                // Right to left, so added in reverse of how they read.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    self.report_menu(ui);
-                    self.record_button(ui, elapsed);
-                    self.update_button(ui);
-                    self.alerts_badge(ui, firing);
-                });
-            });
-            ui.add_space(2.0);
-        });
-    }
+    // ---- Page area --------------------------------------------------------------------------
 
     /// Thin bottom bar for transient messages, so they don't push the navigation onto two rows.
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        let Some((msg, at)) = &self.status else {
-            return;
+    fn status_bar(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+        let (msg, at) = self.status.as_ref()?;
+        if at.elapsed() >= STATUS_DURATION {
+            return None;
+        }
+        Some(
+            div()
+                .flex_none()
+                .px_3()
+                .py_1()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .child(ui::weak(msg.clone(), cx)),
+        )
+    }
+
+    /// The open page, in a scroll area unless the page scrolls its own panes.
+    fn page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.sampler.info().is_none() {
+            // Static hardware info is still being read (off the UI thread).
+            return div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Spinner::new().large())
+                .into_any_element();
+        }
+        let page = tabs::show(self, window, cx);
+        self.sync_dismissed(cx);
+        let frame = v_flex().flex_1().min_h_0().min_w_0().p(px(PAGE_MARGIN));
+        if matches!(self.tab, Tab::Recording | Tab::Health) {
+            // A list and a details pane (or a chart), each with its own scroll area.
+            frame.child(page).into_any_element()
+        } else {
+            frame
+                .overflow_y_scrollbar()
+                .id(("page", self.tab as usize))
+                .child(page)
+                .into_any_element()
+        }
+    }
+}
+
+/// A menu entry that runs `run` on the app when clicked.
+fn menu_item(
+    label: &'static str,
+    app: &WeakEntity<OmniApp>,
+    run: impl Fn(&mut OmniApp, &mut Window, &mut Context<OmniApp>) + 'static,
+) -> PopupMenuItem {
+    let app = app.clone();
+    PopupMenuItem::new(label).on_click(move |_: &ClickEvent, window, cx| {
+        let _ = app.update(cx, |this, cx| run(this, window, cx));
+    })
+}
+
+/// The Win32 window handle, for notifications and the tray icon.
+fn window_hwnd(window: &Window) -> Option<isize> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
+        RawWindowHandle::Win32(w) => Some(w.hwnd.get()),
+        _ => None,
+    }
+}
+
+impl Render for OmniApp {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.worker_messages(cx);
+        let page = self.page(window, cx);
+        let status = self.status_bar(cx);
+        let body = match self.settings.nav_style {
+            NavStyle::Sidebar => h_flex()
+                .size_full()
+                .items_stretch()
+                .child(self.sidebar(cx))
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .child(self.top_bar(cx))
+                        .child(page)
+                        .children(status),
+                ),
+            NavStyle::Tabs => v_flex()
+                .size_full()
+                .child(self.primary_row(cx))
+                .child(self.page_strip(cx))
+                .child(page)
+                .children(status),
+            NavStyle::Classic => v_flex()
+                .size_full()
+                .child(self.classic_bar(cx))
+                .child(page)
+                .children(status),
         };
-        let left = STATUS_DURATION.saturating_sub(at.elapsed());
-        if left.is_zero() {
-            self.status = None;
-            return;
-        }
-        let msg = msg.clone();
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.weak(msg);
-        });
-        ui.ctx().request_repaint_after(left);
-    }
-}
-
-impl Drop for OmniApp {
-    fn drop(&mut self) {
-        // Remove the tray icon before the process exits.
-        crate::tray::shutdown();
-        if self.settings_unsaved {
-            let _ = self.settings.save();
-        }
-    }
-}
-
-impl eframe::App for OmniApp {
-    /// Runs even while the window is minimized or hidden (unlike `ui`), so minimize-to-tray works.
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        crate::tray::set_icon_visible(self.settings.minimize_to_tray);
-        if self.settings.minimize_to_tray && ctx.input(|i| i.viewport().minimized) == Some(true) {
-            crate::tray::hide_main_window();
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        if !self.hwnd_sent {
-            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-            if let Ok(h) = frame.window_handle()
-                && let RawWindowHandle::Win32(w) = h.as_raw()
-            {
-                self.sampler.set_window_handle(w.hwnd.get());
-                crate::tray::set_main_window(w.hwnd.get());
-            }
-            self.hwnd_sent = true;
-        }
-        if std::mem::take(&mut self.minimize_on_start) {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
-        }
-        self.arrow_navigation(ui.ctx());
-        match self.settings.nav_style {
-            NavStyle::Sidebar => {
-                self.sidebar(ui);
-                self.top_bar(ui);
-            }
-            NavStyle::Tabs => {
-                // No bottom margin: the active tab's underline sits on the line between the rows.
-                let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin {
-                    left: 8,
-                    right: 8,
-                    top: 6,
-                    bottom: 0,
-                });
-                egui::Panel::top("tabs")
-                    .frame(frame)
-                    .show(ui, |ui| self.primary_row(ui));
-                let v = ui.visuals();
-                let band = crate::heat::lerp(v.panel_fill, v.extreme_bg_color, 0.45);
-                let frame = egui::Frame::side_top_panel(ui.style())
-                    .fill(band)
-                    .inner_margin(egui::Margin::symmetric(8, 5));
-                egui::Panel::top("pages")
-                    .frame(frame)
-                    .show(ui, |ui| self.page_strip(ui));
-            }
-            NavStyle::Classic => {
-                egui::Panel::top("tabs").show(ui, |ui| {
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        self.page_nav(ui);
-                        ui.separator();
-                        self.actions(ui);
-                    });
-                    ui.add_space(2.0);
-                });
-            }
-        }
-        self.status_bar(ui);
-
-        crate::help::show(ui.ctx(), &mut self.help);
-
-        // Re-read power devices and wake history whenever the Power page is opened.
-        if self.tab == Tab::Power && self.last_tab != Some(Tab::Power) {
-            self.sampler.refresh_power();
-        }
-        // Read network adapters often (and in full right away) while the Network page is open.
-        let on_network = self.tab == Tab::Network;
-        self.sampler.set_network_page(on_network);
-        if on_network && self.last_tab != Some(Tab::Network) {
-            self.sampler.refresh_network();
-        }
-        // Read the event logs the first time the Event Log page is opened (Refresh re-reads).
-        if self.tab == Tab::EventLog && self.last_tab != Some(Tab::EventLog) {
-            let unread = {
-                let snap = self.sampler.snapshot();
-                snap.event_log.is_none() && !snap.event_log_busy
-            };
-            if unread {
-                self.sampler.read_event_log();
-            }
-        }
-        self.last_tab = Some(self.tab);
-
-        egui::CentralPanel::default_margins().show(ui, |ui| {
-            let Some(info) = self.sampler.info() else {
-                ui.centered_and_justified(|ui| {
-                    ui.spinner();
-                });
-                return;
-            };
-            if self.tab == Tab::Recording {
-                // Has its own panels and scroll areas.
-                if tabs::recording::show(ui, &self.sampler, &mut self.rec_view) {
-                    let msg = tabs::recording::toggle(&self.sampler);
-                    self.set_status(msg);
-                }
-                return;
-            }
-            if self.tab == Tab::Health {
-                // A list and a details pane, each with its own scroll area. The report
-                // doesn't borrow the snapshot, so the lock is released before drawing.
-                let snap = self.sampler.snapshot();
-                let report = self.health.get(info, &snap, self.settings.show_gaming);
-                drop(snap);
-                tabs::health::show(ui, info, report);
-                return;
-            }
-            egui::ScrollArea::vertical()
-                .auto_shrink(false)
-                .show(ui, |ui| {
-                    if self.tab == Tab::Alerts {
-                        // Takes the snapshot lock itself.
-                        return tabs::alerts::show(ui, info, &self.sampler, &mut self.alerts_view);
-                    }
-                    if self.tab == Tab::EventLog {
-                        // Takes the snapshot lock itself, briefly.
-                        return tabs::eventlog::show(ui, &self.sampler, &mut self.event_log_view);
-                    }
-                    if self.tab == Tab::Sensors {
-                        // Takes the snapshot lock itself.
-                        return tabs::sensors::show(ui, &self.sampler);
-                    }
-                    if self.tab == Tab::Settings {
-                        if tabs::settings::show(
-                            ui,
-                            &mut self.settings,
-                            &self.sampler,
-                            &self.updates,
-                            &self.pawnio,
-                        ) {
-                            crate::settings::apply_visuals(ui.ctx(), &self.settings);
-                            self.settings_unsaved = true;
-                        }
-                        return;
-                    }
-                    let snap = self.sampler.snapshot();
-                    match self.tab {
-                        Tab::Overview => {
-                            let health = self.health.get(info, &snap, self.settings.show_gaming);
-                            if tabs::overview::show(ui, info, &snap, health) {
-                                self.tab = Tab::Health;
-                            }
-                        }
-                        Tab::Cpu => tabs::cpu::show(ui, info, &snap),
-                        Tab::Caches => tabs::caches::show(ui, info),
-                        Tab::Mainboard => tabs::mainboard::show(ui, info),
-                        Tab::Memory => tabs::memory::show(ui, info, &snap),
-                        Tab::Gpu => tabs::gpu::show(ui, info, &snap, &mut self.gpu_index),
-                        Tab::Storage => tabs::storage::show(ui, info, &snap),
-                        Tab::Network => tabs::network::show(ui, &snap),
-                        Tab::LanSecurity => tabs::lansec::show(ui, &snap),
-                        Tab::Power => tabs::power::show(ui, &snap),
-                        Tab::About => tabs::about::show(ui, info, &snap),
-                        Tab::Sensors
-                        | Tab::Recording
-                        | Tab::Alerts
-                        | Tab::EventLog
-                        | Tab::Settings
-                        | Tab::Health => {
-                            unreachable!()
-                        }
-                    }
-                });
-        });
-
-        // Power changes requested this frame (Power page or a Health Check "Fix"), applied
-        // outside the snapshot lock.
-        if let Some(msg) = tabs::power::dispatch(ui.ctx(), &self.sampler) {
-            self.set_status(msg);
-        }
-        // Same for network changes and tests.
-        if let Some(msg) = tabs::network::dispatch(ui.ctx(), &self.sampler, on_network) {
-            self.set_status(msg);
-        }
-        // The LAN Security Report scan, when its button asks for one.
-        tabs::lansec::dispatch(ui.ctx(), &self.sampler);
-        tabs::storage::dispatch(ui.ctx(), &self.sampler);
-        tabs::memory::dispatch(ui.ctx(), &self.sampler);
-        tabs::health::dispatch(ui.ctx(), &self.sampler);
-
-        // Health Check dismissals changed this frame: keep them in the settings (saved to disk
-        // only when "remember dismissed" is on).
-        if let Some(keys) = crate::dismissed::take_changes() {
-            self.settings.dismissed = keys;
-            self.settings_unsaved |= self.settings.remember_dismissed;
-        }
-        if self.settings_unsaved && !ui.ctx().input(|i| i.pointer.any_down()) {
-            self.settings_unsaved = false;
-            if let Err(e) = self.settings.save() {
-                self.set_status(e);
-            }
-        }
+        let t = cx.theme();
+        div()
+            .id("omnihw")
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|this, _: &NavLeft, _, cx| this.arrow(Arrow::Left, cx)))
+            .on_action(cx.listener(|this, _: &NavRight, _, cx| this.arrow(Arrow::Right, cx)))
+            .on_action(cx.listener(|this, _: &NavUp, _, cx| this.arrow(Arrow::Up, cx)))
+            .on_action(cx.listener(|this, _: &NavDown, _, cx| this.arrow(Arrow::Down, cx)))
+            .size_full()
+            .bg(t.background)
+            .text_color(t.foreground)
+            .font_family(t.font_family.clone())
+            .text_size(crate::theme::body_size(cx))
+            .line_height(gpui_kit::relative(crate::theme::LINE_HEIGHT))
+            .child(body)
     }
 }

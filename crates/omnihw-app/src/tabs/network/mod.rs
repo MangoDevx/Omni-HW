@@ -1,68 +1,106 @@
 //! Network page: every adapter Network Connections shows, with its link, addresses, Wi-Fi and
 //! driver details; changes (enable/disable, rename, IP, DNS, MTU, release/renew, driver
 //! properties, DNS flush and stack resets); and the local and internet tests. The page only
-//! reads the snapshot; changes and tests are requested here and run by `dispatch` on worker
-//! threads.
+//! reads the snapshot; its buttons ask for changes (after an editor and a confirmation dialog)
+//! and tests, which the sampler runs on worker threads.
 
 mod actions;
 
-use super::{group_box, page_title, pill};
-use crate::heat::{BLUE, GREEN, ORANGE, RED};
+use crate::app::OmniApp;
+use crate::heat::{BLUE, GREEN, ORANGE, RED, rgb8};
 use crate::sampler::{Snapshot, TestRun};
-pub use actions::dispatch;
-use actions::{
-    Editor, INTERNET_TESTS, LOCAL_TESTS, REFRESH, action_button, edit, flag, lazy_action_button,
+use crate::ui;
+use crate::ui::LineSized;
+use actions::{Editor, action_button};
+use gpui_kit::component::button::Button;
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, App, Context, Div, ElementId, Entity, InteractiveElement, IntoElement,
+    ParentElement, Rgba, SharedString, Styled, Window, div, rems,
 };
-use egui::collapsing_header::CollapsingState;
-use egui::{Color32, RichText, Ui};
 use omnihw_core::checkup::format_link_speed;
 use omnihw_core::network::{
     Adapter, INTERNET_TARGETS, IpEntry, NetAction, Status, Verdict, format_lease,
 };
-use std::time::SystemTime;
 
-pub fn show(ui: &mut Ui, snap: &Snapshot) {
-    ui.horizontal(|ui| {
-        page_title(ui, "Network");
-        if snap.net_busy {
-            ui.spinner();
-            ui.weak("Working...");
-        } else if ui
-            .small_button("Refresh")
-            .on_hover_text("Read the network adapters again")
-            .clicked()
-        {
-            flag(ui.ctx(), REFRESH);
-        }
-    });
-    let Some(n) = &snap.network else {
-        ui.horizontal(|ui| {
-            ui.spinner();
-            ui.label("Reading network adapters...");
-        });
-        return;
-    };
-    ui.weak(
-        "Details refresh every few seconds while this page is open. Changes ask for confirmation, and Windows asks for administrator permission.",
-    );
-    ui.add_space(8.0);
-    if n.adapters.is_empty() {
-        ui.label("No network adapters found.");
-    }
-    ui.add_enabled_ui(!snap.net_busy, |ui| {
-        for a in &n.adapters {
-            adapter_card(ui, a);
-        }
-    });
-    tests(ui, snap);
-    tools(ui, snap.net_busy);
+/// Neutral grey for adapters that are off or in an unknown state.
+const GRAY: Rgba = rgb8(160, 160, 160);
+
+/// Selections, dialog state and edit buffers of this page.
+#[derive(Default)]
+pub struct ViewState {
+    /// The local tests already ran by themselves this session.
+    local_auto_ran: bool,
+    /// The change being edited in the editor dialog (rename, IP, DNS, MTU). Its text fields
+    /// live in `fields` while the dialog is open.
+    editor: Option<Editor>,
+    /// The editor dialog's text fields, created the first time a dialog opens: the new name,
+    /// DNS servers or MTU use the first; the IP editor uses all three (address, mask,
+    /// gateway).
+    fields: Option<[Entity<InputState>; 3]>,
 }
 
-fn status_color(s: Status) -> Color32 {
+pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> AnyElement {
+    let snap = app.sampler.snapshot();
+    let busy = snap.net_busy;
+    let mut title = ui::row().child(ui::page_title("Network"));
+    if busy {
+        title = title
+            .child(Spinner::new().small())
+            .child(ui::weak("Working...", cx));
+    } else {
+        title = title.child(
+            Button::new("net-refresh")
+                .line_sized()
+                .caption("Refresh")
+                .tooltip("Read the network adapters again")
+                .on_click(cx.listener(|this, _, _, _| this.sampler.refresh_network())),
+        );
+    }
+    let mut page = ui::column().child(title);
+    let Some(n) = &snap.network else {
+        return page
+            .child(
+                ui::row()
+                    .child(Spinner::new().small())
+                    .child(ui::label("Reading network adapters...")),
+            )
+            .into_any_element();
+    };
+
+    // The local tests only contact the local network, so they run once by themselves the
+    // first time the page shows adapters (after this redraw, with no snapshot lock held).
+    if !app.views.network.local_auto_ran {
+        app.views.network.local_auto_ran = true;
+        cx.defer_in(window, |this, _, _| this.sampler.run_local_tests());
+    }
+
+    page = page
+        .child(ui::weak(
+            "Details refresh every few seconds while this page is open. Changes ask for confirmation, and Windows asks for administrator permission.",
+            cx,
+        ))
+        .child(ui::space(8.0));
+    if n.adapters.is_empty() {
+        page = page.child(ui::label("No network adapters found."));
+    }
+    for (i, a) in n.adapters.iter().enumerate() {
+        page = page.child(adapter_card(app, i, a, busy, cx));
+    }
+    page.child(tests(&snap, cx))
+        .child(tools(busy, cx))
+        .into_any_element()
+}
+
+fn status_color(s: Status) -> Rgba {
     match s {
         Status::Up => GREEN,
         Status::Disconnected => ORANGE,
-        Status::Disabled | Status::Unknown => Color32::GRAY,
+        Status::Disabled | Status::Unknown => GRAY,
     }
 }
 
@@ -166,334 +204,577 @@ fn rows(a: &Adapter) -> Vec<(&'static str, String)> {
     r
 }
 
-fn adapter_card(ui: &mut Ui, a: &Adapter) {
-    let title = RichText::new(&a.name).size(16.0).strong();
-    ui.group(|ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(title);
-            pill(ui, a.status.name(), status_color(a.status), true);
-            if a.apipa_only() && a.status == Status::Up {
-                pill(ui, "No DHCP address", ORANGE, true);
-            }
-        });
-        egui::Grid::new(("net_rows", &a.guid))
-            .num_columns(2)
-            .spacing([16.0, 3.0])
-            .show(ui, |ui| {
-                for (k, v) in rows(a) {
-                    ui.label(k);
-                    ui.add(egui::Label::new(RichText::new(v).strong()).wrap());
-                    ui.end_row();
-                }
-            });
-        ui.add_space(4.0);
-        changes(ui, a);
-        advanced(ui, a);
-    });
-    ui.add_space(8.0);
-}
-
-fn changes(ui: &mut Ui, a: &Adapter) {
-    let idx = a.if_index;
-    ui.horizontal_wrapped(|ui| {
-        if a.status == Status::Disabled {
-            lazy_action_button(ui, "Enable", "Turn this adapter back on", || {
-                NetAction::Enable {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                }
-            });
-        } else {
-            lazy_action_button(ui, "Disable", "Turn this adapter off", || {
-                NetAction::Disable {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                }
-            });
-        }
-        if ui.button("Rename...").clicked() {
-            edit(
-                ui.ctx(),
-                Editor::Rename {
-                    guid: a.guid.clone(),
-                    name: a.name.clone(),
-                    text: a.name.clone(),
-                },
-            );
-        }
-        if a.status == Status::Disabled || idx == 0 {
-            return;
-        }
-        if ui
-            .button("IP address...")
-            .on_hover_text("Get an IPv4 address automatically (DHCP) or set one by hand")
-            .clicked()
-        {
-            let first = a
-                .ipv4
-                .iter()
-                .find(|e| !omnihw_core::network::is_apipa(e.addr));
-            let gw = a.gateways.iter().find(|g| g.is_ipv4());
-            edit(
-                ui.ctx(),
-                Editor::Ip {
-                    if_index: idx,
-                    name: a.name.clone(),
-                    dhcp: a.dhcp_enabled,
-                    connected: a.status == Status::Up,
-                    ip: first.map(|e| e.addr.to_string()).unwrap_or_default(),
-                    mask: first
-                        .map(|e| omnihw_core::network::prefix_mask(e.prefix).to_string())
-                        .unwrap_or_else(|| "255.255.255.0".into()),
-                    gateway: gw.map(|g| g.to_string()).unwrap_or_default(),
-                },
-            );
-        }
-        if ui
-            .button("DNS...")
-            .on_hover_text("Get DNS servers automatically or choose your own")
-            .clicked()
-        {
-            let v4: Vec<String> = a
-                .dns
-                .iter()
-                .filter(|d| d.is_ipv4())
-                .map(|d| d.to_string())
-                .collect();
-            edit(
-                ui.ctx(),
-                Editor::Dns {
-                    if_index: idx,
-                    name: a.name.clone(),
-                    auto: !a.dns_static,
-                    text: v4.join(", "),
-                },
-            );
-        }
-        if ui.button("MTU...").clicked() {
-            edit(
-                ui.ctx(),
-                Editor::Mtu {
-                    if_index: idx,
-                    name: a.name.clone(),
-                    text: a.mtu.unwrap_or(1500).to_string(),
-                },
-            );
-        }
-        if a.dhcp_enabled && a.status == Status::Up {
-            lazy_action_button(
-                ui,
-                "Release",
-                "Give up the DHCP address (ipconfig /release)",
-                || NetAction::Release {
-                    if_index: idx,
-                    name: a.name.clone(),
-                },
-            );
-        }
-        if a.dhcp_enabled && a.status == Status::Up {
-            lazy_action_button(
-                ui,
-                "Renew",
-                "Ask the DHCP server for an address again (ipconfig /renew)",
-                || NetAction::Renew {
-                    if_index: idx,
-                    name: a.name.clone(),
-                },
-            );
-        }
-    });
-}
-
-fn advanced(ui: &mut Ui, a: &Adapter) {
-    if a.advanced.is_empty() {
-        return;
+/// One adapter: its name and state, its details, the change buttons and its advanced driver
+/// properties. While a change runs (`busy`) the controls are disabled.
+fn adapter_card(
+    app: &OmniApp,
+    i: usize,
+    a: &Adapter,
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> impl IntoElement {
+    let mut header = ui::row()
+        .child(ui::strong(a.name.clone()).text_size(gpui_kit::rems(1.0)))
+        .child(ui::pill(a.status.name(), status_color(a.status), true, cx));
+    if a.apipa_only() && a.status == Status::Up {
+        header = header.child(ui::pill("No DHCP address", ORANGE, true, cx));
     }
-    let id = ui.make_persistent_id(("net_advanced", &a.guid));
-    CollapsingState::load_with_default_open(ui.ctx(), id, false)
-        .show_header(ui, |ui| {
-            ui.label(
-                RichText::new(format!(
-                    "Advanced driver properties ({})",
-                    a.advanced.len()
-                ))
-                .strong(),
-            );
-        })
-        .body(|ui| {
-            ui.weak("Changing one restarts the adapter, so the connection drops for a few seconds. Values without a list can be changed in Device Manager.");
-            egui::Grid::new(("net_adv_grid", &a.guid))
-                .num_columns(2)
-                .striped(true)
-                .spacing([16.0, 3.0])
-                .show(ui, |ui| {
-                    for p in &a.advanced {
-                        ui.label(&p.display_name).on_hover_text(&p.keyword);
-                        if p.choices.is_empty() {
-                            ui.label(RichText::new(&p.display_value).strong());
-                        } else {
-                            let mut chosen: Option<(String, String)> = None;
-                            egui::ComboBox::from_id_salt(("net_adv", &a.guid, &p.keyword))
-                                .selected_text(&p.display_value)
-                                .show_ui(ui, |ui| {
-                                    for (value, display) in &p.choices {
-                                        if ui
-                                            .selectable_label(*value == p.value, display)
-                                            .clicked()
-                                            && *value != p.value
-                                        {
-                                            chosen = Some((value.clone(), display.clone()));
-                                        }
-                                    }
-                                });
-                            if let Some((value, display)) = chosen {
-                                actions::request(
-                                    ui.ctx(),
-                                    NetAction::Advanced {
-                                        guid: a.guid.clone(),
-                                        name: a.name.clone(),
-                                        keyword: p.keyword.clone(),
-                                        value,
-                                        display_name: p.display_name.clone(),
-                                        display_value: display,
-                                    },
-                                );
-                            }
-                        }
-                        ui.end_row();
-                    }
-                });
-        });
+    ui::group_box(cx)
+        .id(("net-card", i))
+        .child(header)
+        .child(ui::key_values(&rows(a)))
+        .child(ui::space(4.0))
+        .child(changes(i, a, busy, cx))
+        .children(advanced(app, i, a, busy, cx))
 }
 
-fn verdict_pill(ui: &mut Ui, v: Verdict) {
+fn changes(i: usize, a: &Adapter, busy: bool, cx: &mut Context<OmniApp>) -> Div {
+    let idx = a.if_index;
+    let mut row = ui::wrap_row();
+    row = if a.status == Status::Disabled {
+        row.child(action_button(
+            ("net-enable", i),
+            "Enable",
+            NetAction::Enable {
+                guid: a.guid.clone(),
+                name: a.name.clone(),
+            },
+            "Turn this adapter back on",
+            busy,
+            cx,
+        ))
+    } else {
+        row.child(action_button(
+            ("net-disable", i),
+            "Disable",
+            NetAction::Disable {
+                guid: a.guid.clone(),
+                name: a.name.clone(),
+            },
+            "Turn this adapter off",
+            busy,
+            cx,
+        ))
+    };
+    row = row.child(editor_button(
+        ("net-rename", i),
+        "Rename...",
+        None,
+        Editor::Rename {
+            guid: a.guid.clone(),
+            name: a.name.clone(),
+            text: a.name.clone(),
+        },
+        busy,
+        cx,
+    ));
+    if a.status == Status::Disabled || idx == 0 {
+        return row;
+    }
+    let first = a
+        .ipv4
+        .iter()
+        .find(|e| !omnihw_core::network::is_apipa(e.addr));
+    let gw = a.gateways.iter().find(|g| g.is_ipv4());
+    row = row.child(editor_button(
+        ("net-ip", i),
+        "IP address...",
+        Some("Get an IPv4 address automatically (DHCP) or set one by hand"),
+        Editor::Ip {
+            if_index: idx,
+            name: a.name.clone(),
+            dhcp: a.dhcp_enabled,
+            connected: a.status == Status::Up,
+            ip: first.map(|e| e.addr.to_string()).unwrap_or_default(),
+            mask: first
+                .map(|e| omnihw_core::network::prefix_mask(e.prefix).to_string())
+                .unwrap_or_else(|| "255.255.255.0".into()),
+            gateway: gw.map(|g| g.to_string()).unwrap_or_default(),
+        },
+        busy,
+        cx,
+    ));
+    let v4: Vec<String> = a
+        .dns
+        .iter()
+        .filter(|d| d.is_ipv4())
+        .map(|d| d.to_string())
+        .collect();
+    row = row.child(editor_button(
+        ("net-dns", i),
+        "DNS...",
+        Some("Get DNS servers automatically or choose your own"),
+        Editor::Dns {
+            if_index: idx,
+            name: a.name.clone(),
+            auto: !a.dns_static,
+            text: v4.join(", "),
+        },
+        busy,
+        cx,
+    ));
+    row = row.child(editor_button(
+        ("net-mtu", i),
+        "MTU...",
+        None,
+        Editor::Mtu {
+            if_index: idx,
+            name: a.name.clone(),
+            text: a.mtu.unwrap_or(1500).to_string(),
+        },
+        busy,
+        cx,
+    ));
+    if a.dhcp_enabled && a.status == Status::Up {
+        row = row
+            .child(action_button(
+                ("net-release", i),
+                "Release",
+                NetAction::Release {
+                    if_index: idx,
+                    name: a.name.clone(),
+                },
+                "Give up the DHCP address (ipconfig /release)",
+                busy,
+                cx,
+            ))
+            .child(action_button(
+                ("net-renew", i),
+                "Renew",
+                NetAction::Renew {
+                    if_index: idx,
+                    name: a.name.clone(),
+                },
+                "Ask the DHCP server for an address again (ipconfig /renew)",
+                busy,
+                cx,
+            ));
+    }
+    row
+}
+
+/// A button that opens the editor dialog for `editor`.
+fn editor_button(
+    id: impl Into<ElementId>,
+    text: &'static str,
+    hover: Option<&'static str>,
+    editor: Editor,
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> Button {
+    Button::new(id)
+        .line_sized()
+        .caption(text)
+        .disabled(busy)
+        .when_some(hover, |b, h| b.tooltip(h))
+        .on_click(cx.listener(move |this, _, window, cx| {
+            actions::edit(this, editor.clone(), window, cx);
+        }))
+}
+
+/// The collapsible list of advanced driver properties (closed by default); `None` when the
+/// adapter has none.
+fn advanced(
+    app: &OmniApp,
+    i: usize,
+    a: &Adapter,
+    busy: bool,
+    cx: &mut Context<OmniApp>,
+) -> Option<Div> {
+    if a.advanced.is_empty() {
+        return None;
+    }
+    let key = format!("network/advanced/{}", a.guid);
+    let open = ui::is_open(app, &key, false);
+    let mut section = ui::column().child(ui::collapse_header(
+        key,
+        ui::strong(format!("Advanced driver properties ({})", a.advanced.len())),
+        open,
+        cx,
+    ));
+    if !open {
+        return Some(section);
+    }
+    let mut cells: Vec<AnyElement> = Vec::with_capacity(a.advanced.len() * 2);
+    for (j, p) in a.advanced.iter().enumerate() {
+        cells.push(
+            ui::with_tip(
+                ("net-adv-name", j),
+                ui::label(p.display_name.clone()),
+                p.keyword.clone(),
+            )
+            .into_any_element(),
+        );
+        let id = ElementId::NamedInteger(format!("net-adv-{i}").into(), j as u64);
+        let value = if p.choices.is_empty() {
+            ui::strong(p.display_value.clone()).into_any_element()
+        } else if busy {
+            Button::new(id)
+                .line_sized()
+                .caption(p.display_value.clone())
+                .dropdown_caret(true)
+                .disabled(true)
+                .into_any_element()
+        } else {
+            let options = p
+                .choices
+                .iter()
+                .map(|(_, display)| SharedString::from(display.clone()))
+                .collect();
+            let selected = p.choices.iter().position(|(v, _)| *v == p.value);
+            let (guid, name) = (a.guid.clone(), a.name.clone());
+            let prop = p.clone();
+            ui::dropdown(
+                id,
+                p.display_value.clone(),
+                options,
+                selected,
+                cx,
+                move |_, k, window, cx| {
+                    let Some((value, display)) = prop.choices.get(k).cloned() else {
+                        return;
+                    };
+                    if value == prop.value {
+                        return;
+                    }
+                    actions::request(
+                        NetAction::Advanced {
+                            guid: guid.clone(),
+                            name: name.clone(),
+                            keyword: prop.keyword.clone(),
+                            value,
+                            display_name: prop.display_name.clone(),
+                            display_value: display,
+                        },
+                        window,
+                        cx,
+                    );
+                },
+            )
+        };
+        cells.push(value);
+    }
+    section = section.child(
+        ui::column()
+            .pl_4()
+            .child(ui::weak(
+                "Changing one restarts the adapter, so the connection drops for a few seconds. Values without a list can be changed in Device Manager.",
+                cx,
+            ))
+            .child(striped_grid(2, cells, cx)),
+    );
+    Some(section)
+}
+
+/// A grid of `cols` columns as wide as their widest cell, with every other row tinted, and no
+/// headings (a [`ui::Table`] without its heading row).
+fn striped_grid(cols: usize, cells: Vec<AnyElement>, cx: &App) -> Div {
+    let stripe = cx.theme().muted;
+    let cells = cells.into_iter().enumerate().map(move |(k, cell)| {
+        div()
+            .id(k)
+            .px_2()
+            .py_0p5()
+            .when((k / cols) % 2 == 1, |c| c.bg(stripe))
+            .child(cell)
+    });
+    ui::hug(
+        div()
+            .grid()
+            .grid_cols_max_content(cols as u16)
+            .children(cells),
+    )
+}
+
+fn verdict_pill(v: Verdict, cx: &App) -> Div {
     let (text, color) = match v {
         Verdict::Pass => ("OK", GREEN),
         Verdict::Warn => ("CHECK", ORANGE),
         Verdict::Fail => ("FAIL", RED),
         Verdict::Skip => ("-", BLUE),
     };
-    pill(ui, text, color, true);
+    ui::pill(text, color, true, cx)
 }
 
-fn ago(t: SystemTime) -> String {
-    let s = t.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-    if s < 60 {
-        "just now".into()
-    } else {
-        format!("{} min ago", s / 60)
-    }
-}
-
-fn results(ui: &mut Ui, id: &str, run: &TestRun) {
-    let Some((groups, at)) = &run.results else {
-        return;
-    };
-    ui.weak(format!("Last run {}", ago(*at)));
+/// The results of a test run, grouped under their headings; `None` before the first run.
+fn results(id: &'static str, run: &TestRun, cx: &App) -> Option<Div> {
+    let (groups, at) = run.results.as_ref()?;
+    let mut col = ui::column().child(ui::weak(format!("Last run {}", ui::ago(*at)), cx));
     if groups.is_empty() {
-        ui.label("No connected adapters to test.");
+        col = col.child(ui::label("No connected adapters to test."));
     }
     for (i, (heading, lines)) in groups.iter().enumerate() {
+        let mut group = ui::column().id((id, i));
         if !heading.is_empty() {
-            ui.label(RichText::new(heading).strong());
+            group = group.child(ui::strong(heading.clone()));
         }
-        egui::Grid::new(("net_results", id, i, heading))
-            .num_columns(3)
-            .spacing([10.0, 3.0])
-            .show(ui, |ui| {
-                for l in lines {
-                    verdict_pill(ui, l.verdict);
-                    ui.label(&l.name);
-                    ui.add(egui::Label::new(&l.detail).wrap());
-                    ui.end_row();
-                }
-            });
-        ui.add_space(4.0);
+        for (j, l) in lines.iter().enumerate() {
+            group = group.child(
+                h_flex()
+                    .id(j)
+                    .items_start()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(rems(4.5))
+                            .child(verdict_pill(l.verdict, cx)),
+                    )
+                    .child(ui::label(l.name.clone()).flex_none().w(rems(14.0)))
+                    .child(ui::label(l.detail.clone()).flex_1().min_w_0()),
+            );
+        }
+        col = col.child(group.pb_1());
     }
+    Some(col)
 }
 
-fn tests(ui: &mut Ui, snap: &Snapshot) {
-    group_box(
-        ui,
-        RichText::new("Tests").size(16.0).strong(),
-        4.0,
-        8.0,
-        |ui| {
-            ui.horizontal(|ui| {
-                let running = snap.net_local.running;
-                if ui
-                    .add_enabled(!running, egui::Button::new("Run local tests"))
-                    .clicked()
-                {
-                    flag(ui.ctx(), LOCAL_TESTS);
-                }
-                if running {
-                    ui.spinner();
-                }
-            });
-            ui.weak(
+fn tests(snap: &Snapshot, cx: &mut Context<OmniApp>) -> Div {
+    let local = snap.net_local.running;
+    let internet = snap.net_internet.running;
+    ui::group_box(cx)
+        .child(ui::strong("Tests").text_size(gpui_kit::rems(1.0)))
+        .child(
+            ui::row()
+                .child(
+                    Button::new("net-local-tests").line_sized()
+                        .caption("Run local tests")
+                        .disabled(local)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sampler.run_local_tests();
+                            cx.notify();
+                        })),
+                )
+                .when(local, |r| r.child(Spinner::new().small())),
+        )
+        .child(ui::weak(
             "Checks each connected adapter's link and address, pings its gateway and asks the DNS servers on your local network. Nothing is sent to the internet.",
-        );
-            results(ui, "local", &snap.net_local);
-            ui.separator();
-            ui.horizontal(|ui| {
-                let running = snap.net_internet.running;
-                if ui
-                    .add_enabled(!running, egui::Button::new("Run internet tests"))
-                    .clicked()
-                {
-                    flag(ui.ctx(), INTERNET_TESTS);
-                }
-                if running {
-                    ui.spinner();
-                    ui.weak("Takes about 5 seconds...");
-                }
-            });
-            ui.add(
-            egui::Label::new(
-                RichText::new(format!(
-                    "Runs only when you click. Contacts: {INTERNET_TARGETS}. Measures latency, jitter and packet loss; nothing about your PC is sent."
-                ))
-                .weak(),
-            )
-            .wrap(),
-        );
-            results(ui, "internet", &snap.net_internet);
-        },
-    );
+            cx,
+        ))
+        .children(results("local", &snap.net_local, cx))
+        .child(Separator::horizontal())
+        .child(
+            ui::row()
+                .child(
+                    Button::new("net-internet-tests").line_sized()
+                        .caption("Run internet tests")
+                        .disabled(internet)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.sampler.run_internet_tests();
+                            cx.notify();
+                        })),
+                )
+                .when(internet, |r| {
+                    r.child(Spinner::new().small())
+                        .child(ui::weak("Takes about 5 seconds...", cx))
+                }),
+        )
+        .child(ui::weak(
+            format!(
+                "Runs only when you click. Contacts: {INTERNET_TARGETS}. Measures latency, jitter and packet loss; nothing about your PC is sent."
+            ),
+            cx,
+        ))
+        .children(results("internet", &snap.net_internet, cx))
 }
 
-fn tools(ui: &mut Ui, busy: bool) {
-    group_box(
-        ui,
-        RichText::new("Repair tools").size(16.0).strong(),
-        4.0,
-        8.0,
-        |ui| {
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    action_button(
-                        ui,
-                        "Flush DNS cache",
-                        NetAction::FlushDns,
-                        "Forget cached name lookups (ipconfig /flushdns)",
-                    );
-                    action_button(
-                        ui,
-                        "Reset Winsock",
-                        NetAction::ResetWinsock,
-                        "netsh winsock reset. Restart required.",
-                    );
-                    action_button(
-                        ui,
-                        "Reset TCP/IP",
-                        NetAction::ResetTcpIp,
-                        "netsh int ip reset. Restart required.",
-                    );
-                });
-            });
-            ui.weak("The resets fix \"connected but no internet\" problems left by VPN or security software; Windows must restart afterwards.");
-        },
-    );
+fn tools(busy: bool, cx: &mut Context<OmniApp>) -> Div {
+    ui::group_box(cx)
+        .child(ui::strong("Repair tools").text_size(gpui_kit::rems(1.0)))
+        .child(
+            ui::wrap_row()
+                .child(action_button(
+                    "net-flush-dns",
+                    "Flush DNS cache",
+                    NetAction::FlushDns,
+                    "Forget cached name lookups (ipconfig /flushdns)",
+                    busy,
+                    cx,
+                ))
+                .child(action_button(
+                    "net-reset-winsock",
+                    "Reset Winsock",
+                    NetAction::ResetWinsock,
+                    "netsh winsock reset. Restart required.",
+                    busy,
+                    cx,
+                ))
+                .child(action_button(
+                    "net-reset-tcpip",
+                    "Reset TCP/IP",
+                    NetAction::ResetTcpIp,
+                    "netsh int ip reset. Restart required.",
+                    busy,
+                    cx,
+                )),
+        )
+        .child(ui::weak(
+            "The resets fix \"connected but no internet\" problems left by VPN or security software; Windows must restart afterwards.",
+            cx,
+        ))
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::Tab;
+    use crate::sampler::Snapshot;
+    use crate::settings::Settings;
+    use crate::tabs::page_tests::{assert_shows, go, machines, open, page, texts};
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AnyWindowHandle, AppContext, Entity, TestAppContext};
+    use omnihw_core::network::{
+        Adapter, AdvancedProperty, IpEntry, Media, NetworkInfo, Status, Wifi,
+    };
+
+    /// Two adapters: a connected Ethernet port with an advanced property, and a disabled
+    /// Wi-Fi card.
+    fn network() -> NetworkInfo {
+        let ip = |s: &str, prefix| IpEntry {
+            addr: s.parse().unwrap(),
+            prefix,
+            duplicate: false,
+            dhcp: true,
+            lease_secs: Some(86_400),
+        };
+        NetworkInfo {
+            adapters: vec![
+                Adapter {
+                    guid: "{11111111-2222-3333-4444-555555555555}".into(),
+                    if_index: 7,
+                    name: "Ethernet".into(),
+                    description: "Intel(R) Ethernet Controller I225-V".into(),
+                    media: Media::Ethernet,
+                    physical: true,
+                    status: Status::Up,
+                    mac: "D8-BB-C1-12-34-56".into(),
+                    speed_bps: Some(1_000_000_000),
+                    max_speed_bps: Some(2_500_000_000),
+                    mtu: Some(1500),
+                    ipv4: vec![ip("192.168.1.20", 24)],
+                    gateways: vec!["192.168.1.1".parse().unwrap()],
+                    dns: vec!["192.168.1.1".parse().unwrap()],
+                    dhcp_enabled: true,
+                    dhcp_server: Some("192.168.1.1".parse().unwrap()),
+                    advanced: vec![AdvancedProperty {
+                        keyword: "*SpeedDuplex".into(),
+                        display_name: "Speed & Duplex".into(),
+                        display_value: "Auto Negotiation".into(),
+                        value: "0".into(),
+                        choices: vec![
+                            ("0".into(), "Auto Negotiation".into()),
+                            ("6".into(), "1.0 Gbps Full Duplex".into()),
+                        ],
+                    }],
+                    ..Default::default()
+                },
+                Adapter {
+                    guid: "{66666666-7777-8888-9999-000000000000}".into(),
+                    name: "Wi-Fi".into(),
+                    description: "Intel(R) Wi-Fi 6E AX211 160MHz".into(),
+                    media: Media::WiFi,
+                    physical: true,
+                    status: Status::Disabled,
+                    mac: "AC-12-03-AB-CD-EF".into(),
+                    wifi: Some(Wifi::default()),
+                    ..Default::default()
+                },
+            ],
+            detailed: true,
+        }
+    }
+
+    /// The Network page with [`network`]'s adapters. The local tests are marked as already
+    /// run, so nothing pings anything.
+    fn network_page(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<crate::app::OmniApp>) {
+        let info = machines()[0].clone();
+        let snap = Snapshot {
+            network: Some(network()),
+            ..Default::default()
+        };
+        let (window, app) = open(cx, info, snap, Settings::default());
+        cx.update(|cx| app.update(cx, |app, _| app.views.network.local_auto_ran = true));
+        go(cx, &app, Tab::Network);
+        (window, app)
+    }
+
+    #[gpui_kit::test]
+    fn draws_without_data(cx: &mut TestAppContext) {
+        for info in machines() {
+            let shown = page(cx, &info, Snapshot::default(), Tab::Network);
+            assert_shows(&shown, &["Network", "Reading network adapters..."]);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn shows_adapters_and_tests(cx: &mut TestAppContext) {
+        let (window, app) = network_page(cx);
+        let shown = texts(cx, window);
+        assert_shows(
+            &shown,
+            &[
+                "Ethernet",
+                "Wi-Fi",
+                "Intel(R) Ethernet Controller I225-V",
+                "Connected",
+                "Disabled",
+                "192.168.1.20/24",
+                "On (server 192.168.1.1)",
+                "adapter supports",
+                "Advanced driver properties (1)",
+                "Run local tests",
+                "Run internet tests",
+                "Flush DNS cache",
+                "Rename...",
+                "Enable",
+                "Disable",
+            ],
+        );
+        // Closed by default.
+        assert!(!shown.iter().any(|t| t == "Speed & Duplex"));
+        // Nothing was started.
+        let snap_idle = cx.read(|cx| {
+            let snap = app.read(cx).sampler.snapshot();
+            !snap.net_local.running && !snap.net_internet.running && !snap.lan.running
+        });
+        assert!(snap_idle);
+    }
+
+    #[gpui_kit::test]
+    fn advanced_properties_expand(cx: &mut TestAppContext) {
+        let (window, _app) = network_page(cx);
+        texts(cx, window);
+        cx.update_window(window, |_, window, cx| {
+            window.click(
+                gpui_kit::ElementId::Name(
+                    "network/advanced/{11111111-2222-3333-4444-555555555555}".into(),
+                ),
+                cx,
+            );
+        })
+        .unwrap();
+        assert_shows(
+            &texts(cx, window),
+            &["Speed & Duplex", "Auto Negotiation", "Device Manager"],
+        );
+    }
+
+    #[gpui_kit::test]
+    fn rename_dialog_opens_and_cancels(cx: &mut TestAppContext) {
+        let (window, app) = network_page(cx);
+        texts(cx, window);
+        cx.update_window(window, |_, window, cx| {
+            window.click(("net-rename", 0usize), cx)
+        })
+        .unwrap();
+        assert_shows(&texts(cx, window), &["Rename \"Ethernet\"", "New name"]);
+        assert!(cx.read(|cx| app.read(cx).views.network.editor.is_some()));
+        cx.update_window(window, |_, window, cx| {
+            window.click("net-editor-cancel", cx)
+        })
+        .unwrap();
+        texts(cx, window);
+        assert!(cx.read(|cx| app.read(cx).views.network.editor.is_none()));
+        // Nothing was changed.
+        assert!(cx.read(|cx| !app.read(cx).sampler.snapshot().net_busy));
+    }
 }

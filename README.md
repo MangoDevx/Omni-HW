@@ -108,7 +108,7 @@ The app lands in `target\release\omnihw.exe`. Run the tests with `cargo test --w
 crates/
   omnihw-core/   hardware detection, sensors, Health Check, recording & analysis
                  (zero external dependencies, thoroughly unit-tested)
-  omnihw-app/    the desktop app (egui/eframe)
+  omnihw-app/    the desktop app (gpui)
 Assets/Brand/    logo, app icon and screenshots
 ```
 

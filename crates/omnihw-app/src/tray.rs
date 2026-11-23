@@ -17,11 +17,11 @@ mod imp {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
-        DispatchMessageW, GetCursorPos, GetMessageW, IDI_APPLICATION, LoadIconW, MF_STRING, MSG,
-        PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SW_HIDE,
-        SW_RESTORE, SendMessageW, SetForegroundWindow, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-        TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE,
-        WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
+        DispatchMessageW, GetCursorPos, GetMessageW, IDI_APPLICATION, IsIconic, LoadIconW,
+        MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW,
+        SW_HIDE, SW_RESTORE, SendMessageW, SetForegroundWindow, ShowWindow, TPM_RETURNCMD,
+        TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP,
+        WM_CLOSE, WM_COMMAND, WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONDBLCLK, WM_LBUTTONUP, WM_NULL,
         WM_RBUTTONUP, WNDCLASSEXW,
     };
     use windows::core::{PCWSTR, w};
@@ -40,7 +40,7 @@ mod imp {
 
     /// The hidden tray window (0 until the thread has created it).
     static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
-    /// The eframe main window.
+    /// The main window.
     static MAIN_HWND: AtomicIsize = AtomicIsize::new(0);
     /// Whether the icon should be visible regardless of balloons.
     static ICON_WANTED: AtomicBool = AtomicBool::new(false);
@@ -48,7 +48,7 @@ mod imp {
     static ICON_ADDED: AtomicBool = AtomicBool::new(false);
     static TASKBAR_CREATED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     static PENDING_BALLOON: Mutex<Option<(String, String)>> = Mutex::new(None);
-    static CTX: OnceLock<egui::Context> = OnceLock::new();
+    static CTX: OnceLock<crate::repaint::Repaint> = OnceLock::new();
     static STARTED: OnceLock<()> = OnceLock::new();
 
     /// HWNDs cross threads as `isize` (the crate's `HWND` wraps a raw pointer, so it isn't `Send`).
@@ -273,7 +273,7 @@ mod imp {
 
     /// Start the tray thread (once). The icon appears only if [`set_icon_visible`] or
     /// [`balloon`] asks for it.
-    pub fn start(ctx: egui::Context) {
+    pub fn start(ctx: crate::repaint::Repaint) {
         let _ = CTX.set(ctx);
         STARTED.get_or_init(|| {
             let _ = std::thread::Builder::new()
@@ -317,6 +317,13 @@ mod imp {
         // Otherwise the thread shows it as soon as its window exists.
     }
 
+    /// Whether the main window is minimized (to the taskbar).
+    pub fn main_window_minimized() -> bool {
+        let main = MAIN_HWND.load(Ordering::Relaxed);
+        // SAFETY: plain query on the app's main window.
+        main != 0 && unsafe { IsIconic(hwnd(main)) }.as_bool()
+    }
+
     /// Hide the main window (minimized to the tray).
     pub fn hide_main_window() {
         let main = MAIN_HWND.load(Ordering::Relaxed);
@@ -338,12 +345,18 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn start(_ctx: egui::Context) {}
+    pub fn start(_ctx: crate::repaint::Repaint) {}
     pub fn set_main_window(_hwnd: isize) {}
     pub fn set_icon_visible(_on: bool) {}
     pub fn balloon(_title: &str, _message: &str) {}
+    pub fn main_window_minimized() -> bool {
+        false
+    }
     pub fn hide_main_window() {}
     pub fn shutdown() {}
 }
 
-pub use imp::{balloon, hide_main_window, set_icon_visible, set_main_window, shutdown, start};
+pub use imp::{
+    balloon, hide_main_window, main_window_minimized, set_icon_visible, set_main_window, shutdown,
+    start,
+};

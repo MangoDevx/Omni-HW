@@ -2,6 +2,7 @@
 //! backends on an interval and asks the UI to repaint after each sample.
 
 use crate::notify::Notifier;
+use crate::repaint::Repaint;
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{self, AlertEvent, AlertRule, Alerts};
 use omnihw_core::disktest::{self, DiskTestResult};
@@ -231,14 +232,14 @@ fn load_alert_rules() -> Vec<AlertRule> {
 
 pub struct Sampler {
     shared: Arc<Shared>,
-    ctx: egui::Context,
+    ctx: Repaint,
     /// Dropping this wakes and stops the thread.
     _stop: mpsc::Sender<()>,
 }
 
 impl Sampler {
     /// `use_pawnio`: read the extra sensors from the sensor service if it is set up.
-    pub fn start(ctx: egui::Context, use_pawnio: bool) -> Self {
+    pub fn start(ctx: Repaint, use_pawnio: bool) -> Self {
         let shared = Arc::new(Shared::new(
             use_pawnio,
             Snapshot {
@@ -268,7 +269,7 @@ impl Sampler {
         let _ = shared.info.set(info);
         Sampler {
             shared,
-            ctx: egui::Context::default(),
+            ctx: Repaint::detached(),
             _stop: mpsc::channel().0,
         }
     }
@@ -847,7 +848,7 @@ fn service_pending(shared: &Shared) -> bool {
         )
 }
 
-fn run(shared: Arc<Shared>, ctx: egui::Context, stop: mpsc::Receiver<()>) {
+fn run(shared: Arc<Shared>, ctx: Repaint, stop: mpsc::Receiver<()>) {
     let info = shared.info.get_or_init(SystemInfo::gather);
     ctx.request_repaint();
 
@@ -1038,7 +1039,7 @@ struct NetworkReads {
 
 /// Re-read network adapters outside the snapshot lock: addresses, link and Wi-Fi every few
 /// seconds while the Network page is open (every minute otherwise), WMI details less often.
-fn update_network(shared: &Arc<Shared>, ctx: &egui::Context, last: &mut NetworkReads) {
+fn update_network(shared: &Arc<Shared>, ctx: &Repaint, last: &mut NetworkReads) {
     if shared.network_reading.load(Ordering::Acquire) {
         return;
     }

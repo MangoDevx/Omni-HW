@@ -1,21 +1,33 @@
 //! Bottleneck view: was a recorded session limited by the GPU, the CPU, or neither?
 
-use super::compare::{CompareState, pick_single};
-use super::recording::{ChartArea, chart_area, draw_axes, series_points};
-use crate::heat::{ORANGE, RED};
+use super::compare::{CompareState, pick_single, single_picker};
+use super::recording::{
+    BOTTLENECK_CHARTS, Chart, ChartHover, Line, PLOT_LEFT, PLOT_RIGHT, Snap, axis_labels,
+    chart_element, series_points,
+};
+use crate::app::OmniApp;
+use crate::heat::{self, ORANGE, RED, rgb8};
 use crate::sampler::Snapshot;
-use egui::{Align2, Color32, FontId, Rect, RichText, Sense, Stroke, Ui, pos2, vec2};
+use crate::ui;
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::{
+    AnyElement, Bounds, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
+    Rgba, Styled, canvas, div, fill, point, px, relative, rems, size,
+};
 use omnihw_core::bottleneck::{self, Analysis, Limit, Verdict};
 use omnihw_core::gpu::GpuAdapter;
 use omnihw_core::recording::{Recording, format_elapsed};
 use omnihw_core::sensors::Unit;
+use std::rc::Rc;
 
-const GPU_COLOR: Color32 = Color32::from_rgb(38, 166, 154);
-const CPU_COLOR: Color32 = crate::heat::BLUE;
-const NONE_COLOR: Color32 = Color32::from_rgb(140, 140, 140);
-const IDLE_COLOR: Color32 = Color32::from_rgb(70, 70, 70);
+const GPU_COLOR: Rgba = rgb8(38, 166, 154);
+const CPU_COLOR: Rgba = heat::BLUE;
+const NONE_COLOR: Rgba = rgb8(140, 140, 140);
+const IDLE_COLOR: Rgba = rgb8(70, 70, 70);
 
-fn limit_color(l: Limit) -> Color32 {
+fn limit_color(l: Limit) -> Rgba {
     match l {
         Limit::GpuBound => GPU_COLOR,
         Limit::CpuBound => CPU_COLOR,
@@ -24,7 +36,7 @@ fn limit_color(l: Limit) -> Color32 {
     }
 }
 
-fn verdict_color(v: Verdict) -> Color32 {
+fn verdict_color(v: Verdict) -> Rgba {
     match v {
         Verdict::GpuBound => GPU_COLOR,
         Verdict::CpuBound => CPU_COLOR,
@@ -34,7 +46,7 @@ fn verdict_color(v: Verdict) -> Color32 {
 }
 
 /// The analysis of the recording last shown, so it's redone only when the recording changes
-/// (another pick, or a new sample in the live one) instead of on every frame.
+/// (another pick, or a new sample in the live one) instead of on every redraw.
 #[derive(Default)]
 pub struct AnalysisCache {
     /// (recording name, start time bits, sample count) the result is for.
@@ -68,172 +80,201 @@ impl AnalysisCache {
     }
 }
 
-pub fn show(
-    ui: &mut Ui,
+/// The view: the recording picker, then the analysis of the picked recording. The recording
+/// to analyze defaults to the in-memory one, else the newest saved one (see
+/// [`CompareState::default_single`]).
+pub(super) fn show(
     snap: &Snapshot,
     st: &mut CompareState,
     cache: &mut AnalysisCache,
+    charts: &ChartHover,
     gpus: &[GpuAdapter],
-) {
-    let picked = pick_single(ui, snap, st);
-    ui.add_space(4.0);
-    let (rec, name) = match picked {
+    buckets: usize,
+    cx: &mut Context<OmniApp>,
+) -> AnyElement {
+    let page = v_flex()
+        .flex_1()
+        .min_h_0()
+        .w_full()
+        .gap_1()
+        .child(single_picker(snap, st, cx))
+        .child(ui::space(4.0));
+    let (rec, name) = match pick_single(snap, st) {
         Ok(Some(r)) => r,
         Ok(None) => {
-            ui.weak("Record a gaming session (Record button), then analyze it here to see whether the CPU or the GPU limited your frame rate.");
-            return;
+            return page
+                .child(ui::weak("Record a gaming session (Record button), then analyze it here to see whether the CPU or the GPU limited your frame rate.", cx))
+                .into_any_element();
         }
         Err(e) => {
-            ui.colored_label(
-                crate::heat::ink(ui.visuals(), RED),
-                format!("Could not load {e}"),
-            );
-            return;
+            return page
+                .child(ui::colored(format!("Could not load {e}"), RED, cx))
+                .into_any_element();
         }
     };
     let a = match cache.get(rec, &name, gpus) {
         Ok(a) => a,
         Err(e) => {
-            ui.colored_label(crate::heat::ink(ui.visuals(), ORANGE), e);
-            return;
+            return page
+                .child(ui::colored(e.clone(), ORANGE, cx))
+                .into_any_element();
         }
     };
-
-    egui::ScrollArea::vertical()
-        .id_salt("bottleneck")
-        .auto_shrink(false)
-        .show(ui, |ui| body(ui, rec, &name, a));
+    page.child(
+        body(rec, &name, a, charts, buckets, cx)
+            .id("bottleneck")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scrollbar(),
+    )
+    .into_any_element()
 }
 
-fn body(ui: &mut Ui, rec: &Recording, name: &str, a: &Analysis) {
-    ui.label(
-        RichText::new(a.headline())
-            .size(24.0)
-            .strong()
-            .color(verdict_color(a.verdict)),
-    );
-    ui.weak(format!(
-        "{name}  ·  {}  ·  {} active samples, {} idle  ·  GPU: {}",
-        format_elapsed(rec.duration_secs()),
-        a.active,
-        a.idle,
-        a.columns.gpu_name
-    ));
-    ui.add_space(8.0);
-    share_bar(ui, a);
-    ui.add_space(10.0);
-
-    ui.label(RichText::new("GPU load and busiest CPU thread").strong());
-    load_chart(ui, rec, a);
-    timeline_strip(ui, rec, a);
-    legend(ui);
-    ui.add_space(10.0);
-
-    ui.label(RichText::new("What this means").strong());
-    ui.add(egui::Label::new(a.explanation()).wrap());
+fn body(
+    rec: &Recording,
+    name: &str,
+    a: &Analysis,
+    charts: &ChartHover,
+    buckets: usize,
+    cx: &mut Context<OmniApp>,
+) -> Div {
+    let mut col = ui::column()
+        .child(
+            ui::label(a.headline())
+                .text_2xl()
+                .text_color(verdict_color(a.verdict)),
+        )
+        .child(ui::weak(
+            format!(
+                "{name}  ·  {}  ·  {} active samples, {} idle  ·  GPU: {}",
+                format_elapsed(rec.duration_secs()),
+                a.active,
+                a.idle,
+                a.columns.gpu_name
+            ),
+            cx,
+        ))
+        .child(ui::space(8.0))
+        .child(share_bar(a, cx))
+        .child(ui::space(10.0))
+        .child(ui::strong("GPU load and busiest CPU thread"))
+        .child(load_chart(rec, a, charts, buckets, cx))
+        .child(timeline_strip(rec, a, cx))
+        .child(legend())
+        .child(ui::space(10.0))
+        .child(ui::strong("What this means"))
+        .child(ui::label(a.explanation()));
     if !a.factors.is_empty() {
-        ui.add_space(6.0);
-        ui.label(RichText::new("Contributing factors").strong());
-        for f in &a.factors {
-            bullet(ui, f, Some(ORANGE));
+        col = col
+            .child(ui::space(6.0))
+            .child(ui::strong("Contributing factors"));
+        for (i, f) in a.factors.iter().enumerate() {
+            col = col.child(bullet(("factor", i), f, Some(ORANGE)));
         }
     }
-    ui.add_space(6.0);
-    ui.label(RichText::new("Tips").strong());
-    for t in a.tips() {
-        bullet(ui, &t, None);
+    col = col.child(ui::space(6.0)).child(ui::strong("Tips"));
+    for (i, t) in a.tips().iter().enumerate() {
+        col = col.child(bullet(("tip", i), t, None));
     }
     if !a.caveats.is_empty() {
-        ui.add_space(6.0);
-        ui.label(RichText::new("Notes").strong());
-        for c in &a.caveats {
-            bullet(ui, c, None);
+        col = col.child(ui::space(6.0)).child(ui::strong("Notes"));
+        for (i, c) in a.caveats.iter().enumerate() {
+            col = col.child(bullet(("note", i), c, None));
         }
     }
-    ui.add_space(6.0);
-    ui.weak(format!(
-        "How it's judged: GPU-bound when GPU load is at least {:.0} %; CPU-bound when GPU load is under {:.0} % while one CPU thread is at least {:.0} % busy (or total CPU at least {:.0} %); otherwise not limited by either. Samples with GPU and CPU below {:.0} % count as idle.",
-        bottleneck::GPU_BOUND,
-        bottleneck::GPU_HEADROOM,
-        bottleneck::THREAD_BUSY,
-        bottleneck::CPU_TOTAL_BUSY,
-        bottleneck::IDLE
-    ));
+    col.child(ui::space(6.0)).child(ui::weak(
+        format!(
+            "How it's judged: GPU-bound when GPU load is at least {:.0} %; CPU-bound when GPU load is under {:.0} % while one CPU thread is at least {:.0} % busy (or total CPU at least {:.0} %); otherwise not limited by either. Samples with GPU and CPU below {:.0} % count as idle.",
+            bottleneck::GPU_BOUND,
+            bottleneck::GPU_HEADROOM,
+            bottleneck::THREAD_BUSY,
+            bottleneck::CPU_TOTAL_BUSY,
+            bottleneck::IDLE
+        ),
+        cx,
+    ))
 }
 
-fn bullet(ui: &mut Ui, text: &str, color: Option<Color32>) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label("•");
-        let t = RichText::new(text);
-        ui.add(
-            egui::Label::new(match color {
-                Some(c) => t.color(c),
-                None => t,
-            })
-            .wrap(),
-        );
-    });
+/// A bulleted line that wraps under its own text. `id` must be unique on the page.
+fn bullet(id: impl Into<ElementId>, text: &str, color: Option<Rgba>) -> impl IntoElement {
+    let text = ui::label(text.to_string()).flex_1().min_w_0();
+    h_flex()
+        .id(id)
+        .items_start()
+        .gap_1()
+        .child(ui::label("•"))
+        .child(match color {
+            Some(c) => text.text_color(c),
+            None => text,
+        })
 }
 
-/// Stacked bar of GPU-bound / CPU-bound / not-limited shares of active time.
-fn share_bar(ui: &mut Ui, a: &Analysis) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::hover());
-    let p = ui.painter_at(rect);
-    p.rect_filled(rect, 4, ui.visuals().extreme_bg_color);
+/// Stacked bar of GPU-bound / CPU-bound / not-limited shares of active time. A segment shows
+/// its name and share when it is wide enough to hold them.
+fn share_bar(a: &Analysis, cx: &mut Context<OmniApp>) -> Div {
     let (g, c, n) = a.percentages();
-    let mut x = rect.left();
-    for (pct, color, label) in [
+    let segments = [
         (g, GPU_COLOR, "GPU-bound"),
         (c, CPU_COLOR, "CPU-bound"),
         (n, NONE_COLOR, "Neither"),
-    ] {
-        let w = rect.width() * (pct / 100.0) as f32;
-        if w <= 0.0 {
-            continue;
-        }
-        let seg = Rect::from_min_max(pos2(x, rect.top()), pos2(x + w, rect.bottom()));
-        p.rect_filled(seg, 0, color);
-        let text = format!("{label} {pct:.0} %");
-        if w > 90.0 {
-            p.text(
-                seg.center(),
-                Align2::CENTER_CENTER,
-                text,
-                FontId::proportional(12.0),
-                crate::heat::text_on(color),
-            );
-        }
-        x += w;
-    }
+    ]
+    .into_iter()
+    .filter(|(pct, _, _)| *pct > 0.0)
+    .map(|(pct, color, label)| {
+        h_flex()
+            .flex_none()
+            .h_full()
+            .w(relative((pct / 100.0) as f32))
+            .justify_center()
+            .overflow_hidden()
+            .bg(color)
+            .text_size(crate::ui::small_size())
+            .when(pct >= 12.0, |s| {
+                s.child(
+                    ui::label(format!("{label} {pct:.0} %"))
+                        .whitespace_nowrap()
+                        .text_color(heat::text_on(color)),
+                )
+            })
+    });
+    h_flex()
+        .w_full()
+        .h(rems(1.5))
+        .rounded(px(4.0))
+        .overflow_hidden()
+        .bg(cx.theme().muted)
+        .children(segments)
 }
 
-fn load_chart(ui: &mut Ui, rec: &Recording, a: &Analysis) {
-    let area = chart_area(ui);
+fn load_chart(
+    rec: &Recording,
+    a: &Analysis,
+    charts: &ChartHover,
+    buckets: usize,
+    cx: &mut Context<OmniApp>,
+) -> AnyElement {
+    let key = BOTTLENECK_CHARTS;
     let dur = rec.duration_secs().max(1e-6);
-    draw_axes(&area, 0.0, 100.0, dur, Unit::Percent);
-    let ChartArea {
-        plot,
-        painter: p,
-        resp,
-        weak,
-    } = area;
-    let x_of = |t: f64| plot.left() + plot.width() * (t / dur) as f32;
-    let y_of = |v: f64| plot.bottom() - plot.height() * (v / 100.0) as f32;
-    let buckets = plot.width() as usize;
+    let (y_labels, x_labels) = axis_labels(0.0, 100.0, dur, Unit::Percent);
+    let x_of = |t: f64| (t / dur) as f32;
+    let y_of = |v: f64| (v / 100.0) as f32;
     let gpu = &rec.values[a.columns.gpu_load];
-    for (vals, color) in [(gpu, GPU_COLOR), (&a.busiest_thread, CPU_COLOR)] {
-        let pts = series_points(&rec.times, vals, buckets, x_of, y_of);
-        if pts.len() >= 2 {
-            p.line(pts, Stroke::new(1.6, color));
-        }
-    }
-    if let Some(pos) = resp.hover_pos().filter(|p| plot.x_range().contains(p.x)) {
-        let t = ((pos.x - plot.left()) / plot.width()) as f64 * dur;
-        let i = rec.times.partition_point(|&x| x < t).min(rec.len() - 1);
-        p.line_segment(
-            [pos2(pos.x, plot.top()), pos2(pos.x, plot.bottom())],
-            Stroke::new(1.0, weak),
-        );
+    let lines = [(gpu, GPU_COLOR), (&a.busiest_thread, CPU_COLOR)]
+        .into_iter()
+        .map(|(vals, color)| Line {
+            pts: series_points(&rec.times, vals, buckets, x_of, y_of),
+            color,
+            width: 1.6,
+            dashed: false,
+        })
+        .collect();
+    let mut cursor = None;
+    let mut readout = Vec::new();
+    if let Some(h) = charts.hovered(key)
+        && !rec.is_empty()
+    {
+        let i = h.at.min(rec.len() - 1);
+        cursor = Some(h.frac);
         let fmt = |v: f32| {
             if v.is_finite() {
                 format!("{v:.0} %")
@@ -241,50 +282,49 @@ fn load_chart(ui: &mut Ui, rec: &Recording, a: &Analysis) {
                 "-".into()
             }
         };
-        resp.on_hover_ui_at_pointer(|ui| {
-            ui.strong(format_elapsed(rec.times[i]));
-            ui.colored_label(
-                crate::heat::ink(ui.visuals(), GPU_COLOR),
-                format!("GPU load: {}", fmt(gpu[i])),
-            );
-            ui.colored_label(
-                crate::heat::ink(ui.visuals(), CPU_COLOR),
-                format!("Busiest CPU thread: {}", fmt(a.busiest_thread[i])),
-            );
-            if let Some(Some(l)) = a.timeline.get(i) {
-                ui.label(match l {
-                    Limit::GpuBound => "GPU-bound",
-                    Limit::CpuBound => "CPU-bound",
-                    Limit::NotLimited => "Not limited by CPU or GPU",
-                    Limit::Idle => "Idle",
-                });
-            }
-        });
+        readout.push((format_elapsed(rec.times[i]), None));
+        readout.push((format!("GPU load: {}", fmt(gpu[i])), Some(GPU_COLOR)));
+        readout.push((
+            format!("Busiest CPU thread: {}", fmt(a.busiest_thread[i])),
+            Some(CPU_COLOR),
+        ));
+        if let Some(Some(l)) = a.timeline.get(i) {
+            let text = match l {
+                Limit::GpuBound => "GPU-bound",
+                Limit::CpuBound => "CPU-bound",
+                Limit::NotLimited => "Not limited by CPU or GPU",
+                Limit::Idle => "Idle",
+            };
+            readout.push((text.to_string(), Some(cx.theme().foreground.into())));
+        }
     }
+    chart_element(
+        Chart {
+            key,
+            lines,
+            y_labels,
+            x_labels,
+            snap: Snap::Samples {
+                times: Rc::new(rec.times.clone()),
+                dur,
+            },
+            cursor,
+            readout,
+        },
+        charts,
+        cx,
+    )
 }
 
 /// Per-sample class as a colored strip, aligned with the chart's plot area above.
-fn timeline_strip(ui: &mut Ui, rec: &Recording, a: &Analysis) {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 16.0), Sense::hover());
-    // Same horizontal insets as `chart_area`'s plot rect.
-    let strip = Rect::from_min_max(
-        pos2(rect.left() + 64.0, rect.top() + 2.0),
-        pos2(rect.right() - 8.0, rect.bottom() - 2.0),
-    );
-    let p = ui.painter_at(rect);
-    p.rect_filled(strip, 2, ui.visuals().extreme_bg_color);
-    p.text(
-        pos2(strip.left() - 6.0, strip.center().y),
-        Align2::RIGHT_CENTER,
-        "Limit",
-        FontId::proportional(10.0),
-        ui.visuals().weak_text_color(),
-    );
+fn timeline_strip(rec: &Recording, a: &Analysis, cx: &mut Context<OmniApp>) -> Div {
     let dur = rec.duration_secs().max(1e-6);
-    let x_of = |t: f64| strip.left() + strip.width() * (t / dur) as f32;
+    let x_of = |t: f64| (t / dur) as f32;
     let n = rec.len();
+    // Merge runs of the same class into one rectangle: (start, end, colour) as fractions of
+    // the strip width.
+    let mut runs: Vec<(f32, f32, Rgba)> = Vec::new();
     let mut i = 0;
-    // Merge runs of the same class into one rectangle.
     while i < n {
         let class = a.timeline[i];
         let mut j = i + 1;
@@ -293,37 +333,74 @@ fn timeline_strip(ui: &mut Ui, rec: &Recording, a: &Analysis) {
         }
         if let Some(l) = class {
             let x0 = x_of(rec.times[i]);
-            let x1 = if j < n {
-                x_of(rec.times[j])
-            } else {
-                strip.right()
-            };
-            p.rect_filled(
-                Rect::from_min_max(
-                    pos2(x0, strip.top()),
-                    pos2(x1.max(x0 + 1.0), strip.bottom()),
-                ),
-                0,
-                limit_color(l),
-            );
+            let x1 = if j < n { x_of(rec.times[j]) } else { 1.0 };
+            runs.push((x0, x1, limit_color(l)));
         }
         i = j;
     }
+    let bg = cx.theme().muted;
+    let strip = canvas(
+        |_, _, _| {},
+        move |b, (), window, _| {
+            window.paint_quad(fill(b, bg));
+            let w = b.size.width;
+            for (x0, x1, color) in runs {
+                let left = b.left() + w * x0;
+                let right = (b.left() + w * x1).max(left + px(1.0));
+                window.paint_quad(fill(
+                    Bounds {
+                        origin: point(left, b.top()),
+                        size: size(right - left, b.size.height),
+                    },
+                    color,
+                ));
+            }
+        },
+    )
+    .absolute()
+    .left(rems(PLOT_LEFT))
+    .right(rems(PLOT_RIGHT))
+    .top(px(2.0))
+    .bottom(px(2.0));
+    div()
+        .relative()
+        .flex_none()
+        .w_full()
+        .h(rems(1.0))
+        .child(
+            h_flex()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(rems(PLOT_LEFT - 0.375))
+                .justify_end()
+                .child(ui::small_weak("Limit", cx)),
+        )
+        .child(strip)
 }
 
-fn legend(ui: &mut Ui) {
-    ui.horizontal_wrapped(|ui| {
-        ui.add_space(64.0);
-        for (color, label) in [
+fn legend() -> Div {
+    ui::wrap_row().pl(rems(PLOT_LEFT)).children(
+        [
             (GPU_COLOR, "GPU-bound / GPU load"),
             (CPU_COLOR, "CPU-bound / busiest thread"),
             (NONE_COLOR, "Neither (frame cap, V-Sync)"),
             (IDLE_COLOR, "Idle"),
-        ] {
-            let (r, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
-            ui.painter().rect_filled(r, 2, color);
-            ui.label(RichText::new(label).small());
-            ui.add_space(8.0);
-        }
-    });
+        ]
+        .into_iter()
+        .map(|(color, label)| {
+            h_flex()
+                .gap_1()
+                .mr_2()
+                .child(
+                    div()
+                        .flex_none()
+                        .size(rems(0.625))
+                        .rounded(px(2.0))
+                        .bg(color),
+                )
+                .child(ui::label(label).text_size(crate::ui::small_size()))
+        }),
+    )
 }
