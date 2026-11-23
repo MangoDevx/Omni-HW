@@ -2,7 +2,7 @@
 
 User-visible changes in each Omni-HW release. The release workflow publishes the section for the tagged version as the GitHub release notes, which the in-app **What's new** button opens.
 
-## Unreleased
+## 1.0.0
 
 ### Improved
 - The interface is rebuilt on a new toolkit (gpui) with the same look, fonts and colours: sharper text, native-style menus and dialogs, and the window only redraws when something changes.
