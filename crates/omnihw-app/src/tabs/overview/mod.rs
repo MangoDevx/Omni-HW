@@ -10,7 +10,7 @@ use gpui_kit::component::separator::Separator;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, Context, Div, FontWeight, InteractiveElement, IntoElement, ParentElement, Rgba,
+    AnyElement, Context, Div, InteractiveElement, IntoElement, ParentElement, Rgba,
     StatefulInteractiveElement, Styled, Window, div, px, rems,
 };
 use omnihw_core::gpu::{GpuAdapter, ReBar};
@@ -684,7 +684,7 @@ fn rebar_line(g: &GpuAdapter, cx: &mut Context<OmniApp>) -> Div {
         ReBar::Unknown => (None, "Only available for NVIDIA GPUs so far.".to_string()),
     };
     let value = match color {
-        Some(c) => ui::colored(rebar.label(), c, cx).font_weight(FontWeight::SEMIBOLD),
+        Some(c) => ui::colored(rebar.label(), c, cx),
         None => ui::weak(rebar.label(), cx),
     };
     ui::row()
@@ -705,10 +705,7 @@ fn health_banner(
     ui::wrap_row()
         .child(
             link("health-banner")
-                .child(
-                    ui::colored(format!("Health Check: {text}"), color, cx)
-                        .font_weight(FontWeight::SEMIBOLD),
-                )
+                .child(ui::colored(format!("Health Check: {text}"), color, cx))
                 .tooltip(ui::tip("Open the Health Check tab"))
                 .on_click(open()),
         )
@@ -724,7 +721,7 @@ fn health_banner(
         }))
         .child(
             link("health-banner-arrow")
-                .child(ui::colored("›", color, cx).font_weight(FontWeight::SEMIBOLD))
+                .child(ui::colored("›", color, cx))
                 .on_click(open()),
         )
 }

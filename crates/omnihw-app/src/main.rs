@@ -55,6 +55,7 @@ fn main() {
         .with_assets(gpui_kit::assets::Assets)
         .run(|cx| {
             gpui_kit::init(cx);
+            theme::load_fonts(cx);
             app::bind_keys(cx);
             let [width, height] = initial_size();
             let bounds = Bounds::centered(None, size(px(width), px(height)), cx);

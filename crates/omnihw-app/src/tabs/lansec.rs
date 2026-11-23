@@ -8,6 +8,7 @@ use crate::app::{OmniApp, Tab};
 use crate::heat::{BLUE, GREEN, ORANGE, RED, rgb8};
 use crate::sampler::Snapshot;
 use crate::ui;
+use crate::ui::LineSized;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::link::Link;
 use gpui_kit::component::progress::Progress;
@@ -15,8 +16,8 @@ use gpui_kit::component::separator::Separator;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, h_flex};
 use gpui_kit::{
-    AnyElement, App, Context, Div, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Rgba, Styled, Window, rems,
+    AnyElement, App, Context, Div, InteractiveElement, IntoElement, ParentElement, Rgba, Styled,
+    Window, rems,
 };
 use omnihw_core::lansec::{Finding, Host, LanScan, Phase, Risk, Severity, SubnetScan};
 use std::time::Duration;
@@ -61,8 +62,9 @@ pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) 
     } else {
         controls = controls.child(
             Button::new("lan-scan")
+                .line_sized()
                 .primary()
-                .label("Scan my network")
+                .caption("Scan my network")
                 .disabled(!scannable)
                 .tooltip(if scannable {
                     "Discover devices and probe common ports on your local subnet"
@@ -149,7 +151,7 @@ fn ratio(done: u32, total: u32) -> f32 {
 /// A group box with a large bold title.
 #[track_caller]
 fn titled_box(title: impl Into<gpui_kit::SharedString>, cx: &App) -> Div {
-    ui::group_box(cx).child(ui::strong(title).text_lg())
+    ui::group_box(cx).child(ui::strong(title).text_size(gpui_kit::rems(1.0)))
 }
 
 fn summary(scan: &LanScan, cx: &App) -> Div {
@@ -259,8 +261,7 @@ fn host_row(
     let key = format!("lansec/host/{cidr}/{}", host.ip);
     let open = ui::is_open(app, &key, false);
     let open_ports = host.ports.len();
-    let mut title =
-        ui::row().child(ui::mono(host.ip.to_string(), cx).font_weight(FontWeight::SEMIBOLD));
+    let mut title = ui::row().child(ui::mono(host.ip.to_string(), cx));
     if host.is_gateway {
         title = title.child(ui::pill("Router", GREEN, true, cx));
     }

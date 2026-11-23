@@ -5,6 +5,7 @@
 //! (a font Windows ships; if it is missing the system UI font is used). Nothing is downloaded.
 
 use crate::heat::rgb8;
+use crate::theme::Palette;
 use gpui_kit::component::Theme;
 use gpui_kit::{Hsla, Rgba, px};
 
@@ -49,8 +50,29 @@ pub const ERROR: Rgba = rgb8(190, 0, 0);
 
 /// Font the Retro theme uses.
 pub const FONT: &str = "Tahoma";
-/// Retro body text size at 100 % UI scale, in points.
-pub const FONT_SIZE: f32 = 13.0;
+
+/// The Retro colours pages draw with (see [`crate::theme::Palette`]).
+pub const PALETTE: Palette = Palette {
+    dark: false,
+    panel: FACE,
+    sidebar: SIDEBAR,
+    extreme: FIELD,
+    faint: FAINT,
+    stroke: SHADOW,
+    text: TEXT,
+    strong: STRONG_TEXT,
+    weak: WEAK_TEXT,
+    widget: FACE,
+    widget_text: TEXT,
+    hover: FACE_HOT,
+    hover_stroke: DARK_SHADOW,
+    hover_text: STRONG_TEXT,
+    active: FACE_DOWN,
+    selection: SELECTION,
+    selection_text: FIELD,
+    link: LINK,
+    warn: WARN,
+};
 
 /// Replace the (light) theme's colours and shapes with the Retro look.
 pub fn apply(t: &mut Theme) {

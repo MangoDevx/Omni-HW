@@ -5,6 +5,7 @@ use super::{DumpStatus, GRAY, GREEN, Item, Passed, Sel, View, level_color, selec
 use crate::app::OmniApp;
 use crate::heat::{ORANGE, RED};
 use crate::ui;
+use crate::ui::LineSized;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::separator::Separator;
@@ -12,8 +13,8 @@ use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, IconName, Sizable, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, StatefulInteractiveElement, Styled, Window, rems,
+    AnyElement, App, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
+    StatefulInteractiveElement, Styled, Window, rems,
 };
 use omnihw_core::diagnostics::{Category, CheckResult, Finding, Outcome, is_blue_screen_finding};
 use std::collections::HashMap;
@@ -47,8 +48,8 @@ pub(super) fn detail(
         },
         Some(Sel::DismissedFinding(k)) => {
             let back = Button::new("health-back")
-                .small()
-                .label("‹ All dismissed")
+                .line_sized()
+                .caption("‹ All dismissed")
                 .tooltip("Back to the dismissed list")
                 .on_click(select(Sel::Dismissed, cx));
             let pane = pane.child(h_flex().child(back)).child(ui::space(6.0));
@@ -69,7 +70,7 @@ pub(super) fn detail(
 /// A large bold heading at the top of the details.
 #[track_caller]
 fn title(text: impl Into<gpui_kit::SharedString>) -> gpui_kit::component::label::Label {
-    ui::label(text).text_xl().font_weight(FontWeight::SEMIBOLD)
+    ui::label(text).text_size(gpui_kit::rems(18.0 / 16.0))
 }
 
 /// A finding: title, level and category, what was measured, how to fix it, then Dismiss
@@ -110,7 +111,8 @@ fn finding_detail(
         col.child(
             h_flex().child(
                 Button::new("health-restore")
-                    .label("Restore")
+                    .line_sized()
+                    .caption("Restore")
                     .tooltip("Show this in the list and the summary again")
                     .on_click(cx.listener(move |this, _, _, cx| {
                         crate::dismissed::restore(&key);
@@ -124,7 +126,8 @@ fn finding_detail(
             ui::wrap_row()
                 .child(
                     Button::new("health-dismiss")
-                        .label("Dismiss")
+                        .line_sized()
+                        .caption("Dismiss")
                         .tooltip(
                             "Hide this from the Health Check summary and the Overview. \
                              See or restore it under Dismissed at the bottom of the list.",
@@ -155,7 +158,8 @@ fn dump_button(dumps: &DumpStatus, cx: &mut Context<OmniApp>) -> Div {
     };
     let mut row = ui::wrap_row().child(
         Button::new("health-dumps")
-            .label(label)
+            .line_sized()
+            .caption(label)
             .tooltip(hover)
             .disabled(dumps.busy)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -209,8 +213,8 @@ fn dismissed_list(items: &[Item], cx: &mut Context<OmniApp>) -> Div {
     if items.len() > 1 {
         intro = intro.child(
             Button::new("health-restore-all")
-                .small()
-                .label("Restore all")
+                .line_sized()
+                .caption("Restore all")
                 .on_click(cx.listener(|_, _, _, cx| {
                     crate::dismissed::restore_all();
                     cx.notify();
@@ -221,8 +225,8 @@ fn dismissed_list(items: &[Item], cx: &mut Context<OmniApp>) -> Div {
     for (n, i) in items.iter().enumerate() {
         let key = i.key.clone();
         let restore = Button::new(("restore", n))
-            .small()
-            .label("Restore")
+            .line_sized()
+            .caption("Restore")
             .tooltip("Show this in the list and the summary again")
             .on_click(cx.listener(move |_, _, _, cx| {
                 crate::dismissed::restore(&key);
@@ -338,8 +342,8 @@ fn finding_body(f: &Finding, d: &Details, cx: &mut Context<OmniApp>) -> Vec<AnyE
         out.push(
             h_flex()
                 .child(
-                    Button::new("health-uefi")
-                        .label("Restart into UEFI / BIOS…")
+                    Button::new("health-uefi").line_sized()
+                        .caption("Restart into UEFI / BIOS…")
                         .tooltip(
                             "Restarts the PC straight into the firmware setup, no key presses needed. Asks for administrator rights.",
                         )
@@ -375,8 +379,7 @@ fn steps_checklist(
     let weak = ui::weak_color(cx);
     let mut head = ui::row().child(
         ui::label("HOW TO FIX")
-            .text_xs()
-            .font_weight(FontWeight::SEMIBOLD)
+            .text_size(crate::ui::small_size())
             .text_color(weak),
     );
     if total > 1 {
@@ -409,8 +412,8 @@ fn steps_checklist(
             let url = link.url();
             row = row.child(
                 Button::new("link")
-                    .small()
-                    .label(link.label())
+                    .line_sized()
+                    .caption(link.label())
                     .tooltip(url.clone())
                     .on_click(move |_, _, cx| cx.open_url(&url)),
             );

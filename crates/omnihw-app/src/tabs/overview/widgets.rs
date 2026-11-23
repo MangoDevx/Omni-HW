@@ -6,14 +6,14 @@ use crate::heat::{self, BLACK, ORANGE, RED, Severity, WHITE};
 use crate::ui;
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::{
-    App, Context, Div, ElementId, FontWeight, InteractiveElement, ParentElement, PathBuilder, Rgba,
-    Stateful, Styled, Window, canvas, div, point, px, relative, rems,
+    App, Context, Div, ElementId, InteractiveElement, ParentElement, PathBuilder, Rgba, Stateful,
+    Styled, Window, canvas, div, point, px, relative, rems,
 };
 use std::collections::VecDeque;
 
-/// The theme colour behind sparklines, bars and core tiles.
+/// The theme colour behind sparklines and bars.
 pub(super) fn track(cx: &App) -> Rgba {
-    cx.theme().muted.into()
+    crate::theme::palette(cx).extreme
 }
 
 /// A framed card with an accent marker, title and subtitle. Click the header (or its arrow)
@@ -45,17 +45,20 @@ pub(super) fn card(
     let mut card = v_flex()
         .id(id)
         .w_full()
-        .p_3()
-        .mb_2()
+        .p(px(12.0))
+        .mb(px(8.0))
+        .gap(px(3.0))
         .border_1()
         .border_color(border)
         .rounded(px(8.0))
         .child(ui::collapse_header(key, heading, open, cx));
     if open {
+        let mut inner = v_flex().w_full().gap(px(3.0));
         if !subtitle.is_empty() {
-            card = card.child(ui::weak(subtitle.to_string(), cx));
+            inner = inner.child(ui::weak(subtitle.to_string(), cx));
         }
-        card = card.child(ui::space(6.0)).child(body(cx));
+        inner = inner.child(ui::space(3.0)).child(body(cx));
+        card = card.child(ui::indented(inner, cx));
     }
     card
 }
@@ -80,11 +83,9 @@ pub(super) fn metrics(items: &[Metric], cx: &App) -> Div {
     h_flex()
         .w_full()
         .items_start()
-        .gap_2()
+        .gap(px(8.0))
         .children(items.iter().enumerate().map(|(i, it)| {
-            let mut value = ui::label(it.value.clone())
-                .text_xl()
-                .font_weight(FontWeight::SEMIBOLD);
+            let mut value = ui::strong(it.value.clone()).text_size(rems(20.0 / 16.0));
             if let Some(c) = it.color {
                 value = value.text_color(ui::ink(cx, c));
             }
@@ -111,7 +112,6 @@ pub(super) fn severity_icon(sev: Severity) -> Option<Div> {
             .items_center()
             .justify_center()
             .text_size(rems(10.0 / 16.0))
-            .font_weight(FontWeight::BOLD)
             .child(ui::label("!").text_color(fg))
     };
     let size = rems(12.0 / 16.0);
@@ -258,7 +258,7 @@ pub(super) fn sparkline_colored(
 /// theme-aware fill, so it stays readable on saturated colours in light mode.
 pub(super) fn bar(frac: f32, text: String, color: Rgba, cx: &App) -> Div {
     let fill = heat::soft_fill(ui::dark(cx), color);
-    let ink = cx.theme().foreground;
+    let ink = crate::theme::palette(cx).strong;
     div()
         .relative()
         .flex_none()
@@ -274,14 +274,15 @@ pub(super) fn bar(frac: f32, text: String, color: Rgba, cx: &App) -> Div {
                 .left_0()
                 .h_full()
                 .w(relative(frac.clamp(0.0, 1.0)))
+                .rounded_full()
                 .bg(fill),
         )
         .child(
             h_flex()
                 .relative()
                 .w_full()
-                .px_2()
-                .text_sm()
+                .h(rems(18.0 / 16.0))
+                .px(px(8.0))
                 .child(ui::label(text).text_color(ink)),
         )
 }

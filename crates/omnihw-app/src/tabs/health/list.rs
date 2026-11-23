@@ -10,8 +10,8 @@ use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{ActiveTheme, StyledExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Rgba, StatefulInteractiveElement, Styled, div, px, rems,
+    AnyElement, App, Context, Div, ElementId, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Rgba, StatefulInteractiveElement, Styled, div, px, rems,
 };
 use omnihw_core::diagnostics::{Category, Level};
 
@@ -91,7 +91,11 @@ fn tile(
             }
         })
         .child(ui::strong(name))
-        .child(ui::label(status.clone()).text_xs().text_color(ink))
+        .child(
+            ui::label(status.clone())
+                .text_size(crate::ui::small_size())
+                .text_color(ink),
+        )
         .tooltip(ui::tip(hover))
         .on_click(cx.listener(move |this, _, _, cx| {
             this.views.health.filter = pick;
@@ -124,7 +128,7 @@ pub(super) fn list(
         };
         out.push(
             ui::strong(text)
-                .text_size(rems(15.0 / 14.0))
+                .text_size(rems(15.0 / 16.0))
                 .text_color(ui::ink(cx, GREEN))
                 .px(px(6.0))
                 .py_1()
@@ -228,9 +232,8 @@ fn findings_group(
 /// Small caps-style group heading, with hover text when given.
 fn heading(text: String, hover: Option<&'static str>, cx: &App) -> AnyElement {
     let label = ui::label(text.to_uppercase())
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(ui::weak_color(cx));
+        .text_size(crate::ui::small_size())
+        .text_color(crate::theme::palette(cx).strong);
     let box_ = h_box().pt_2().pb_0p5().px(px(6.0));
     match hover {
         Some(h) => box_
@@ -257,19 +260,18 @@ pub(super) fn row(
     tip: Option<&str>,
     cx: &App,
 ) -> ui::Clickable {
-    let t = cx.theme();
-    let (selected_fill, hover_fill, text, muted, radius) = (
-        t.primary.opacity(0.2),
-        t.accent,
-        t.foreground,
-        t.muted_foreground,
-        t.radius,
-    );
+    let (t, p) = (cx.theme(), crate::theme::palette(cx));
+    let (selected_fill, hover_fill, radius) = (p.selection, t.accent, t.radius);
+    let (text, muted): (Hsla, Hsla) = if selected {
+        (p.selection_text.into(), p.selection_text.into())
+    } else {
+        (t.foreground, t.muted_foreground)
+    };
     ui::clickable(id)
         .h_flex()
         .flex_none()
         .w_full()
-        .h(rems(26.0 / 14.0))
+        .h(rems(24.0 / 16.0))
         .gap_2()
         .px_2()
         .rounded(radius)
@@ -293,7 +295,7 @@ pub(super) fn row(
             row.child(
                 ui::label(meta.to_string())
                     .flex_none()
-                    .text_xs()
+                    .text_size(crate::ui::small_size())
                     .text_color(muted),
             )
         })

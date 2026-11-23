@@ -11,13 +11,14 @@
 use crate::app::OmniApp;
 use crate::heat::{self, rgb8};
 use crate::sampler::{Sampler, Snapshot};
+use crate::ui::LineSized;
 use crate::{export, ui};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{ActiveTheme, Selectable, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Sizable, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, AppContext, Bounds, Context, Div, Entity, Hsla, InteractiveElement, IntoElement,
     MouseMoveEvent, ParentElement, PathBuilder, Pixels, Point, Rgba, SharedString,
@@ -193,17 +194,17 @@ fn toolbar(snap: &Snapshot, mode: Mode, cx: &mut Context<OmniApp>) -> Div {
     let mode_button =
         |id: &'static str, label: &'static str, m: Mode, cx: &mut Context<OmniApp>| {
             Button::new(id)
-                .small()
-                .label(label)
-                .selected(mode == m)
+                .line_sized()
+                .caption(label)
+                .selectable(mode == m, cx)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.views.recording.mode = m;
                     cx.notify();
                 }))
         };
     let start_stop = Button::new("rec-toggle")
-        .small()
-        .label(if active {
+        .line_sized()
+        .caption(if active {
             "Stop recording"
         } else {
             "Start recording"
@@ -240,8 +241,8 @@ fn toolbar(snap: &Snapshot, mode: Mode, cx: &mut Context<OmniApp>) -> Div {
             let shown = path.clone();
             row = row.child(
                 Button::new("show-csv")
-                    .small()
-                    .label("Show CSV")
+                    .line_sized()
+                    .caption("Show CSV")
                     .tooltip(path.display().to_string())
                     .on_click(move |_, _, _| export::open_in_explorer(&shown, true)),
             );
@@ -249,8 +250,8 @@ fn toolbar(snap: &Snapshot, mode: Mode, cx: &mut Context<OmniApp>) -> Div {
                 let opened = path.clone();
                 row = row.child(
                     Button::new("open-csv")
-                        .small()
-                        .label("Open CSV")
+                        .line_sized()
+                        .caption("Open CSV")
                         .on_click(move |_, _, _| export::open_in_explorer(&opened, false)),
                 );
             }
@@ -383,8 +384,8 @@ pub(super) fn sensor_picker(
         .child(Input::new(filter).small().w(rems(9.5)))
         .child(
             Button::new((salt, usize::MAX))
-                .small()
-                .label("Clear")
+                .line_sized()
+                .caption("Clear")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     set(this).clear();
                     cx.notify();
@@ -849,7 +850,11 @@ pub(super) fn chart_element(
                 .mt(rems(-0.5))
                 .h(rems(1.0))
                 .justify_end()
-                .child(ui::label(text).text_xs().text_color(weak))
+                .child(
+                    ui::label(text)
+                        .text_size(crate::ui::small_size())
+                        .text_color(weak),
+                )
         }));
     let x_axis = div()
         .absolute()
@@ -871,7 +876,11 @@ pub(super) fn chart_element(
                     .ml(rems(-3.0))
                     .justify_center(),
             };
-            cell.child(ui::label(text).text_xs().text_color(weak))
+            cell.child(
+                ui::label(text)
+                    .text_size(crate::ui::small_size())
+                    .text_color(weak),
+            )
         }));
     let readout = cursor.filter(|_| !readout.is_empty()).map(|x| {
         let rows = readout.into_iter().enumerate().map(|(i, (text, color))| {
@@ -891,7 +900,7 @@ pub(super) fn chart_element(
             .border_1()
             .border_color(border)
             .rounded(radius)
-            .text_xs()
+            .text_size(crate::ui::small_size())
             .children(rows);
         // Beside the cursor, on the side with more room.
         let card = if x < 0.5 {

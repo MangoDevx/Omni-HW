@@ -3,6 +3,7 @@
 use crate::app::OmniApp;
 use crate::heat::{GREEN, ORANGE, RED};
 use crate::sampler::Snapshot;
+use crate::ui::LineSized;
 use crate::ui::{self, Table, or_dash, section};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
@@ -118,7 +119,8 @@ fn quick_test(snap: &Snapshot, cx: &mut Context<OmniApp>) -> impl IntoElement {
     } else {
         controls = controls.child(
             Button::new("run-mem-test")
-                .label("Run memory test")
+                .line_sized()
+                .caption("Run memory test")
                 .tooltip("Takes a few seconds; close heavy apps first for a fair result")
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.sampler.run_mem_test();

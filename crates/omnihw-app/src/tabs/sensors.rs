@@ -1,12 +1,12 @@
 //! Sensors page: every reading with its current, minimum, maximum and average value.
 
 use crate::app::OmniApp;
+use crate::ui::LineSized;
 use crate::ui::{self, Table};
-use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::{
-    AnyElement, App, Context, Div, FontWeight, IntoElement, ParentElement, SharedString, Styled,
+    AnyElement, App, Context, Div, ElementId, IntoElement, ParentElement, SharedString, Styled,
     Window,
 };
 use omnihw_core::sensors::Tracked;
@@ -17,8 +17,8 @@ pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) 
     let toolbar = ui::row()
         .child(
             Button::new("reset-stats")
-                .small()
-                .label("Reset min/max")
+                .line_sized()
+                .caption("Reset min/max")
                 .on_click(cx.listener(|this, _, _, _| this.sampler.reset_stats())),
         )
         .child(ui::dropdown(
@@ -60,22 +60,30 @@ pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) 
             cx,
         ));
         if open {
-            page =
-                page.child(sensor_grid(entries.iter().filter(|t| t.reading.group == g), cx).pl_4());
+            let rows = entries.iter().filter(|t| t.reading.group == g);
+            let grid = sensor_grid(ElementId::Name(format!("sensors-{g}").into()), rows, cx);
+            page = page.child(ui::indented(grid, cx));
         }
     }
     page.into_any_element()
 }
 
 /// Sensor | Current | Min | Max | Average table.
-pub fn sensor_grid<'a>(rows: impl Iterator<Item = &'a Tracked>, cx: &App) -> Div {
-    let mut table = Table::new(&["Sensor", "Current", "Min", "Max", "Average"]).striped();
+/// `id` must be unique on the page.
+pub fn sensor_grid<'a>(
+    id: impl Into<ElementId>,
+    rows: impl Iterator<Item = &'a Tracked>,
+    cx: &App,
+) -> Div {
+    let mut table = Table::new(&["Sensor", "Current", "Min", "Max", "Average"])
+        .id(id)
+        .striped();
     for t in rows {
         let u = t.reading.unit;
         table.push_row([
             ui::label(t.reading.label.clone()).into_any_element(),
             ui::mono(u.format(t.reading.value), cx)
-                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(crate::theme::palette(cx).strong)
                 .into_any_element(),
             ui::mono(u.format(t.min), cx).into_any_element(),
             ui::mono(u.format(t.max), cx).into_any_element(),

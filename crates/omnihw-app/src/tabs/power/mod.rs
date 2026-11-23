@@ -9,10 +9,11 @@
 use crate::app::OmniApp;
 use crate::elevate::elevated;
 use crate::heat::{GREEN, ORANGE};
+use crate::ui::LineSized;
 use crate::ui::{self, Table};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Disableable, Selectable, Sizable};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
@@ -37,8 +38,8 @@ pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) 
     } else {
         header = header.child(
             Button::new("power-refresh")
-                .small()
-                .label("Refresh")
+                .line_sized()
+                .caption("Refresh")
                 .tooltip("Read power settings, devices and wake history again")
                 .on_click(cx.listener(|this, _, _, _| this.sampler.refresh_power())),
         );
@@ -169,9 +170,9 @@ fn plans(p: &PowerInfo, busy: bool, cx: &mut Context<OmniApp>) -> impl IntoEleme
         let guid = s.guid.clone();
         row = row.child(
             Button::new(("plan", i))
-                .small()
-                .label(name.to_string())
-                .selected(active)
+                .line_sized()
+                .caption(name.to_string())
+                .selectable(active, cx)
                 .disabled(busy)
                 .tooltip(if active {
                     "Active plan"
@@ -262,8 +263,8 @@ fn value_combo(
     if busy {
         // A change is being applied: show the value without a menu.
         return Button::new(id)
-            .small()
-            .label(s.format(cur))
+            .line_sized()
+            .caption(s.format(cur))
             .dropdown_caret(true)
             .disabled(true)
             .into_any_element();
@@ -312,8 +313,8 @@ fn action_button(
     cx: &mut Context<OmniApp>,
 ) -> AnyElement {
     Button::new(id)
-        .small()
-        .label(text)
+        .line_sized()
+        .caption(text)
         .tooltip(admin_hint(&action))
         .disabled(busy)
         .on_click(cx.listener(move |this, _, window, cx| request(this, action.clone(), window, cx)))
@@ -534,8 +535,8 @@ fn check_now(id: &'static str, busy: bool, cx: &mut Context<OmniApp>) -> impl In
         .child(ui::weak("Needs administrator rights to read.", cx))
         .child(
             Button::new(id)
-                .small()
-                .label("Check now")
+                .line_sized()
+                .caption("Check now")
                 .tooltip(if elevated() {
                     "Read now"
                 } else {
@@ -548,8 +549,8 @@ fn check_now(id: &'static str, busy: bool, cx: &mut Context<OmniApp>) -> impl In
 
 fn check_again(busy: bool, cx: &mut Context<OmniApp>) -> impl IntoElement {
     Button::new("check-requests-again")
-        .small()
-        .label("Check again")
+        .line_sized()
+        .caption("Check again")
         .disabled(busy)
         .on_click(cx.listener(|this, _, _, _| this.sampler.power_query_admin()))
 }
@@ -625,7 +626,8 @@ pub fn fix_button(
 ) -> AnyElement {
     let apply = action.clone();
     Button::new(id)
-        .label(format!("Fix: {}", action.label()))
+        .line_sized()
+        .caption(format!("Fix: {}", action.label()))
         .tooltip(admin_hint(action))
         .on_click(cx.listener(move |this, _, window, cx| request(this, apply.clone(), window, cx)))
         .into_any_element()

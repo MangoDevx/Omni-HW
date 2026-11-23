@@ -7,12 +7,13 @@
 
 use crate::app::OmniApp;
 use crate::heat::{ORANGE, RED, YELLOW};
+use crate::ui::LineSized;
 use crate::ui::{self, Table};
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{Disableable, Selectable, Sizable};
+use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::{
     AnyElement, AppContext, ClipboardItem, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Rgba, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
@@ -86,7 +87,8 @@ fn crash_dumps(app: &OmniApp, cx: &mut Context<OmniApp>) -> AnyElement {
     };
     let mut row = ui::wrap_row().child(
         Button::new("analyze-dumps")
-            .label(label)
+            .line_sized()
+            .caption(label)
             .tooltip(hover)
             .disabled(busy)
             .on_click(cx.listener(|this, _, _, _| this.sampler.read_dumps())),
@@ -168,8 +170,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
         .child(ui::space(6.0));
     let mut refresh = ui::row().child(
         Button::new("refresh")
-            .small()
-            .label("Refresh")
+            .line_sized()
+            .caption("Refresh")
             .tooltip("Read the System and Application event logs again")
             .disabled(busy)
             .on_click(cx.listener(|this, _, _, cx| {
@@ -245,10 +247,9 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
     for (n, (label, secs)) in RANGES.into_iter().enumerate() {
         filters = filters.child(
             Button::new(("range", n))
-                .small()
-                .ghost()
-                .label(label)
-                .selected(f.within_secs == secs)
+                .line_sized()
+                .caption(label)
+                .selectable(f.within_secs == secs, cx)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.views.eventlog.filter.within_secs = secs;
                     cx.notify();
@@ -277,8 +278,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
             )))
             .child(
                 Button::new("copy-events")
-                    .small()
-                    .label("Copy")
+                    .line_sized()
+                    .caption("Copy")
                     .tooltip("Copy the events shown as plain text")
                     .disabled(shown.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| {

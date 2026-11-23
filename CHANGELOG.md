@@ -5,7 +5,7 @@ User-visible changes in each Omni-HW release. The release workflow publishes the
 ## Unreleased
 
 ### Improved
-- The interface is rebuilt on a new toolkit (gpui): sharper text, icons in the sidebar, native-style buttons, menus and dialogs, and the window only redraws when something changes.
+- The interface is rebuilt on a new toolkit (gpui) with the same look, fonts and colours: sharper text, native-style menus and dialogs, and the window only redraws when something changes.
 - The Feature guide opens in its own window, so it can sit beside the page it explains.
 
 ### Fixed

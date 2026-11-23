@@ -138,7 +138,11 @@ pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut Context<OmniApp>) 
     } else {
         page = page
             .child(ui::strong("Sensors"))
-            .child(super::sensors::sensor_grid(rows.into_iter(), cx));
+            .child(super::sensors::sensor_grid(
+                "gpu-sensors",
+                rows.into_iter(),
+                cx,
+            ));
     }
     if nv.is_none() && g.vendor_id != omnihw_core::gpu::VENDOR_NVIDIA {
         page = page.child(ui::space(6.0)).child(ui::weak(

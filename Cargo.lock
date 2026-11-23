@@ -1648,6 +1648,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "epaint_default_fonts"
+version = "0.36.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "773fa9c96dd0dbef887e39d0ed6177f141cce4d68e6041df77570aa3702dfa13"
+
+[[package]]
 name = "equator"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5019,6 +5025,7 @@ version = "0.5.0"
 dependencies = [
  "async-channel",
  "embed-resource",
+ "epaint_default_fonts",
  "gpui-kit",
  "omnihw-core",
  "raw-window-handle",

@@ -11,6 +11,7 @@ use crate::heat::ORANGE;
 use crate::pawnio::{self, Job};
 use crate::settings::{INTERVALS_MS, NavStyle, PAGES, Settings, Theme, UI_SCALE_RANGE};
 use crate::ui;
+use crate::ui::LineSized;
 use crate::update::{RELEASES_URL, Status};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
@@ -52,9 +53,11 @@ pub struct ViewState {
 /// A titled group box.
 #[track_caller]
 fn group(title: &str, cx: &gpui_kit::App) -> Div {
-    ui::group_box(cx)
-        .gap_2()
-        .child(ui::strong(title.to_string()).text_lg().pb_1())
+    ui::group_box(cx).gap_2().child(
+        ui::strong(title.to_string())
+            .text_size(gpui_kit::rems(1.0))
+            .pb_1(),
+    )
 }
 
 /// One labelled row of a group: the name on the left, the controls (and their notes) stacked
@@ -240,8 +243,8 @@ fn appearance(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>)
         .child(Input::new(&typed).small().w(rems(5.5)))
         .child(
             Button::new("scale-reset")
-                .small()
-                .label("Reset")
+                .line_sized()
+                .caption("Reset")
                 .on_click(cx.listener(|this, _, window, cx| set_scale(this, 1.0, window, cx))),
         );
 
@@ -461,8 +464,8 @@ fn files(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> D
                 .child(Input::new(&edit).small().w(rems(22.5)))
                 .child(
                     Button::new("data-dir-browse")
-                        .small()
-                        .label("Browse…")
+                        .line_sized()
+                        .caption("Browse…")
                         .tooltip("Choose a folder")
                         .disabled(picking)
                         .on_click(cx.listener(move |this, _, _, _| {
@@ -474,8 +477,8 @@ fn files(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> D
                 )
                 .child(
                     Button::new("data-dir-apply")
-                        .small()
-                        .label("Apply")
+                        .line_sized()
+                        .caption("Apply")
                         .on_click(cx.listener(|this, _, window, cx| {
                             let Some(edit) = this.views.settings.data_dir_edit.clone() else {
                                 return;
@@ -500,8 +503,8 @@ fn files(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> D
             ui::row()
                 .child(
                     Button::new("data-dir-reset")
-                        .small()
-                        .label("Reset to Documents")
+                        .line_sized()
+                        .caption("Reset to Documents")
                         .disabled(app.settings.data_dir.is_none())
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.settings.data_dir = None;
@@ -510,8 +513,8 @@ fn files(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -> D
                 )
                 .child(
                     Button::new("data-dir-open")
-                        .small()
-                        .label("Open folder")
+                        .line_sized()
+                        .caption("Open folder")
                         .on_click(cx.listener(move |_, _, _, _| {
                             crate::export::open_in_explorer(&opened, false);
                         })),
@@ -550,9 +553,8 @@ fn health_check(app: &mut OmniApp, cx: &mut Context<OmniApp>) -> Div {
         ))
         .child(
             div().child(
-                Button::new("restore-dismissed")
-                    .small()
-                    .label(format!("Restore dismissed issues ({n})"))
+                Button::new("restore-dismissed").line_sized()
+                    .caption(format!("Restore dismissed issues ({n})"))
                     .disabled(n == 0)
                     .on_click(cx.listener(|_, _, _, cx| {
                         crate::dismissed::restore_all();
@@ -639,9 +641,8 @@ fn pawnio_group(app: &mut OmniApp, cx: &mut Context<OmniApp>) -> Div {
     let mut actions = ui::wrap_row();
     if let Some(label) = setup_label {
         actions = actions.child(
-            Button::new("pawnio-setup")
-                .small()
-                .label(label)
+            Button::new("pawnio-setup").line_sized()
+                .caption(label)
                 .tooltip("Installs PawnIO (if needed) and the Omni-HW sensor service. Windows asks for administrator permission once.")
                 .disabled(busy)
                 .on_click(cx.listener(|this, _, _, _| this.pawnio.start(&this.repaint, true))),
@@ -649,9 +650,8 @@ fn pawnio_group(app: &mut OmniApp, cx: &mut Context<OmniApp>) -> Div {
     }
     if can_remove {
         actions = actions.child(
-            Button::new("pawnio-remove")
-                .small()
-                .label("Remove extra sensors...")
+            Button::new("pawnio-remove").line_sized()
+                .caption("Remove extra sensors...")
                 .tooltip("Removes the sensor service, and PawnIO too if Omni-HW installed it. Asks for administrator permission.")
                 .disabled(busy)
                 .on_click(cx.listener(|this, _, _, _| this.pawnio.start(&this.repaint, false))),
@@ -743,8 +743,8 @@ fn updates(app: &mut OmniApp, cx: &mut Context<OmniApp>) -> Div {
     let mut row = ui::wrap_row()
         .child(
             Button::new("check-updates")
-                .small()
-                .label("Check for updates")
+                .line_sized()
+                .caption("Check for updates")
                 .disabled(checking)
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.updates.start(&this.repaint);
@@ -754,8 +754,8 @@ fn updates(app: &mut OmniApp, cx: &mut Context<OmniApp>) -> Div {
         // Opens the latest release notes in the browser; the app itself sends nothing.
         .child(
             Button::new("whats-new")
-                .small()
-                .label("What's new")
+                .line_sized()
+                .caption("What's new")
                 .tooltip("Open the latest release notes on GitHub in your browser")
                 .on_click(cx.listener(|_, _, _, cx| cx.open_url(RELEASES_URL))),
         );

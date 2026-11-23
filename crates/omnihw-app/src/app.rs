@@ -10,19 +10,18 @@ use crate::nav::{self, Arrow, GROUPS};
 use crate::repaint::Repaint;
 use crate::sampler::Sampler;
 use crate::settings::{NavStyle, Settings};
+use crate::ui::LineSized;
 use crate::{export, heat, tabs, ui};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, ClickEvent, ClipboardItem, Context, FocusHandle, FontWeight,
-    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, StatefulInteractiveElement,
-    Styled, WeakEntity, Window, div, px, rems,
+    AnyElement, App, ClickEvent, ClipboardItem, Context, FocusHandle, InteractiveElement,
+    IntoElement, KeyBinding, ParentElement, Render, StatefulInteractiveElement, Styled, WeakEntity,
+    Window, div, px, rems,
 };
 use std::time::{Duration, Instant};
 
@@ -90,25 +89,25 @@ impl Tab {
     }
 
     /// Leading icon in the sidebar (all in the bundled default icon set).
-    pub fn icon(self) -> IconName {
+    pub fn icon(self) -> &'static str {
         match self {
-            Tab::Overview => IconName::LayoutDashboard,
-            Tab::Health => IconName::Heart,
-            Tab::Cpu => IconName::Cpu,
-            Tab::Caches => IconName::GalleryVerticalEnd,
-            Tab::Mainboard => IconName::Frame,
-            Tab::Memory => IconName::MemoryStick,
-            Tab::Gpu => IconName::Palette,
-            Tab::Storage => IconName::HardDrive,
-            Tab::Network => IconName::Globe,
-            Tab::LanSecurity => IconName::Network,
-            Tab::Power => IconName::BatteryCharging,
-            Tab::Sensors => IconName::ChartPie,
-            Tab::Recording => IconName::Play,
-            Tab::Alerts => IconName::Bell,
-            Tab::EventLog => IconName::FileText,
-            Tab::About => IconName::Info,
-            Tab::Settings => IconName::Settings,
+            Tab::Overview => "\u{1F3E0}",
+            Tab::Health => "\u{2764}",
+            Tab::Cpu => "\u{1F532}",
+            Tab::Caches => "\u{26A1}",
+            Tab::Mainboard => "\u{1F527}",
+            Tab::Memory => "\u{1F4BE}",
+            Tab::Gpu => "\u{1F5B5}",
+            Tab::Storage => "\u{1F5B4}",
+            Tab::Network => "\u{1F310}",
+            Tab::LanSecurity => "\u{1F6E1}",
+            Tab::Power => "\u{1F50C}",
+            Tab::Sensors => "\u{1F4C8}",
+            Tab::Recording => "\u{23FA}",
+            Tab::Alerts => "\u{1F514}",
+            Tab::EventLog => "\u{1F4CB}",
+            Tab::About => "\u{2139}",
+            Tab::Settings => "\u{2699}",
         }
     }
 
@@ -167,9 +166,26 @@ const SAVE_DELAY: Duration = Duration::from_millis(400);
 const ADMIN_HOVER: &str = "Omni-HW has administrator rights: you approved its UAC prompt or \
                            started it as administrator.";
 /// Width of the navigation sidebar, in rems.
-const SIDEBAR_WIDTH: f32 = 13.5;
-/// Padding around a page, left and right together, in rems (the page frame's `p_3`).
-const PAGE_PADDING: f32 = 1.5;
+const SIDEBAR_WIDTH: f32 = 190.0 / 16.0;
+/// Height of one sidebar row, in rems.
+const ROW_HEIGHT: f32 = 26.0 / 16.0;
+/// Padding around a page on each side, in points.
+const PAGE_MARGIN: f32 = 8.0;
+/// Padding around a page, left and right together, in rems.
+const PAGE_PADDING: f32 = 2.0 * PAGE_MARGIN / 16.0;
+/// Feature guide's glyph in the sidebar.
+const HELP_ICON: &str = "\u{1F4D6}";
+
+/// The embedded font that has a sidebar glyph: the black-and-white emoji font, or the icon
+/// font for the few it lacks.
+fn glyph_font(glyph: &str) -> &'static str {
+    match glyph {
+        "\u{1F5B5}" | "\u{1F5B4}" | "\u{1F6E1}" | "\u{23FA}" | "\u{2699}" => {
+            crate::theme::ICON_FONT
+        }
+        _ => crate::theme::EMOJI_FONT,
+    }
+}
 
 /// Width a page has to lay itself out in, in rems: the window without the sidebar and the
 /// page padding. Pages that switch between a wide and a narrow layout use it (an element
@@ -477,9 +493,9 @@ impl OmniApp {
         let text = format!("{firing} ALERT{}", if firing == 1 { "" } else { "S" });
         Some(
             Button::new("alerts-badge")
+                .line_sized()
                 .danger()
-                .small()
-                .label(text)
+                .caption(text)
                 .tooltip("Open the Alerts tab")
                 .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Alerts, cx)))
                 .into_any_element(),
@@ -490,18 +506,19 @@ impl OmniApp {
     fn record_button(&self, elapsed: Option<f64>, cx: &mut Context<Self>) -> AnyElement {
         let button = match elapsed {
             Some(t) => Button::new("record")
+                .line_sized()
                 .danger()
-                .label(format!(
+                .caption(format!(
                     "Stop  {}",
                     omnihw_core::recording::format_elapsed(t)
                 ))
                 .tooltip("Stop recording and save the CSV"),
             None => Button::new("record")
-                .label("Record")
+                .line_sized()
+                .caption("Record")
                 .tooltip("Record all sensors over time (until stopped) to a CSV in Documents"),
         };
         button
-            .small()
             .on_click(cx.listener(|this, _, _, cx| {
                 let msg = tabs::recording::toggle(&this.sampler);
                 this.set_status(msg, cx);
@@ -513,8 +530,8 @@ impl OmniApp {
     fn report_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let app = cx.weak_entity();
         Button::new("report")
-            .small()
-            .label("Report")
+            .line_sized()
+            .caption("Report")
             .dropdown_caret(true)
             .dropdown_menu(move |menu, _, _| {
                 menu.item(menu_item("Save HTML report", &app, |this, _, cx| {
@@ -534,9 +551,9 @@ impl OmniApp {
         };
         Some(
             Button::new("update")
-                .small()
+                .line_sized()
                 .primary()
-                .label(format!("Update {v} available"))
+                .caption(format!("Update {v} available"))
                 .tooltip("Open Settings to check or download the new version")
                 .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Settings, cx)))
                 .into_any_element(),
@@ -547,10 +564,13 @@ impl OmniApp {
     fn info_menu(&self, cx: &mut Context<Self>) -> AnyElement {
         let app = cx.weak_entity();
         Button::new("info")
-            .small()
-            .label("Info")
+            .line_sized()
+            .caption("Info")
             .dropdown_caret(true)
-            .selected(self.settings.nav_style == NavStyle::Tabs && self.tab == Tab::About)
+            .highlighted(
+                self.settings.nav_style == NavStyle::Tabs && self.tab == Tab::About,
+                cx,
+            )
             .dropdown_menu(move |menu, _, _| {
                 menu.item(menu_item("Feature guide", &app, |this, _, cx| {
                     this.help.toggle(cx);
@@ -579,9 +599,9 @@ impl OmniApp {
         out.push(self.info_menu(cx));
         out.push(
             Button::new("settings")
-                .small()
-                .label("Settings")
-                .selected(self.tab == Tab::Settings)
+                .line_sized()
+                .caption("Settings")
+                .highlighted(self.tab == Tab::Settings, cx)
                 .tooltip("Theme, navigation bar, startup and more")
                 .on_click(cx.listener(|this, _, _, cx| this.open(Tab::Settings, cx)))
                 .into_any_element(),
@@ -603,45 +623,59 @@ impl OmniApp {
 
     // ---- Sidebar style ----------------------------------------------------------------------
 
-    /// A full-width sidebar row: icon and label; when selected, filled with an accent bar on
+    /// A full-width sidebar row: glyph and label; when selected, filled with an accent bar on
     /// the left edge.
     fn nav_row(
         &self,
         id: impl Into<gpui_kit::ElementId>,
         selected: bool,
-        icon: IconName,
+        icon: &'static str,
         label: &'static str,
         cx: &App,
     ) -> ui::Clickable {
-        let t = cx.theme();
-        let (accent, hover, radius) = (t.primary, t.sidebar_accent, t.radius);
-        let text = t.sidebar_foreground;
+        let p = crate::theme::palette(cx);
+        let (hover, hover_text) = (p.hover, p.hover_text);
+        let text: gpui_kit::Hsla = if selected { p.selection_text } else { p.text }.into();
+        let glyph = if selected { text } else { text.opacity(0.7) };
         ui::clickable(id)
+            .relative()
             .h_flex()
+            .flex_none()
             .w_full()
-            .h(rems(1.85))
-            .gap_2()
-            .pl_2()
-            .pr_1()
-            .rounded(radius)
-            .border_l_2()
+            .h(rems(ROW_HEIGHT))
+            .rounded(px(3.0))
             .cursor_pointer()
+            .text_color(text)
             .map(|row| {
                 if selected {
-                    row.border_color(accent)
-                        .bg(accent.opacity(0.18))
-                        .font_weight(FontWeight::MEDIUM)
+                    row.bg(gpui_kit::Hsla::from(p.selection).opacity(0.6))
+                        .child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top(px(4.0))
+                                .bottom(px(4.0))
+                                .w(px(3.0))
+                                .rounded(px(2.0))
+                                .bg(p.selection_text),
+                        )
                 } else {
-                    row.border_color(gpui_kit::transparent_black())
-                        .hover(move |s| s.bg(hover))
+                    row.hover(move |s| s.bg(hover).text_color(hover_text))
                 }
             })
             .child(
-                Icon::new(icon)
-                    .small()
-                    .text_color(text.opacity(if selected { 1.0 } else { 0.7 })),
+                div()
+                    .flex()
+                    .flex_none()
+                    .justify_center()
+                    .w(rems(40.0 / 16.0))
+                    .child(
+                        ui::label(icon)
+                            .font_family(glyph_font(icon))
+                            .text_color(glyph),
+                    ),
             )
-            .child(ui::label(label).text_color(text))
+            .child(ui::label(label))
     }
 
     /// A sidebar row that opens `tab`.
@@ -670,7 +704,7 @@ impl OmniApp {
             .id("nav-pages")
             .flex_1()
             .min_h_0()
-            .gap_0p5()
+            .gap(px(3.0))
             .overflow_y_scroll();
         for tab in [Tab::Overview, Tab::Health] {
             pages = pages.child(self.nav_page(tab, cx));
@@ -679,11 +713,10 @@ impl OmniApp {
             // Small uppercase category heading.
             pages = pages.child(
                 ui::label(group.to_uppercase())
-                    .pt_3()
-                    .pb_0p5()
-                    .pl_2()
-                    .text_xs()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .pt(px(15.0))
+                    .pb(px(5.0))
+                    .pl(px(10.0))
+                    .text_size(ui::small_size())
                     .text_color(weak),
             );
             for &tab in tabs {
@@ -693,15 +726,16 @@ impl OmniApp {
 
         let mut footer = v_flex()
             .flex_none()
-            .gap_0p5()
-            .pt_1()
+            .gap(px(3.0))
+            .mt(px(4.0))
+            .pt(px(5.0))
             .border_t_1()
             .border_color(border)
             .child(
                 self.nav_row(
                     "nav-help",
                     self.help.is_open(),
-                    IconName::BookOpen,
+                    HELP_ICON,
                     "Feature guide",
                     cx,
                 )
@@ -717,9 +751,9 @@ impl OmniApp {
             footer = footer.child(ui::with_tip(
                 "admin",
                 ui::colored("● Running as administrator", heat::GREEN, cx)
-                    .text_xs()
-                    .pl_2()
-                    .pt_1(),
+                    .text_size(ui::small_size())
+                    .pl(px(8.0))
+                    .pt(px(6.0)),
                 ADMIN_HOVER,
             ));
         }
@@ -728,9 +762,8 @@ impl OmniApp {
             .flex_none()
             .w(rems(SIDEBAR_WIDTH))
             .h_full()
-            .px_2()
-            .py_2p5()
-            .gap_2()
+            .px(px(8.0))
+            .py(px(10.0))
             .bg(fill)
             .text_color(text)
             .border_r_1()
@@ -739,17 +772,13 @@ impl OmniApp {
                 h_flex()
                     .flex_none()
                     .items_baseline()
-                    .gap_2()
-                    .pl_1p5()
-                    .child(
-                        ui::label("Omni-HW")
-                            .text_xl()
-                            .font_weight(FontWeight::BOLD)
-                            .text_color(text),
-                    )
+                    .gap(px(8.0))
+                    .pl(px(6.0))
+                    .mb(px(11.0))
+                    .child(ui::strong("Omni-HW").text_size(rems(20.0 / 16.0)))
                     .child(
                         ui::label(concat!("v", env!("CARGO_PKG_VERSION")))
-                            .text_xs()
+                            .text_size(ui::small_size())
                             .text_color(weak),
                     ),
             )
@@ -763,12 +792,8 @@ impl OmniApp {
         if let Some((group, _)) = GROUPS.iter().find(|(_, p)| p.contains(&self.tab)) {
             crumbs = crumbs.child(ui::weak(*group, cx)).child(ui::weak("›", cx));
         }
-        crumbs = crumbs.child(
-            ui::label(self.tab.name())
-                .text_lg()
-                .font_weight(FontWeight::SEMIBOLD),
-        );
-        let mut actions = h_flex().flex_none().gap_1p5();
+        crumbs = crumbs.child(ui::strong(self.tab.name()).text_size(rems(1.0)));
+        let mut actions = h_flex().flex_none().gap(px(8.0));
         if self.sampler.info().is_some() {
             let (firing, elapsed) = self.bar_state();
             actions = actions
@@ -781,8 +806,10 @@ impl OmniApp {
             .flex_none()
             .justify_between()
             .gap_3()
-            .px_3()
-            .py_1p5()
+            .pl(px(12.0))
+            .pr(px(8.0))
+            .pt(px(6.0))
+            .pb(px(4.0))
             .border_b_1()
             .border_color(cx.theme().border)
             .child(crumbs)
@@ -793,31 +820,36 @@ impl OmniApp {
 
     /// A category tab: frameless text, tinted on hover, with an accent underline when selected.
     fn underline_tab(&self, category: usize, cx: &mut Context<Self>) -> ui::Clickable {
-        let t = cx.theme();
-        let (accent, hover, weak, strong) = (t.primary, t.accent, t.muted_foreground, t.foreground);
+        let p = crate::theme::palette(cx);
+        let link: gpui_kit::Hsla = p.link.into();
+        let hover: gpui_kit::Hsla = p.hover.into();
+        let hover_text = p.hover_text;
         let selected = nav::category_of(self.tab) == Some(category);
+        // The underline: 3 points tall, inset 4 from the tab's sides.
+        let line = div()
+            .absolute()
+            .left(px(4.0))
+            .right(px(4.0))
+            .bottom_0()
+            .h(px(3.0))
+            .rounded(px(1.5));
         ui::clickable(("category", category))
-            .px_3()
-            .pt_1p5()
-            .pb_1()
-            .border_b_3()
+            .relative()
+            .px(px(12.0))
+            .pt(px(7.0))
+            .pb(px(10.0))
             .rounded_t(px(4.0))
             .cursor_pointer()
+            .text_size(rems(14.0 / 16.0))
+            .text_color(if selected { p.strong } else { p.widget_text })
             .map(|tab| {
                 if selected {
-                    tab.border_color(accent).font_weight(FontWeight::MEDIUM)
+                    tab.child(line.bg(link))
                 } else {
-                    tab.border_color(gpui_kit::transparent_black())
-                        .hover(move |s| s.bg(hover.opacity(0.6)).border_color(accent.opacity(0.35)))
+                    tab.hover(move |s| s.bg(hover.opacity(0.6)).text_color(hover_text))
                 }
             })
-            .child(
-                ui::label(nav::category_label(category)).text_color(if selected {
-                    strong
-                } else {
-                    weak
-                }),
-            )
+            .child(ui::label(nav::category_label(category)))
             .on_click(cx.listener(move |this, _, _, cx| {
                 if nav::category_of(this.tab) != Some(category)
                     && let Some(page) = this.nav_memory.page_in(category)
@@ -862,7 +894,7 @@ impl OmniApp {
         ui::clickable(("chip", tab as usize))
             .px(px(11.0))
             .py(px(2.0))
-            .text_sm()
+            .text_size(rems(12.5 / 16.0))
             .rounded_full()
             .border_1()
             .cursor_pointer()
@@ -917,10 +949,9 @@ impl OmniApp {
     fn classic_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let pages = Tab::ALL.into_iter().map(|tab| {
             Button::new(("page", tab as usize))
-                .small()
-                .ghost()
-                .label(tab.name())
-                .selected(self.tab == tab)
+                .line_sized()
+                .caption(tab.name())
+                .selectable(self.tab == tab, cx)
                 .on_click(cx.listener(move |this, _, _, cx| this.open(tab, cx)))
         });
         let t = cx.theme();
@@ -970,7 +1001,7 @@ impl OmniApp {
         }
         let page = tabs::show(self, window, cx);
         self.sync_dismissed(cx);
-        let frame = v_flex().flex_1().min_h_0().min_w_0().p_3();
+        let frame = v_flex().flex_1().min_h_0().min_w_0().p(px(PAGE_MARGIN));
         if matches!(self.tab, Tab::Recording | Tab::Health) {
             // A list and a details pane (or a chart), each with its own scroll area.
             frame.child(page).into_any_element()
@@ -1049,7 +1080,8 @@ impl Render for OmniApp {
             .bg(t.background)
             .text_color(t.foreground)
             .font_family(t.font_family.clone())
-            .text_size(t.font_size)
+            .text_size(crate::theme::body_size(cx))
+            .line_height(gpui_kit::relative(crate::theme::LINE_HEIGHT))
             .child(body)
     }
 }

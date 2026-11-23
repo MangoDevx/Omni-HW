@@ -3,6 +3,7 @@
 use crate::app::OmniApp;
 use crate::heat::{ORANGE, RED};
 use crate::sampler::Snapshot;
+use crate::ui::LineSized;
 use crate::ui::{self, Table};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
@@ -11,9 +12,8 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, SharedString, Styled, Subscription, Window,
-    div, px, rems,
+    AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, InteractiveElement,
+    IntoElement, ParentElement, SharedString, Styled, Subscription, Window, div, px, rems,
 };
 use omnihw_core::SystemInfo;
 use omnihw_core::alerts::{AlertRule, Condition};
@@ -234,8 +234,8 @@ fn scroll_dropdown(
     let app = cx.weak_entity();
     let pick = Rc::new(pick);
     Button::new(id)
-        .small()
-        .label(current)
+        .line_sized()
+        .caption(current)
         .dropdown_caret(true)
         .dropdown_menu(move |mut menu, _, _| {
             menu = menu.scrollable(true).max_h(px(420.0)).max_w(px(400.0));
@@ -314,8 +314,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
             .any(|r| r.sensor_id == rule.sensor_id && r.condition == rule.condition);
         quick = quick.child(
             Button::new(("preset", n))
-                .small()
-                .label(label)
+                .line_sized()
+                .caption(label)
                 .disabled(exists)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     let rule = rule.clone();
@@ -327,8 +327,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
         ui::row()
             .child(
                 Button::new("add-custom")
-                    .small()
-                    .label("Add custom alert")
+                    .line_sized()
+                    .caption("Add custom alert")
                     .on_click(cx.listener(|this, _, _, cx| {
                         let rule = {
                             let snap = this.sampler.snapshot();
@@ -343,8 +343,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
             )
             .child(
                 Button::new("test-notification")
-                    .small()
-                    .label("Test notification")
+                    .line_sized()
+                    .caption("Test notification")
                     .tooltip("Shows a sample Windows notification")
                     .on_click(cx.listener(|this, _, _, _| this.sampler.test_notification())),
             ),
@@ -389,10 +389,7 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
             let status = if !r.enabled {
                 ui::weak("off", cx).into_any_element()
             } else if active.get(i).copied().unwrap_or(false) {
-                ui::label("FIRING")
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(red)
-                    .into_any_element()
+                ui::label("FIRING").text_color(red).into_any_element()
             } else {
                 let current = snap
                     .table
@@ -452,8 +449,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
                 .w(rems(6.0))
                 .suffix(ui::weak("s", cx));
             let remove = Button::new(("alert-remove", i))
-                .small()
-                .label("Remove")
+                .line_sized()
+                .caption("Remove")
                 .on_click(cx.listener(move |this, _, _, cx| {
                     edit_rules(this, cx, |rules| {
                         if i < rules.len() {

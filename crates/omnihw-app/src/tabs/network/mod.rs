@@ -10,6 +10,7 @@ use crate::app::OmniApp;
 use crate::heat::{BLUE, GREEN, ORANGE, RED, rgb8};
 use crate::sampler::{Snapshot, TestRun};
 use crate::ui;
+use crate::ui::LineSized;
 use actions::{Editor, action_button};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::InputState;
@@ -54,8 +55,8 @@ pub fn show(app: &mut OmniApp, window: &mut Window, cx: &mut Context<OmniApp>) -
     } else {
         title = title.child(
             Button::new("net-refresh")
-                .small()
-                .label("Refresh")
+                .line_sized()
+                .caption("Refresh")
                 .tooltip("Read the network adapters again")
                 .on_click(cx.listener(|this, _, _, _| this.sampler.refresh_network())),
         );
@@ -213,7 +214,7 @@ fn adapter_card(
     cx: &mut Context<OmniApp>,
 ) -> impl IntoElement {
     let mut header = ui::row()
-        .child(ui::strong(a.name.clone()).text_lg())
+        .child(ui::strong(a.name.clone()).text_size(gpui_kit::rems(1.0)))
         .child(ui::pill(a.status.name(), status_color(a.status), true, cx));
     if a.apipa_only() && a.status == Status::Up {
         header = header.child(ui::pill("No DHCP address", ORANGE, true, cx));
@@ -362,7 +363,8 @@ fn editor_button(
     cx: &mut Context<OmniApp>,
 ) -> Button {
     Button::new(id)
-        .label(text)
+        .line_sized()
+        .caption(text)
         .disabled(busy)
         .when_some(hover, |b, h| b.tooltip(h))
         .on_click(cx.listener(move |this, _, window, cx| {
@@ -408,8 +410,8 @@ fn advanced(
             ui::strong(p.display_value.clone()).into_any_element()
         } else if busy {
             Button::new(id)
-                .small()
-                .label(p.display_value.clone())
+                .line_sized()
+                .caption(p.display_value.clone())
                 .dropdown_caret(true)
                 .disabled(true)
                 .into_any_element()
@@ -531,12 +533,12 @@ fn tests(snap: &Snapshot, cx: &mut Context<OmniApp>) -> Div {
     let local = snap.net_local.running;
     let internet = snap.net_internet.running;
     ui::group_box(cx)
-        .child(ui::strong("Tests").text_lg())
+        .child(ui::strong("Tests").text_size(gpui_kit::rems(1.0)))
         .child(
             ui::row()
                 .child(
-                    Button::new("net-local-tests")
-                        .label("Run local tests")
+                    Button::new("net-local-tests").line_sized()
+                        .caption("Run local tests")
                         .disabled(local)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sampler.run_local_tests();
@@ -554,8 +556,8 @@ fn tests(snap: &Snapshot, cx: &mut Context<OmniApp>) -> Div {
         .child(
             ui::row()
                 .child(
-                    Button::new("net-internet-tests")
-                        .label("Run internet tests")
+                    Button::new("net-internet-tests").line_sized()
+                        .caption("Run internet tests")
                         .disabled(internet)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sampler.run_internet_tests();
@@ -578,7 +580,7 @@ fn tests(snap: &Snapshot, cx: &mut Context<OmniApp>) -> Div {
 
 fn tools(busy: bool, cx: &mut Context<OmniApp>) -> Div {
     ui::group_box(cx)
-        .child(ui::strong("Repair tools").text_lg())
+        .child(ui::strong("Repair tools").text_size(gpui_kit::rems(1.0)))
         .child(
             ui::wrap_row()
                 .child(action_button(

@@ -10,14 +10,13 @@ mod monitoring;
 mod start;
 
 use crate::ui;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use crate::ui::LineSized;
+use gpui_kit::component::button::Button;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Selectable, Sizable, StyledExt, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 use gpui_kit::{
-    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, ElementId, FontWeight, Hsla,
+    AnyElement, AnyWindowHandle, App, AppContext, Bounds, Context, ElementId, Hsla,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, TitlebarOptions, WeakEntity, Window, WindowBounds,
     WindowOptions, div, px, rems, size,
@@ -138,10 +137,9 @@ impl Render for HelpView {
             .gap_1()
             .children(TABS.iter().enumerate().map(|(i, &(tab, name))| {
                 Button::new(("help-tab", i))
-                    .small()
-                    .ghost()
-                    .label(name)
-                    .selected(tab == current)
+                    .line_sized()
+                    .caption(name)
+                    .selectable(tab == current, cx)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tab = tab;
                         cx.notify();
@@ -190,7 +188,8 @@ impl Render for HelpView {
             .bg(t.background)
             .text_color(t.foreground)
             .font_family(t.font_family.clone())
-            .text_size(t.font_size)
+            .text_size(crate::theme::body_size(cx))
+            .line_height(gpui_kit::relative(crate::theme::LINE_HEIGHT))
             .child(tabs)
             .child(Separator::horizontal())
             .child(content)
@@ -223,11 +222,7 @@ fn h(doc: &mut Doc, text: &str) {
     doc.push(
         v_flex()
             .child(ui::space(8.0))
-            .child(
-                ui::label(text.to_string())
-                    .text_size(rems(16.0 / 14.0))
-                    .font_weight(FontWeight::BOLD),
-            )
+            .child(ui::label(text.to_string()).text_size(rems(1.0)))
             .child(ui::space(2.0)),
     );
 }
@@ -268,8 +263,7 @@ fn details<S: AsRef<str>>(doc: &mut Doc, id: &'static str, items: &[S]) {
         .gap_1()
         .py_0p5()
         .cursor_pointer()
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
+        .text_size(crate::ui::small_size())
         .child(
             Icon::new(if open {
                 IconName::ChevronDown
@@ -295,7 +289,7 @@ fn details<S: AsRef<str>>(doc: &mut Doc, id: &'static str, items: &[S]) {
                 h_flex()
                     .items_start()
                     .gap_1p5()
-                    .text_xs()
+                    .text_size(crate::ui::small_size())
                     .child(ui::label("•").flex_none().text_color(weak))
                     .child(
                         ui::label(t.as_ref().to_string())

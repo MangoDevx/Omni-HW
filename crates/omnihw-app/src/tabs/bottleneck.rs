@@ -13,8 +13,8 @@ use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, Bounds, Context, Div, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Rgba, Styled, canvas, div, fill, point, px, relative, rems, size,
+    AnyElement, Bounds, Context, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
+    Rgba, Styled, canvas, div, fill, point, px, relative, rems, size,
 };
 use omnihw_core::bottleneck::{self, Analysis, Limit, Verdict};
 use omnihw_core::gpu::GpuAdapter;
@@ -142,7 +142,6 @@ fn body(
         .child(
             ui::label(a.headline())
                 .text_2xl()
-                .font_weight(FontWeight::BOLD)
                 .text_color(verdict_color(a.verdict)),
         )
         .child(ui::weak(
@@ -229,7 +228,7 @@ fn share_bar(a: &Analysis, cx: &mut Context<OmniApp>) -> Div {
             .justify_center()
             .overflow_hidden()
             .bg(color)
-            .text_xs()
+            .text_size(crate::ui::small_size())
             .when(pct >= 12.0, |s| {
                 s.child(
                     ui::label(format!("{label} {pct:.0} %"))
@@ -401,7 +400,7 @@ fn legend() -> Div {
                         .rounded(px(2.0))
                         .bg(color),
                 )
-                .child(ui::label(label).text_xs())
+                .child(ui::label(label).text_size(crate::ui::small_size()))
         }),
     )
 }

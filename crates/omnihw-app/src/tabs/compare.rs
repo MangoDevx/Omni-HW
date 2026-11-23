@@ -11,11 +11,12 @@ use crate::export;
 use crate::heat::{GREEN, RED};
 use crate::sampler::Snapshot;
 use crate::ui;
+use crate::ui::LineSized;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{Sizable, v_flex};
+use gpui_kit::component::v_flex;
 use gpui_kit::{
     AnyElement, Context, Div, ElementId, Entity, InteractiveElement, IntoElement, ParentElement,
     Rgba, SharedString, Styled, Window,
@@ -300,8 +301,8 @@ fn resolve<'a>(
 /// "Refresh list": rescans on the next redraw, outside the snapshot lock.
 fn refresh_button(cx: &mut Context<OmniApp>) -> Button {
     Button::new("refresh-recordings")
-        .small()
-        .label("Refresh list")
+        .line_sized()
+        .caption("Refresh list")
         .tooltip("Rescan Documents for saved recordings")
         .on_click(cx.listener(|this, _, _, cx| {
             this.views.recording.compare.rescan = true;

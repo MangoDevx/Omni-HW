@@ -11,19 +11,18 @@
 
 use crate::app::OmniApp;
 use crate::heat;
+use crate::theme;
 use gpui_kit::base::{ObservedElement, TestSupportExt};
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{
-    ActiveTheme, Icon, IconName, Sizable, StyledExt, WindowExt, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Selectable, Sizable, StyledExt, WindowExt, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    AnyElement, AnyView, App, ClickEvent, Context, Div, ElementId, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Rgba, SharedString, Stateful,
-    StatefulInteractiveElement, Styled, Window, div, px, rems,
+    AnyElement, AnyView, App, ClickEvent, Context, Div, ElementId, Hsla, InteractiveElement,
+    IntoElement, ParentElement, PathBuilder, Rems, Rgba, SharedString, Stateful,
+    StatefulInteractiveElement, Styled, Window, canvas, div, point, px, relative, rems,
 };
 use std::hash::{Hash, Hasher};
 use std::panic::Location;
@@ -31,7 +30,7 @@ use std::rc::Rc;
 
 /// Whether the active theme is dark (status colours are darkened on light themes).
 pub fn dark(cx: &App) -> bool {
-    cx.theme().is_dark()
+    theme::palette(cx).dark
 }
 
 /// Secondary ("weak") text colour of the active theme.
@@ -57,13 +56,22 @@ pub fn label(text: impl Into<SharedString>) -> Label {
     let at = Location::caller();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     (at.file(), at.line(), at.column(), text.as_ref()).hash(&mut hasher);
-    Label::new(text).id(ElementId::NamedInteger("text".into(), hasher.finish()))
+    Label::new(text)
+        .id(ElementId::NamedInteger("text".into(), hasher.finish()))
+        // Label's own line height is a fixed rem, too loose for small text and too tight
+        // for large.
+        .line_height(relative(theme::LINE_HEIGHT))
 }
 
-/// Bold text.
+/// Strong text: the theme's brighter text colour (values, titles). Not bold.
 #[track_caller]
 pub fn strong(text: impl Into<SharedString>) -> Label {
-    label(text).font_weight(FontWeight::SEMIBOLD)
+    label(text).text_color(theme::current().strong)
+}
+
+/// The size of small text (captions, hints, footnotes).
+pub fn small_size() -> Rems {
+    rems(theme::SMALL / 16.0)
 }
 
 /// Secondary text in the theme's muted colour.
@@ -75,7 +83,7 @@ pub fn weak(text: impl Into<SharedString>, cx: &App) -> Label {
 /// Small secondary text (hints, footnotes).
 #[track_caller]
 pub fn small_weak(text: impl Into<SharedString>, cx: &App) -> Label {
-    weak(text, cx).text_xs()
+    weak(text, cx).text_size(small_size())
 }
 
 /// Text in a status colour, darkened on light themes so it stays readable.
@@ -84,10 +92,10 @@ pub fn colored(text: impl Into<SharedString>, color: Rgba, cx: &App) -> Label {
     label(text).text_color(ink(cx, color))
 }
 
-/// Large bold page title ("Health Check", "Power", ...).
+/// Large page title ("Health Check", "Power", ...).
 #[track_caller]
 pub fn page_title(text: impl Into<SharedString>) -> Label {
-    label(text).text_xl().font_weight(FontWeight::BOLD)
+    strong(text).text_size(rems(20.0 / 16.0))
 }
 
 /// Vertical gap of `points` between two children of a column.
@@ -115,12 +123,31 @@ pub fn group_box(cx: &App) -> Div {
     let t = cx.theme();
     v_flex()
         .w_full()
-        .gap_1()
-        .p_2()
-        .mb_1p5()
+        .gap(px(3.0))
+        .p(px(6.0))
+        .mb(px(6.0))
         .border_1()
         .border_color(t.border)
         .rounded(t.radius)
+}
+
+/// `body` indented under a collapsible heading, with a faint line down its left side (how
+/// the sections opened with [`collapse_header`] lay out their contents).
+pub fn indented(body: impl IntoElement, cx: &App) -> Div {
+    div()
+        .relative()
+        .w_full()
+        .pl(rems(18.0 / 16.0))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(rems(9.0 / 16.0))
+                .w(px(1.0))
+                .bg(cx.theme().border),
+        )
+        .child(body)
 }
 
 /// A group box titled `title` holding a label/value list (empty values show "-").
@@ -131,16 +158,36 @@ pub fn section(title: &str, rows: &[(&str, String)], cx: &App) -> Div {
         .child(key_values(rows))
 }
 
-/// Label/value rows: labels in a fixed-width column, values bold and wrapping.
-pub fn key_values(rows: &[(&str, String)]) -> Div {
+/// Label/value rows: labels in a column as wide as the longest one, values in the strong
+/// text colour, wrapping.
+///
+/// The rows' labels are made here, so the block has an id from the calling line and its
+/// labels: two blocks on one page then can't give two labels the same id.
+#[track_caller]
+pub fn key_values(rows: &[(&str, String)]) -> Stateful<Div> {
+    let at = Location::caller();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (at.file(), at.line(), at.column()).hash(&mut hasher);
+    for (k, _) in rows {
+        k.hash(&mut hasher);
+    }
+    // The label column is as wide as the longest label (measured from the font's glyph
+    // widths: text can't be laid out while the tree is built), plus a little slack.
+    let longest = rows
+        .iter()
+        .map(|(k, _)| theme::text_width(k))
+        .fold(0.0, f32::max);
+    let width = rems((longest + 0.2) * theme::BODY / 16.0);
     v_flex()
-        .gap_0p5()
+        .id(ElementId::NamedInteger("rows".into(), hasher.finish()))
+        .gap(px(3.0))
         .children(rows.iter().enumerate().map(|(i, (k, v))| {
             h_flex()
                 .id(i)
-                .items_start()
-                .gap_4()
-                .child(label(k.to_string()).flex_none().w(rems(12.5)))
+                .items_center()
+                .min_h(rems(BUTTON_HEIGHT))
+                .gap(px(8.0))
+                .child(label(k.to_string()).flex_none().w(width))
                 .child(strong(or_dash(v).to_string()).flex_1().min_w_0())
         }))
 }
@@ -154,7 +201,11 @@ pub fn mono(text: impl Into<SharedString>, cx: &App) -> Label {
 /// A free-form grid whose `cols` columns are as wide as their widest cell. Add one child per
 /// cell, row by row. For a plain table with headings use [`Table`].
 pub fn grid(cols: u16) -> Div {
-    div().grid().grid_cols_max_content(cols).gap_x_4().gap_y_1()
+    div()
+        .grid()
+        .grid_cols_max_content(cols)
+        .gap_x(px(12.0))
+        .gap_y(px(3.0))
 }
 
 /// Wraps a [`grid`] so it keeps its natural width instead of stretching across the page.
@@ -164,7 +215,13 @@ pub fn hug(grid: impl IntoElement) -> Div {
 
 /// A table with underlined headings, columns as wide as their widest cell and (optionally)
 /// striped rows. It keeps its natural width.
+///
+/// Its cells are labels made here, so two tables on one page could give two cells the same
+/// id (same line, same text, same position); each table therefore has its own id, from the
+/// line that created it and its headings. Tables made by one line in a loop need
+/// [`Table::id`].
 pub struct Table {
+    id: ElementId,
     cols: u16,
     cells: Vec<AnyElement>,
     rows: usize,
@@ -172,8 +229,13 @@ pub struct Table {
 }
 
 impl Table {
+    #[track_caller]
     pub fn new(headings: &[&str]) -> Self {
+        let at = Location::caller();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (at.file(), at.line(), at.column(), headings).hash(&mut hasher);
         Table {
+            id: ElementId::NamedInteger("table".into(), hasher.finish()),
             cols: headings.len() as u16,
             cells: headings
                 .iter()
@@ -182,6 +244,12 @@ impl Table {
             rows: 0,
             striped: false,
         }
+    }
+
+    /// Set the table's id, for tables built by the same line (in a loop) on one page.
+    pub fn id(mut self, id: impl Into<ElementId>) -> Self {
+        self.id = id.into();
+        self
     }
 
     /// Tint every other row.
@@ -216,19 +284,80 @@ impl Table {
         let cells = self.cells.into_iter().enumerate().map(move |(i, cell)| {
             // Row 0 is the headings; tint data rows 2, 4, ...
             let row = i / cols;
+            // One row per 18 points, so stripes don't break.
             div()
                 .id(i)
-                .px_2()
-                .py_0p5()
+                .flex()
+                .items_center()
+                .min_h(rems(BUTTON_HEIGHT))
+                .pr(px(12.0))
                 .when(striped && row > 0 && row.is_multiple_of(2), |c| {
                     c.bg(stripe)
                 })
                 .child(cell)
         });
         hug(div()
+            .id(self.id)
             .grid()
             .grid_cols_max_content(self.cols)
             .children(cells))
+    }
+}
+
+/// Button height: one line of body text plus a point above and below.
+const BUTTON_HEIGHT: f32 = 18.0 / 16.0;
+
+/// The app's button look: one text line tall with 4-point side padding, and the caption at
+/// body size (gpui-component's buttons are taller and their text smaller than the pages').
+pub trait LineSized {
+    fn line_sized(self) -> Self;
+    /// The button's text, at body size. Use instead of `label`.
+    fn caption(self, text: impl Into<SharedString>) -> Self;
+    /// A selectable label (tabs, mode switches): plain text that is filled with the
+    /// selection colour while `selected`.
+    fn selectable(self, selected: bool, cx: &App) -> Self;
+    /// A normal button that is filled with the selection colour while `selected` (a page
+    /// it opens is showing).
+    fn highlighted(self, selected: bool, cx: &App) -> Self;
+}
+
+impl LineSized for Button {
+    fn line_sized(self) -> Self {
+        self.xsmall().h(rems(BUTTON_HEIGHT))
+    }
+
+    fn caption(self, text: impl Into<SharedString>) -> Self {
+        let text = text.into();
+        // A plain text child, not a `Label`: it takes the button's text colour (a `Label` sets
+        // its own). The accessible label carries the text for screen readers and tests.
+        self.accessibility_label(text.clone())
+            .child(div().text_size(rems(theme::BODY / 16.0)).child(text))
+    }
+
+    fn selectable(self, selected: bool, cx: &App) -> Self {
+        let p = theme::palette(cx);
+        let colors = if selected {
+            ButtonCustomVariant::new(cx)
+                .color(p.selection.into())
+                .foreground(p.selection_text.into())
+                .hover(p.selection.into())
+                .active(p.selection.into())
+        } else {
+            ButtonCustomVariant::new(cx)
+                .color(gpui_kit::transparent_black())
+                .foreground(p.text.into())
+                .hover(p.hover.into())
+                .active(p.active.into())
+        };
+        self.custom(colors).selected(selected)
+    }
+
+    fn highlighted(self, selected: bool, cx: &App) -> Self {
+        if selected {
+            self.selectable(true, cx)
+        } else {
+            self
+        }
     }
 }
 
@@ -245,8 +374,8 @@ pub fn dropdown(
     let app = cx.weak_entity();
     let pick = Rc::new(pick);
     Button::new(id)
-        .small()
-        .label(current)
+        .line_sized()
+        .caption(current)
         .dropdown_caret(true)
         .dropdown_menu(move |mut menu, _, _| {
             for (i, option) in options.iter().enumerate() {
@@ -303,8 +432,43 @@ pub fn is_open(app: &OmniApp, key: &str, default_open: bool) -> bool {
     app.views.toggled.contains(key) != default_open
 }
 
-/// The clickable heading of a collapsible section: a chevron and `title`. Show the body below
-/// it when [`is_open`] says so (build the body only then). `key` must be unique in the app.
+/// The open/closed triangle of a collapsible heading, painted (no font has it in every
+/// theme): pointing down when open, right when closed.
+pub fn disclosure_triangle(open: bool, color: impl Into<Hsla>) -> impl IntoElement {
+    let color: Hsla = color.into();
+    canvas(
+        |_, _, _| (),
+        move |b, _, window, _| {
+            let c = b.center();
+            // egui's icon: a triangle in the middle 3/4 of an 8-point square.
+            let r = window.rem_size() * (3.0 / 16.0);
+            let pts = if open {
+                [
+                    point(c.x - r, c.y - r * 0.6),
+                    point(c.x + r, c.y - r * 0.6),
+                    point(c.x, c.y + r * 0.8),
+                ]
+            } else {
+                [
+                    point(c.x - r * 0.6, c.y - r),
+                    point(c.x - r * 0.6, c.y + r),
+                    point(c.x + r * 0.8, c.y),
+                ]
+            };
+            let mut path = PathBuilder::fill();
+            path.add_polygon(&pts, true);
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .flex_none()
+    .size(rems(14.0 / 16.0))
+}
+
+/// The clickable heading of a collapsible section: a triangle and `title`. Show the body below
+/// it when [`is_open`] says so (build the body only then), in [`indented`] to match.
+/// `key` must be unique in the app.
 pub fn collapse_header(
     key: impl Into<SharedString>,
     title: impl IntoElement,
@@ -312,17 +476,13 @@ pub fn collapse_header(
     cx: &mut Context<OmniApp>,
 ) -> Clickable {
     let key: SharedString = key.into();
-    let icon = if open {
-        IconName::ChevronDown
-    } else {
-        IconName::ChevronRight
-    };
+    let color = theme::palette(cx).widget_text;
     clickable(ElementId::Name(key.clone()))
         .h_flex()
-        .gap_1()
-        .py_0p5()
+        .gap(px(4.0))
+        .py(px(1.0))
         .cursor_pointer()
-        .child(Icon::new(icon).small().text_color(weak_color(cx)))
+        .child(disclosure_triangle(open, color))
         .child(title)
         .on_click(cx.listener(move |this, _, _, cx| {
             if !this.views.toggled.remove(&key) {
@@ -341,9 +501,12 @@ pub fn pill(text: impl Into<SharedString>, color: Rgba, small: bool, cx: &App) -
         .py(px(1.0))
         .rounded(px(10.0))
         .bg(heat::fade(color, 0.16))
-        .font_weight(FontWeight::SEMIBOLD)
         .child(label(text).text_color(ink(cx, color)));
-    if small { tag.text_xs() } else { tag }
+    if small {
+        tag.text_size(small_size())
+    } else {
+        tag
+    }
 }
 
 /// A container with an id: the base of anything clickable, hoverable or scrollable. Page

@@ -4,13 +4,14 @@
 use crate::app::OmniApp;
 use crate::heat::{GREEN, ORANGE, RED};
 use crate::sampler::Snapshot;
+use crate::ui::LineSized;
 use crate::ui::{self, Table, section};
 use gpui_kit::component::button::Button;
 use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
+use gpui_kit::component::{Disableable, Sizable};
 use gpui_kit::{
-    AnyElement, App, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, SharedString, Styled, Window, div, relative, rems,
+    AnyElement, App, Context, ElementId, InteractiveElement, IntoElement, ParentElement,
+    SharedString, Styled, Window, div, relative, rems,
 };
 use omnihw_core::checkup::PcieLink;
 use omnihw_core::disktest::{self, DiskTestResult, Verdict};
@@ -91,7 +92,7 @@ fn drive(
     // Every drive repeats the same section titles and labels: an id per drive keeps them apart.
     let mut col = ui::column().id(("drive", d.index as usize)).child(
         ui::strong(format!("Disk {}: {}", d.index, d.name()))
-            .text_lg()
+            .text_size(gpui_kit::rems(1.0))
             .pb_1(),
     );
     col = col.child(
@@ -220,7 +221,11 @@ fn drive(
     if !rows.is_empty() {
         col = col
             .child(ui::strong("Sensors"))
-            .child(super::sensors::sensor_grid(rows.into_iter(), cx));
+            .child(super::sensors::sensor_grid(
+                "drive-sensors",
+                rows.into_iter(),
+                cx,
+            ));
     }
     col.into_any_element()
 }
@@ -257,7 +262,8 @@ fn speed_test(
         let index = d.index;
         controls = controls.child(
             Button::new(("disk-test", index as usize))
-                .label("Run speed test")
+                .line_sized()
+                .caption("Run speed test")
                 .tooltip(tip)
                 .disabled(!can_run)
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -337,15 +343,16 @@ fn text_bar(
     text: impl Into<SharedString>,
     cx: &App,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
-    let t = cx.theme();
+    // egui's progress bar: a round-ended selection-coloured fill on the darkest background.
+    let p = crate::theme::palette(cx);
     div()
         .id(id)
         .relative()
         .w_full()
-        .h(rems(1.125))
+        .h(rems(18.0 / 16.0))
         .overflow_hidden()
-        .rounded(t.radius)
-        .bg(t.muted)
+        .rounded_full()
+        .bg(p.extreme)
         .child(
             div()
                 .absolute()
@@ -353,7 +360,8 @@ fn text_bar(
                 .left_0()
                 .h_full()
                 .w(relative(frac.clamp(0.0, 1.0)))
-                .bg(t.primary.opacity(0.55)),
+                .rounded_full()
+                .bg(p.selection),
         )
         .child(
             div()
@@ -361,9 +369,8 @@ fn text_bar(
                 .h_full()
                 .flex()
                 .items_center()
-                .px_2()
-                .text_sm()
-                .child(ui::label(text)),
+                .px(gpui_kit::px(8.0))
+                .child(ui::label(text).text_color(p.selection_text)),
         )
 }
 
@@ -385,11 +392,7 @@ fn results(d: &Drive, r: &DiskTestResult, link: Option<&PcieLink>, cx: &App) -> 
         ("4K random read (QD32)", r.rnd4k_read_q32_mbs),
     ] {
         cells.push(ui::label(k).into_any_element());
-        cells.push(
-            ui::mono(mbs(v), cx)
-                .font_weight(FontWeight::SEMIBOLD)
-                .into_any_element(),
-        );
+        cells.push(ui::mono(mbs(v), cx).into_any_element());
     }
     cells.push(ui::label("Typical sequential read").into_any_element());
     cells.push(

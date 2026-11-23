@@ -10,6 +10,7 @@ use crate::app::OmniApp;
 use crate::elevate::elevated;
 use crate::heat::ORANGE;
 use crate::ui;
+use crate::ui::LineSized;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::Dialog;
 use gpui_kit::component::input::{Input, InputState};
@@ -210,7 +211,8 @@ pub(super) fn action_button(
 ) -> Button {
     let hint = admin_hint(&action);
     Button::new(id)
-        .label(text)
+        .line_sized()
+        .caption(text)
         .tooltip(format!("{hover}\n{hint}"))
         .disabled(busy)
         .on_click(cx.listener(move |_, _, window, cx| request(action.clone(), window, cx)))
@@ -391,22 +393,26 @@ fn editor_dialog(dialog: Dialog, app: &WeakEntity<OmniApp>, cx: &mut App) -> Dia
             .pt_1()
             .child(
                 Button::new("net-editor-continue")
+                    .line_sized()
                     .primary()
-                    .label("Continue")
+                    .caption("Continue")
                     .disabled(check.is_err())
                     .on_click(move |_, window, cx| {
                         let _ = ok.update(cx, |this, cx| finish(this, window, cx));
                     }),
             )
-            .child(Button::new("net-editor-cancel").label("Cancel").on_click(
-                move |_, window, cx| {
-                    let _ = cancel.update(cx, |this, cx| {
-                        this.views.network.editor = None;
-                        cx.notify();
-                    });
-                    window.close_dialog(cx);
-                },
-            )),
+            .child(
+                Button::new("net-editor-cancel")
+                    .line_sized()
+                    .caption("Cancel")
+                    .on_click(move |_, window, cx| {
+                        let _ = cancel.update(cx, |this, cx| {
+                            this.views.network.editor = None;
+                            cx.notify();
+                        });
+                        window.close_dialog(cx);
+                    }),
+            ),
     );
     dialog.title(ui::strong(ed.title())).child(body)
 }
