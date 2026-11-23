@@ -411,11 +411,13 @@ impl OmniApp {
     }
 
     /// Arrow keys switch pages (see [`nav`]). They only reach here when no focused widget
-    /// (text field, slider, menu) uses them.
+    /// (text field, slider, menu) uses them. Keys that don't move are left for the page.
     fn arrow(&mut self, arrow: Arrow, cx: &mut Context<Self>) {
         if let Some(next) = nav::target(self.settings.nav_style, self.tab, arrow, &self.nav_memory)
         {
             self.open(next, cx);
+        } else if self.tab == Tab::Health {
+            tabs::health::arrow_key(self, arrow, cx);
         }
     }
 

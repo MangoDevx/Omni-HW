@@ -18,6 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Default)]
 pub struct ViewState {}
 
+/// An arrow key the navigation did not use while this page is open: Up/Down move the
+/// selection through the findings list.
+pub fn arrow_key(_app: &mut OmniApp, _arrow: crate::nav::Arrow, _cx: &mut ViewContext<OmniApp>) {}
+
 pub fn show(app: &mut OmniApp, _window: &mut Window, cx: &mut ViewContext<OmniApp>) -> AnyElement {
     super::pending(app.tab, cx)
 }

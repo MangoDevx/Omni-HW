@@ -4,7 +4,9 @@
 
 pub mod about;
 pub mod alerts;
+pub mod bottleneck;
 pub mod caches;
+pub mod compare;
 pub mod cpu;
 pub mod eventlog;
 pub mod gpu;
