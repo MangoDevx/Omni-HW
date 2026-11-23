@@ -71,19 +71,15 @@ fn main() {
                 cx.new(|cx| app::OmniApp::new(window, cx))
             })
             .expect("open the main window");
-            // Closing the window ends the app: remove the tray icon and save settings first.
+            // Closing the main window ends the app (also when the help window is still open):
+            // remove the tray icon and save settings first.
             let _ = window.update(cx, |_, window, cx| {
                 window.on_window_should_close(cx, move |_, cx| {
                     app.update(cx, |app, _| app.shutdown());
+                    cx.quit();
                     true
                 });
             });
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
             cx.activate(true);
         });
 }
